@@ -23,5 +23,5 @@ app.use(express.json());
 app.use('/api/audio', audioRouter);
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ Server running at http://0.0.0.0:${PORT}`);
 });
