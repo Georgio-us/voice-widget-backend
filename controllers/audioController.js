@@ -1,3 +1,7 @@
+
+import { File } from 'node:buffer';
+globalThis.File = File;
+
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
