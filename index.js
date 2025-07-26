@@ -1,6 +1,11 @@
 // index.js
 import dotenv from 'dotenv';
 dotenv.config(); // 👈 просто так — и всё заработает!
+if (process.env.OPENAI_API_KEY) {
+  console.log('✅ OpenAI API key loaded successfully');
+} else {
+  console.warn('⚠️ OpenAI API key is missing!');
+}
 
 import express from 'express';
 import cors from 'cors';
@@ -16,7 +21,6 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-console.log('🔑 API KEY:', process.env.OPENAI_API_KEY); // проверка
 
 app.use(cors());
 app.use(express.json());
