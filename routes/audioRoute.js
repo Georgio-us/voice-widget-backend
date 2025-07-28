@@ -1,9 +1,17 @@
 // routes/audioRoute.js
 import express from 'express';
 import multer from 'multer';
+import fs from 'fs';
+import path from 'path';
 import { transcribeAndRespond } from '../controllers/audioController.js';
 
 const router = express.Router();
+
+// ✅ НОВОЕ - Создаем папку uploads если её нет
+const uploadsDir = 'uploads';
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
