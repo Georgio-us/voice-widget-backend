@@ -6,7 +6,14 @@
   "description": "Voice widget backend with OpenAI Whisper and GPT-4 for real estate assistant",
   "author": "Your Name",
   "license": "ISC",
-  "keywords": ["voice", "ai", "whisper", "gpt-4", "real-estate", "transcription"],
+  "keywords": [
+    "voice",
+    "ai",
+    "whisper",
+    "gpt-4",
+    "real-estate",
+    "transcription"
+  ],
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
@@ -15,7 +22,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
-    "express": "^5.1.0",
+    "express": "^4.21.2",
     "multer": "^2.0.2",
     "openai": "^5.10.2"
   },
