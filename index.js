@@ -1,11 +1,13 @@
 // index.js
 import dotenv from 'dotenv';
-dotenv.config(); // 👈 просто так — и всё заработает!
+dotenv.config();
 
+// Проверяем наличие OpenAI API ключа
 if (process.env.OPENAI_API_KEY) {
   console.log('✅ OpenAI API key loaded successfully');
 } else {
-  console.warn('⚠️ OpenAI API key is missing!');
+  console.error('❌ OPENAI_API_KEY не найден в переменных окружения!');
+  process.exit(1);
 }
 
 import express from 'express';
@@ -16,57 +18,137 @@ import audioRouter from './routes/audioRoute.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ✅ НОВОЕ - Улучшенная CORS конфигурация
+// 🚀 Оптимизированные CORS настройки
 app.use(cors({
-  origin: process.env.FRONTEND_URL || true, // Можно указать конкретный домен в .env
+  origin: process.env.FRONTEND_URL || true,
   credentials: true,
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// ✅ НОВОЕ - Увеличенный лимит для JSON (на случай больших данных)
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// 🚀 Middleware для парсинга (уменьшенные лимиты, так как аудио через multer)
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// ✅ НОВОЕ - Health check endpoint
+// 🚀 Middleware для логирования запросов и времени ответа
+app.use((req, res, next) => {
+  const start = Date.now();
+  const originalSend = res.send;
+  
+  res.send = function(data) {
+    const duration = Date.now() - start;
+    const statusColor = res.statusCode >= 400 ? '🔴' : res.statusCode >= 300 ? '🟡' : '🟢';
+    console.log(`${statusColor} ${req.method} ${req.path} - ${res.statusCode} - ${duration}ms`);
+    return originalSend.call(this, data);
+  };
+  
+  next();
+});
+
+// 📊 Главный health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+  res.json({
+    status: 'OK',
+    service: 'Voice Widget Backend',
+    version: '2.0.0',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    version: '1.0.0'
+    uptime: Math.round(process.uptime()),
+    environment: process.env.NODE_ENV || 'development',
+    node_version: process.version,
+    memory: {
+      used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+      total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB'
+    },
+    apis: {
+      openai: process.env.OPENAI_API_KEY ? 'configured' : 'missing'
+    }
   });
 });
 
-// API роуты
+// 🎤 API роуты
 app.use('/api/audio', audioRouter);
 
-// ✅ НОВОЕ - 404 обработчик для неизвестных маршрутов
-app.use('*', (req, res) => {
-  res.status(404).json({ 
-    error: 'Маршрут не найден',
-    path: req.originalUrl,
-    method: req.method
+// 🔍 Корневой маршрут с информацией об API
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Voice Widget Backend API v2.0.0',
+    documentation: {
+      health: 'GET /health',
+      audio_upload: 'POST /api/audio/upload',
+      audio_formats: 'GET /api/audio/formats', 
+      audio_health: 'GET /api/audio/health',
+      audio_stats: 'GET /api/audio/stats'
+    },
+    features: [
+      'Whisper speech-to-text',
+      'GPT-4o-mini responses',
+      'Session-based context',
+      'Memory storage',
+      'Real-time performance metrics'
+    ],
+    optimizations: [
+      'Removed summary generation',
+      'Memory-only file storage',
+      'Single OpenAI client instance',
+      'No token limits',
+      'Automatic session cleanup'
+    ]
   });
 });
 
-// ✅ НОВОЕ - Глобальный обработчик ошибок
+// 🚫 404 обработчик для неизвестных маршрутов
+app.use('*', (req, res) => {
+  res.status(404).json({
+    error: 'Маршрут не найден',
+    path: req.originalUrl,
+    method: req.method,
+    available_endpoints: [
+      'GET /',
+      'GET /health', 
+      'POST /api/audio/upload',
+      'GET /api/audio/formats',
+      'GET /api/audio/health'
+    ]
+  });
+});
+
+// 🚨 Глобальный обработчик ошибок
 app.use((err, req, res, next) => {
   console.error('🚨 Необработанная ошибка:', err);
   
-  // Не показываем детали ошибок в продакшене
   const isDev = process.env.NODE_ENV !== 'production';
-  
-  res.status(err.status || 500).json({
+  const errorResponse = {
     error: 'Внутренняя ошибка сервера',
-    ...(isDev && { details: err.message, stack: err.stack })
-  });
+    timestamp: new Date().toISOString(),
+    path: req.path,
+    method: req.method
+  };
+  
+  // В режиме разработки показываем детали ошибки
+  if (isDev) {
+    errorResponse.details = err.message;
+    errorResponse.stack = err.stack;
+  }
+  
+  res.status(err.status || 500).json(errorResponse);
 });
 
-// ✅ НОВОЕ - Обработка необработанных исключений
+// 🚀 Graceful shutdown обработчики
+process.on('SIGTERM', () => {
+  console.log('👋 Получен сигнал SIGTERM, завершаем сервер...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('👋 Получен сигнал SIGINT (Ctrl+C), завершаем сервер...');
+  process.exit(0);
+});
+
+// 🚨 Обработка необработанных исключений
 process.on('uncaughtException', (err) => {
   console.error('🚨 Необработанное исключение:', err);
   process.exit(1);
@@ -77,10 +159,15 @@ process.on('unhandledRejection', (err) => {
   process.exit(1);
 });
 
+// 🚀 Запускаем сервер
 app.listen(PORT, '0.0.0.0', () => {
   console.log('🚀 ================================');
-  console.log(`✅ Server running at http://0.0.0.0:${PORT}`);
+  console.log(`✅ Voice Widget Backend запущен!`);
+  console.log(`🌐 URL: http://0.0.0.0:${PORT}`);
   console.log(`📋 Health check: http://0.0.0.0:${PORT}/health`);
   console.log(`🎤 Audio API: http://0.0.0.0:${PORT}/api/audio/upload`);
+  console.log(`📊 Audio stats: http://0.0.0.0:${PORT}/api/audio/stats`);
+  console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`⚡ Optimizations: Memory storage, GPT-4o-mini, Session context`);
   console.log('🚀 ================================');
 });
