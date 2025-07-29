@@ -67,35 +67,51 @@ export const transcribeAndRespond = async (req, res) => {
   let sessionId = null;
   
   try {
-    // Валидация файла
-    if (!req.file) {
-      return res.status(400).json({ error: 'Аудио файл не найден' });
+    // ✅ НОВОЕ - Валидация: должен быть либо файл, либо текст
+    if (!req.file && !req.body.text) {
+      return res.status(400).json({ error: 'Не найден аудио файл или текст сообщения' });
     }
 
     // 🆔 Получаем sessionId из запроса или создаем новый
     sessionId = req.body.sessionId || generateSessionId();
     const session = getOrCreateSession(sessionId);
 
-    console.log(`📁 [${sessionId}] Получен файл: ${req.file.originalname}, размер: ${(req.file.size / 1024).toFixed(1)}KB`);
+    let transcription = '';
+    let transcriptionTime = 0;
 
-    // 🚀 Создаем File объект из буфера (без записи на диск)
-    const audioFile = new File([req.file.buffer], req.file.originalname, {
-      type: req.file.mimetype
-    });
+    // 🎯 НОВОЕ - Обрабатываем либо аудио, либо текст
+    if (req.file) {
+      // 🎤 АУДИО ОБРАБОТКА
+      console.log(`📁 [${sessionId}] Получен файл: ${req.file.originalname}, размер: ${(req.file.size / 1024).toFixed(1)}KB`);
 
-    // 🎯 Whisper транскрипция с оптимизированными параметрами
-    const transcriptionStart = Date.now();
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: 'whisper-1',
-      language: 'ru', // 🚀 Указываем язык для ускорения
-      response_format: 'text', // 🚀 Простой текст вместо JSON
-    });
-    const transcriptionTime = Date.now() - transcriptionStart;
-    console.log(`🎤 [${sessionId}] Транскрипция завершена за ${transcriptionTime}ms`);
+      // Создаем File объект из буфера
+      const audioFile = new File([req.file.buffer], req.file.originalname, {
+        type: req.file.mimetype
+      });
+
+      // Whisper транскрипция
+      const transcriptionStart = Date.now();
+      const whisperResponse = await openai.audio.transcriptions.create({
+        file: audioFile,
+        model: 'whisper-1',
+        language: 'ru',
+        response_format: 'text',
+      });
+      transcriptionTime = Date.now() - transcriptionStart;
+      transcription = whisperResponse.trim();
+      
+      console.log(`🎤 [${sessionId}] Транскрипция завершена за ${transcriptionTime}ms`);
+    } else if (req.body.text) {
+      // ⌨️ ТЕКСТ ОБРАБОТКА  
+      transcription = req.body.text.trim();
+      console.log(`⌨️ [${sessionId}] Получен текст: "${transcription.substring(0, 100)}${transcription.length > 100 ? '...' : ''}"`);
+      
+      // Для текста время транскрипции = 0
+      transcriptionTime = 0;
+    }
 
     // 📝 Добавляем сообщение пользователя в историю
-    addMessageToSession(sessionId, 'user', transcription.trim());
+    addMessageToSession(sessionId, 'user', transcription);
 
     // 🗂️ Подготавливаем контекст для GPT (системное сообщение + история)
     const messages = [
@@ -133,7 +149,7 @@ export const transcribeAndRespond = async (req, res) => {
 • НЕ пересказывай что сказал пользователь — просто реагируй естественно
 • Максимум 3-5 конкретных пунктов в ответе — без информационной перегрузки
 • Общайся как живой опытный агент, а не как нейтральный бот
-• Используй легкий сарказм и экспертные инсайты для создания rapport
+• Используй легкий сарказм и экспертные инсайды для создания rapport
 
 🎯 УРОВЕНЬ 3 - ЛОГИКА ПРОДАЖ:
 • Приоритет: уточняй район, бюджет, сроки, количество комнат
@@ -157,10 +173,9 @@ export const transcribeAndRespond = async (req, res) => {
     const gptStart = Date.now();
     const completion = await openai.chat.completions.create({
       messages,
-      model: 'gpt-4o-mini', // 🚀 Быстрее и дешевле чем gpt-4
-      temperature: 0.5, // 🚀 Баланс креативности и точности
-      // ✅ УБРАЛИ max_tokens для полной гибкости
-      stream: false, // 🚀 Без стриминга для простоты
+      model: 'gpt-4o-mini',
+      temperature: 0.5,
+      stream: false,
     });
     const gptTime = Date.now() - gptStart;
     console.log(`🤖 [${sessionId}] GPT ответ получен за ${gptTime}ms`);
@@ -171,15 +186,17 @@ export const transcribeAndRespond = async (req, res) => {
     addMessageToSession(sessionId, 'assistant', botResponse);
 
     const totalTime = Date.now() - startTime;
-    console.log(`⏱️ [${sessionId}] Общее время обработки: ${totalTime}ms`);
+    const inputType = req.file ? 'аудио' : 'текст';
+    console.log(`⏱️ [${sessionId}] Общее время обработки ${inputType}: ${totalTime}ms`);
     console.log(`📊 [${sessionId}] Активных сессий: ${sessions.size}`);
 
-    // Возвращаем оптимизированный ответ
+    // ✅ НОВОЕ - Возвращаем ответ с информацией о типе ввода
     res.json({
       response: botResponse,
-      transcription: transcription.trim(),
+      transcription: transcription,
       sessionId: sessionId,
       messageCount: session.messages.length,
+      inputType: inputType, // 'аудио' или 'текст'
       tokens: {
         prompt: completion.usage.prompt_tokens,
         completion: completion.usage.completion_tokens,
@@ -226,7 +243,7 @@ export const transcribeAndRespond = async (req, res) => {
     }
 
     res.status(500).json({ 
-      error: 'Произошла ошибка при обработке аудио',
+      error: 'Произошла ошибка при обработке сообщения',
       sessionId: sessionId,
       timing: { total: totalTime }
     });
