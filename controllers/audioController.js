@@ -134,6 +134,11 @@ export const transcribeAndRespond = async (req, res) => {
       transcription: transcription.trim(),
       sessionId: sessionId,
       messageCount: session.messages.length,
+      tokens: {
+        prompt: completion.usage.prompt_tokens,
+        completion: completion.usage.completion_tokens,
+        total: completion.usage.total_tokens
+      },
       timing: {
         transcription: transcriptionTime,
         gpt: gptTime,
