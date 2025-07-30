@@ -46,7 +46,6 @@ const addMessageToSession = (sessionId, role, content) => {
   }
 };
 
-// 🔍 Простейший анализ содержимого
 const updateInsights = (sessionId, newMessage) => {
   const session = sessions.get(sessionId);
   if (!session) return;
@@ -82,7 +81,7 @@ const updateInsights = (sessionId, newMessage) => {
   insights.progress = Math.round((filled / 5) * 100);
 };
 
-export const transcribeAndRespond = async (req, res) => {
+const transcribeAndRespond = async (req, res) => {
   const startTime = Date.now();
   let sessionId = null;
 
@@ -206,12 +205,10 @@ export const transcribeAndRespond = async (req, res) => {
   }
 };
 
-// ✅ ДОБАВЛЕНО: функция для очистки сессии
 const clearSession = (sessionId) => {
   sessions.delete(sessionId);
 };
 
-// ✅ Экспорт всех нужных функций
 export {
   transcribeAndRespond,
   clearSession
