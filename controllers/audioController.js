@@ -209,6 +209,25 @@ const clearSession = (sessionId) => {
   sessions.delete(sessionId);
 };
 
+// ✅ Получить статистику всех активных сессий
+export const getStats = (req, res) => {
+  const sessionStats = [];
+
+  sessions.forEach((session, sessionId) => {
+    sessionStats.push({
+      sessionId,
+      messageCount: session.messages.length,
+      lastActivity: session.lastActivity,
+      insights: session.insights
+    });
+  });
+
+  res.json({
+    totalSessions: sessions.size,
+    sessions: sessionStats
+  });
+};
+
 // ✅ Получение полной информации о сессии по ID
 const getSessionInfo = (req, res) => {
   const sessionId = req.params.sessionId;
