@@ -210,7 +210,7 @@ const clearSession = (sessionId) => {
 };
 
 // ✅ Получение полной информации о сессии по ID
-export const getSessionInfo = (req, res) => {
+const getSessionInfo = (req, res) => {
   const sessionId = req.params.sessionId;
   const session = sessions.get(sessionId);
 
