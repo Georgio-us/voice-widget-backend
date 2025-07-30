@@ -205,3 +205,14 @@ export const transcribeAndRespond = async (req, res) => {
     res.status(500).json({ error: 'Ошибка при обработке сообщения' });
   }
 };
+
+// ✅ ДОБАВЛЕНО: функция для очистки сессии
+const clearSession = (sessionId) => {
+  sessions.delete(sessionId);
+};
+
+// ✅ Экспорт всех нужных функций
+export {
+  transcribeAndRespond,
+  clearSession
+};
