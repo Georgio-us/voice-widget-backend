@@ -21,9 +21,30 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// 🚀 Оптимизированные CORS настройки
+// ТУТ ИНФОРМАЦИЯ О ДОМЕНАХ СЕРВЕРАХ И КОРС:
 app.use(cors({
-  origin: process.env.FRONTEND_URL || true,
+  origin: function (origin, callback) {
+    // Разрешаем запросы без origin (Postman, мобильные приложения)
+    if (!origin) return callback(null, true);
+    
+    // Для development - разрешаем все localhost и 127.0.0.1
+    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      return callback(null, true);
+    }
+    
+    // Продакшен домены
+    const allowedOrigins = [
+      'https://georgio-us.github.io/Voice-Widget-Frontend/',  // ← Полный путь!
+      'https://georgio-us.github.io',  // ← На всякий случай и основной домен
+      process.env.FRONTEND_URL
+    ].filter(Boolean);
+    
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    callback(null, true); // Для development разрешаем все
+  },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

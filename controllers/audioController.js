@@ -210,7 +210,7 @@ const clearSession = (sessionId) => {
 };
 
 // ✅ Получить статистику всех активных сессий
-export const getStats = (req, res) => {
+const getStats = (req, res) => {
   const sessionStats = [];
 
   sessions.forEach((session, sessionId) => {
