@@ -230,5 +230,7 @@ const getSessionInfo = (req, res) => {
 export {
   transcribeAndRespond,
   clearSession,
-  getSessionInfo
+  getSessionInfo,
+  getStats // ← ✅ добавлено
 };
+
