@@ -209,7 +209,26 @@ const clearSession = (sessionId) => {
   sessions.delete(sessionId);
 };
 
+// ✅ Получение полной информации о сессии по ID
+export const getSessionInfo = (req, res) => {
+  const sessionId = req.params.sessionId;
+  const session = sessions.get(sessionId);
+
+  if (!session) {
+    return res.status(404).json({ error: 'Сессия не найдена' });
+  }
+
+  res.json({
+    sessionId,
+    insights: session.insights,
+    messageCount: session.messages.length,
+    lastActivity: session.lastActivity
+  });
+};
+
+// ✅ Экспорт всех нужных функций
 export {
   transcribeAndRespond,
-  clearSession
+  clearSession,
+  getSessionInfo
 };

@@ -10,23 +10,21 @@ import {
 
 const router = express.Router();
 
-// 🚀 Memory storage для максимальной скорости (без записи на диск)
+// 🚀 Memory storage для максимальной скорости
 const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
   limits: {
-    fileSize: 25 * 1024 * 1024, // 🚀 25MB (лимит Whisper API)
+    fileSize: 25 * 1024 * 1024, // 25MB (лимит Whisper API)
     files: 1,
     fieldSize: 25 * 1024 * 1024
   },
   fileFilter: (req, file, cb) => {
-    // 🚀 Поддерживаемые Whisper форматы
     const allowedTypes = [
       'audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/mp4', 'audio/m4a',
       'audio/webm', 'audio/ogg', 'audio/flac', 'audio/x-wav'
     ];
-    
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
@@ -35,17 +33,13 @@ const upload = multer({
   }
 });
 
-// 🚀 Оптимизированный обработчик ошибок
+// 🔧 Обработчик ошибок Multer
 const handleMulterError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     console.error('Multer ошибка:', err.code);
-    
     switch (err.code) {
       case 'LIMIT_FILE_SIZE':
-        return res.status(413).json({ 
-          error: 'Файл слишком большой. Максимум 25MB.',
-          maxSize: '25MB'
-        });
+        return res.status(413).json({ error: 'Файл слишком большой. Максимум 25MB.' });
       case 'LIMIT_FILE_COUNT':
         return res.status(400).json({ error: 'Можно загрузить только один файл.' });
       case 'LIMIT_UNEXPECTED_FILE':
@@ -54,18 +48,18 @@ const handleMulterError = (err, req, res, next) => {
         return res.status(400).json({ error: 'Ошибка загрузки файла.' });
     }
   }
-  
+
   if (err.message === 'UNSUPPORTED_FORMAT') {
     return res.status(400).json({ 
       error: 'Неподдерживаемый формат. Поддерживаются: MP3, WAV, M4A, WebM, OGG, FLAC',
       supportedFormats: ['mp3', 'wav', 'm4a', 'webm', 'ogg', 'flac']
     });
   }
-  
+
   next(err);
 };
 
-// 🚀 Middleware для логирования информации о файле
+// 🔍 Лог загруженного файла
 const logFileInfo = (req, res, next) => {
   if (req.file) {
     const sizeKB = (req.file.size / 1024).toFixed(1);
@@ -75,7 +69,7 @@ const logFileInfo = (req, res, next) => {
   next();
 };
 
-// 🎤 Главный маршрут для обработки аудио
+// 🎤 Главный маршрут: аудио + обработка
 router.post('/upload', 
   upload.single('audio'), 
   handleMulterError,
@@ -83,9 +77,16 @@ router.post('/upload',
   transcribeAndRespond
 );
 
-// 🔍 Дополнительные маршруты для отладки и мониторинга
+// 📌 Получить информацию о сессии
+router.get('/session/:sessionId', getSessionInfo);
 
-// Получить информацию о поддерживаемых форматах
+// 🧹 Очистить конкретную сессию
+router.delete('/session/:sessionId', clearSession);
+
+// 📈 Получить статистику всех сессий
+router.get('/stats', getStats);
+
+// 📋 Поддерживаемые форматы и фичи
 router.get('/formats', (req, res) => {
   res.json({
     supportedFormats: ['mp3', 'wav', 'm4a', 'webm', 'ogg', 'flac'],
@@ -95,22 +96,14 @@ router.get('/formats', (req, res) => {
     features: [
       'Контекстные диалоги',
       'Memory storage',
-      'Автоматическая очистка сессий',
-      'Детальная статистика времени'
+      'Автоочистка сессий',
+      'Извлечение ключевых параметров (имя, район, бюджет...)',
+      'Статистика сессий'
     ]
   });
 });
 
-// Получить информацию о конкретной сессии
-router.get('/session/:sessionId', getSessionInfo);
-
-// Очистить конкретную сессию
-router.delete('/session/:sessionId', clearSession);
-
-// Получить статистику всех сессий
-router.get('/stats', getStats);
-
-// 📊 Эндпоинт для проверки работоспособности аудио API
+// 🧪 Проверка работоспособности API
 router.get('/health', (req, res) => {
   res.json({
     status: 'OK',
