@@ -1,18 +1,17 @@
 // routes/audioRoute.js
 import express from 'express';
 import multer from 'multer';
-import { 
-  transcribeAndRespond, 
-  getSessionInfo, 
-  clearSession, 
-  getStats 
+import {
+  transcribeAndRespond,
+  getSessionInfo,
+  clearSession,
+  getStats
 } from '../controllers/audioController.js';
 
 const router = express.Router();
 
 // 🚀 Memory storage для максимальной скорости
 const storage = multer.memoryStorage();
-
 const upload = multer({
   storage,
   limits: {
@@ -48,15 +47,70 @@ const handleMulterError = (err, req, res, next) => {
         return res.status(400).json({ error: 'Ошибка загрузки файла.' });
     }
   }
-
   if (err.message === 'UNSUPPORTED_FORMAT') {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: 'Неподдерживаемый формат. Поддерживаются: MP3, WAV, M4A, WebM, OGG, FLAC',
       supportedFormats: ['mp3', 'wav', 'm4a', 'webm', 'ogg', 'flac']
     });
   }
-
   next(err);
+};
+
+// 🛡️ Валидация входных данных
+const validateInput = (req, res, next) => {
+  // Валидация текста
+  if (req.body.text) {
+    if (typeof req.body.text !== 'string') {
+      return res.status(400).json({ 
+        error: 'Текст должен быть строкой',
+        code: 'INVALID_TEXT_TYPE'
+      });
+    }
+    
+    if (req.body.text.length > 2000) {
+      return res.status(400).json({ 
+        error: 'Текст слишком длинный (максимум 2000 символов)',
+        code: 'TEXT_TOO_LONG',
+        maxLength: 2000,
+        currentLength: req.body.text.length
+      });
+    }
+    
+    if (req.body.text.trim().length === 0) {
+      return res.status(400).json({ 
+        error: 'Текст не может быть пустым',
+        code: 'EMPTY_TEXT'
+      });
+    }
+  }
+
+  // Валидация sessionId (если передан)
+  if (req.body.sessionId) {
+    if (typeof req.body.sessionId !== 'string') {
+      return res.status(400).json({ 
+        error: 'SessionId должен быть строкой',
+        code: 'INVALID_SESSION_TYPE'
+      });
+    }
+    
+    if (!/^user_\d+_[a-z0-9]+$/.test(req.body.sessionId)) {
+      return res.status(400).json({ 
+        error: 'Некорректный формат sessionId',
+        code: 'INVALID_SESSION_FORMAT'
+      });
+    }
+  }
+
+  // Проверка на наличие либо аудио, либо текста
+  if (!req.file && !req.body.text) {
+    return res.status(400).json({ 
+      error: 'Необходимо отправить аудиофайл или текст',
+      code: 'NO_INPUT_PROVIDED'
+    });
+  }
+
+  console.log(`✅ Валидация пройдена для session: ${req.body.sessionId?.slice(-8) || 'new'}`);
+  next();
 };
 
 // 🔍 Лог загруженного файла
@@ -70,9 +124,10 @@ const logFileInfo = (req, res, next) => {
 };
 
 // 🎤 Главный маршрут: аудио + обработка
-router.post('/upload', 
-  upload.single('audio'), 
+router.post('/upload',
+  upload.single('audio'),
   handleMulterError,
+  validateInput, // ← Добавлена валидация
   logFileInfo,
   transcribeAndRespond
 );
@@ -98,7 +153,8 @@ router.get('/formats', (req, res) => {
       'Memory storage',
       'Автоочистка сессий',
       'Извлечение ключевых параметров (имя, район, бюджет...)',
-      'Статистика сессий'
+      'Статистика сессий',
+      'Валидация входных данных' // ← Добавлено
     ]
   });
 });
@@ -108,7 +164,7 @@ router.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     service: 'Voice Widget Audio API',
-    version: '2.0.0',
+    version: '2.1.0', // ← Обновлена версия
     timestamp: new Date().toISOString(),
     endpoints: {
       upload: 'POST /api/audio/upload',
@@ -122,7 +178,8 @@ router.get('/health', (req, res) => {
       'Session context',
       'GPT-4o-mini',
       'No token limits',
-      'Single OpenAI instance'
+      'Single OpenAI instance',
+      'Input validation' // ← Добавлено
     ]
   });
 });
