@@ -25,12 +25,23 @@ const getOrCreateSession = (sessionId) => {
       messages: [],
       createdAt: Date.now(),
       lastActivity: Date.now(),
+      // 🆕 РАСШИРЕННАЯ СТРУКТУРА INSIGHTS (9 параметров)
       insights: {
-        name: null,
-        type: null,
-        operation: null,
-        budget: null,
-        location: null,
+        // Блок 1: Основная информация (33.3%)
+        name: null,           // 10%
+        operation: null,      // 12%  
+        budget: null,         // 11%
+        
+        // Блок 2: Параметры недвижимости (33.3%)
+        type: null,           // 11%
+        location: null,       // 11%
+        rooms: null,          // 11%
+        
+        // Блок 3: Детали и предпочтения (33.3%)
+        area: null,           // 11%
+        details: null,        // 11% (детали локации: возле парка, пересечение улиц)
+        preferences: null,    // 11%
+        
         progress: 0
       }
     });
@@ -46,7 +57,7 @@ const addMessageToSession = (sessionId, role, content) => {
   }
 };
 
-// 🧠 Улучшенная функция извлечения insights
+// 🧠 Улучшенная функция извлечения insights (9 параметров)
 const updateInsights = (sessionId, newMessage) => {
   const session = sessions.get(sessionId);
   if (!session) return;
@@ -234,16 +245,198 @@ const updateInsights = (sessionId, newMessage) => {
     }
   }
 
-  // 📊 Обновляем прогресс
-  const filledFields = Object.values(insights).filter((val) => val !== null).length - 1; // -1 для progress
-  const totalFields = 5; // name, type, operation, budget, location
-  insights.progress = Math.round((filledFields / totalFields) * 100);
+  // 🆕 6. 🏠 Количество комнат
+  if (!insights.rooms) {
+    const roomPatterns = [
+      /(\d+)[\s-]*(комнат[ауыйе]*|спален|bedroom)/i,        // "3 комнаты", "2 спальни"
+      /(одн[ауо][\s-]*комнат|однушк|1[\s-]*комнат)/i,       // "однокомнатная", "однушка"
+      /(двух[\s-]*комнат|двушк|2[\s-]*комнат)/i,            // "двухкомнатная", "двушка"
+      /(трех[\s-]*комнат|трешк|3[\s-]*комнат)/i,            // "трехкомнатная", "трешка"
+      /(четырех[\s-]*комнат|4[\s-]*комнат)/i,               // "четырехкомнатная"
+      /(студи[юя]|studio)/i                                 // "студия"
+    ];
+
+    for (const pattern of roomPatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        if (match[0].includes('студи')) {
+          insights.rooms = 'студия';
+        } else if (match[0].includes('одн') || match[0].includes('1')) {
+          insights.rooms = '1 комната';
+        } else if (match[0].includes('двух') || match[0].includes('двушк') || match[0].includes('2')) {
+          insights.rooms = '2 комнаты';
+        } else if (match[0].includes('трех') || match[0].includes('трешк') || match[0].includes('3')) {
+          insights.rooms = '3 комнаты';
+        } else if (match[0].includes('четырех') || match[0].includes('4')) {
+          insights.rooms = '4 комнаты';
+        } else if (match[1] && /\d/.test(match[1])) {
+          const num = match[1];
+          insights.rooms = `${num} ${num == 1 ? 'комната' : 'комнаты'}`;
+        }
+        
+        console.log(`✅ Найдено количество комнат: ${insights.rooms}`);
+        break;
+      }
+    }
+  }
+
+  // 🆕 7. 📐 Площадь
+  if (!insights.area) {
+    const areaPatterns = [
+      /(\d+)[\s-]*(кв\.?\s*м\.?|м2|квадрат|метр)/i,           // "100 кв.м", "80м2"
+      /площад[ьи]?\s*(\d+)/i,                                // "площадь 120"
+      /(\d+)[\s-]*квадрат/i,                                 // "90 квадратов"
+      /(от|около|примерно)\s*(\d+)[\s-]*(кв\.?\s*м\.?|м2)/i  // "от 80 кв.м"
+    ];
+
+    for (const pattern of areaPatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        let area = '';
+        // Находим число в любой позиции
+        for (let i = 1; i < match.length; i++) {
+          if (match[i] && /\d/.test(match[i])) {
+            area = match[i];
+            break;
+          }
+        }
+        
+        if (area) {
+          insights.area = `${area} м²`;
+          console.log(`✅ Найдена площадь: ${insights.area}`);
+          break;
+        }
+      }
+    }
+  }
+
+  // 🆕 8. 📍 Детали локации
+  if (!insights.details) {
+    const detailPatterns = [
+      /(возле|рядом\s*с|около|недалеко\s*от)\s*(парк[аеуи]*|сквер[аеуи]*|зелен[иоы]*)/i,    // "возле парка"
+      /(возле|рядом\s*с|около|недалеко\s*от)\s*(метро|станци[иеяй]*)/i,                      // "рядом с метро"
+      /(возле|рядом\s*с|около|недалеко\s*от)\s*(школ[ыаеий]*|детск[аеойи]*)/i,               // "около школы"
+      /(возле|рядом\s*с|около|недалеко\s*от)\s*(магазин[аеовы]*|торгов[аеоый]*)/i,           // "рядом с магазинами"
+      /(центральн[аяое]*|тихий|спокойн[ыйое]*|шумн[ыйое]*)/i,                               // "тихий", "центральная"
+      /(пешком\s*до|5\s*минут|10\s*минут)/i,                                                // "пешком до центра"
+      /(перекрест[окек]*|пересечени[ея]*|угол[у]*)\s*улиц/i                                  // "пересечение улиц"
+    ];
+
+    for (const pattern of detailPatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        let detail = match[0];
+        
+        // Нормализуем детали
+        if (detail.includes('парк') || detail.includes('зелен')) {
+          insights.details = 'возле парка';
+        } else if (detail.includes('метро') || detail.includes('станци')) {
+          insights.details = 'рядом с метро';
+        } else if (detail.includes('школ') || detail.includes('детск')) {
+          insights.details = 'около школы';
+        } else if (detail.includes('магазин') || detail.includes('торгов')) {
+          insights.details = 'рядом с магазинами';
+        } else if (detail.includes('тихий') || detail.includes('спокойн')) {
+          insights.details = 'тихий район';
+        } else if (detail.includes('центральн')) {
+          insights.details = 'центральное расположение';
+        } else if (detail.includes('пешком') || detail.includes('минут')) {
+          insights.details = 'удобная транспортная доступность';
+        } else if (detail.includes('перекрест') || detail.includes('пересечени') || detail.includes('угол')) {
+          insights.details = 'пересечение улиц';
+        } else {
+          insights.details = match[0];
+        }
+        
+        console.log(`✅ Найдены детали локации: ${insights.details}`);
+        break;
+      }
+    }
+  }
+
+  // 🆕 9. ⭐ Предпочтения
+  if (!insights.preferences) {
+    const preferencePatterns = [
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(балкон|лоджи[яй]*)/i,    // "важен балкон"
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(лифт|подъемник)/i,        // "нужен лифт"
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(паркинг|гараж|парковк)/i, // "желательно парковка"
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(ремонт|обновлен)/i,        // "хочу с ремонтом"
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(мебел[ьи]*)/i,             // "предпочитаю с мебелью"
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(кондиционер|климат)/i,     // "нужен кондиционер"
+      /(без\s*посредник|напряму[ую]*|от\s*собственник)/i,                                      // "без посредников"
+      /(срочн[оы]*|быстр[оы]*|как\s*можно\s*скорее)/i,                                         // "срочно"
+      /(в\s*рассрочку|ипотек[аеуи]*|кредит)/i                                                  // "в ипотеку"
+    ];
+
+    for (const pattern of preferencePatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        let preference = match[0].toLowerCase();
+        
+        // Нормализуем предпочтения
+        if (preference.includes('балкон') || preference.includes('лоджи')) {
+          insights.preferences = 'с балконом';
+        } else if (preference.includes('лифт')) {
+          insights.preferences = 'с лифтом';
+        } else if (preference.includes('паркинг') || preference.includes('гараж') || preference.includes('парковк')) {
+          insights.preferences = 'с парковкой';
+        } else if (preference.includes('ремонт') || preference.includes('обновлен')) {
+          insights.preferences = 'с ремонтом';
+        } else if (preference.includes('мебел')) {
+          insights.preferences = 'с мебелью';
+        } else if (preference.includes('кондиционер') || preference.includes('климат')) {
+          insights.preferences = 'с кондиционером';
+        } else if (preference.includes('без') && preference.includes('посредник')) {
+          insights.preferences = 'без посредников';
+        } else if (preference.includes('срочн') || preference.includes('быстр') || preference.includes('скорее')) {
+          insights.preferences = 'срочный поиск';
+        } else if (preference.includes('рассрочку') || preference.includes('ипотек') || preference.includes('кредит')) {
+          insights.preferences = 'ипотека/рассрочка';
+        } else {
+          insights.preferences = match[0];
+        }
+        
+        console.log(`✅ Найдены предпочтения: ${insights.preferences}`);
+        break;
+      }
+    }
+  }
+
+  // 📊 Обновляем прогресс по системе весов фронтенда
+  const weights = {
+    // Блок 1: Основная информация (33.3%)
+    name: 10,
+    operation: 12,
+    budget: 11,
+    
+    // Блок 2: Параметры недвижимости (33.3%)
+    type: 11,
+    location: 11,
+    rooms: 11,
+    
+    // Блок 3: Детали и предпочтения (33.3%)
+    area: 11,
+    details: 11,
+    preferences: 11
+  };
   
-  console.log(`📊 Прогресс понимания: ${insights.progress}% (${filledFields}/${totalFields} полей заполнено)`);
+  let totalProgress = 0;
+  let filledFields = 0;
+  
+  for (const [field, weight] of Object.entries(weights)) {
+    if (insights[field] && insights[field].trim()) {
+      totalProgress += weight;
+      filledFields++;
+    }
+  }
+  
+  insights.progress = Math.min(totalProgress, 99); // максимум 99%
+  
+  console.log(`📊 Прогресс понимания: ${insights.progress}% (${filledFields}/9 полей заполнено)`);
   console.log(`🔍 Текущие insights:`, insights);
 };
 
-// 🤖 GPT анализатор для извлечения insights каждые 5 сообщений
+// 🤖 ОБНОВЛЕННЫЙ GPT анализатор для извлечения insights (9 параметров)
 const analyzeContextWithGPT = async (sessionId) => {
   const session = sessions.get(sessionId);
   if (!session) return;
@@ -262,27 +455,42 @@ const analyzeContextWithGPT = async (sessionId) => {
 ДИАЛОГ:
 ${conversationHistory}
 
-ЗАДАЧА: Найди и извлеки следующую информацию о клиенте:
+ЗАДАЧА: Найди и извлеки следующую информацию о клиенте (9 параметров):
 
+БЛОК 1 - ОСНОВНАЯ ИНФОРМАЦИЯ:
 1. ИМЯ КЛИЕНТА - как его зовут (учти возможные ошибки транскрипции)
-2. ТИП НЕДВИЖИМОСТИ - что ищет (квартира, дом, студия, апартаменты, комната, пентхаус)
-3. ТИП ОПЕРАЦИИ - покупка или аренда
-4. БЮДЖЕТ - сколько готов потратить (в евро, приведи к числу)
+2. ТИП ОПЕРАЦИИ - покупка или аренда  
+3. БЮДЖЕТ - сколько готов потратить (в евро, приведи к числу)
+
+БЛОК 2 - ПАРАМЕТРЫ НЕДВИЖИМОСТИ:
+4. ТИП НЕДВИЖИМОСТИ - что ищет (квартира, дом, студия, апартаменты, комната, пентхаус)
 5. ЛОКАЦИЯ - где ищет (район, город, особенности расположения)
+6. КОЛИЧЕСТВО КОМНАТ - сколько комнат нужно (1 комната, 2 комнаты, студия, etc.)
+
+БЛОК 3 - ДЕТАЛИ И ПРЕДПОЧТЕНИЯ:
+7. ПЛОЩАДЬ - какая площадь нужна (в м²)
+8. ДЕТАЛИ ЛОКАЦИИ - особенности расположения (возле парка, рядом с метро, тихий район, пересечение улиц)
+9. ПРЕДПОЧТЕНИЯ - дополнительные требования (с балконом, с парковкой, с ремонтом, срочно, etc.)
 
 ВАЖНО:
 - Исправляй ошибки транскрипции (Аленсия → Валенсия, Русфа → Русафа)
 - Учитывай контекст и подтекст
 - Если информации нет - укажи null
 - Бюджет приводи к формату "число €" (например: "300000 €")
+- Комнаты в формате "число комнаты" или "студия"
+- Площадь в формате "число м²"
 
 ОТВЕТ СТРОГО В JSON:
 {
   "name": "имя или null",
-  "type": "тип недвижимости или null", 
   "operation": "покупка/аренда или null",
   "budget": "сумма € или null",
-  "location": "локация или null"
+  "type": "тип недвижимости или null", 
+  "location": "локация или null",
+  "rooms": "количество комнат или null",
+  "area": "площадь м² или null",
+  "details": "детали локации или null",
+  "preferences": "предпочтения или null"
 }`;
 
     // Делаем запрос к GPT для анализа
@@ -316,55 +524,45 @@ ${conversationHistory}
     let updated = false;
     const oldInsights = { ...session.insights };
 
-    if (extractedData.name && !session.insights.name) {
-      session.insights.name = extractedData.name;
-      updated = true;
-      console.log(`✅ GPT обновил имя: ${extractedData.name}`);
-    }
-
-    if (extractedData.type && !session.insights.type) {
-      session.insights.type = extractedData.type;
-      updated = true;
-      console.log(`✅ GPT обновил тип недвижимости: ${extractedData.type}`);
-    }
-
-    if (extractedData.operation && !session.insights.operation) {
-      session.insights.operation = extractedData.operation;
-      updated = true;
-      console.log(`✅ GPT обновил операцию: ${extractedData.operation}`);
-    }
-
-    if (extractedData.budget && !session.insights.budget) {
-      session.insights.budget = extractedData.budget;
-      updated = true;
-      console.log(`✅ GPT обновил бюджет: ${extractedData.budget}`);
-    }
-
-    if (extractedData.location && !session.insights.location) {
-      session.insights.location = extractedData.location;
-      updated = true;
-      console.log(`✅ GPT обновил локацию: ${extractedData.location}`);
-    }
-
-    // Если GPT нашел исправления для существующих данных
-    if (extractedData.name && session.insights.name && extractedData.name !== session.insights.name) {
-      console.log(`🔄 GPT предлагает исправить имя: ${session.insights.name} → ${extractedData.name}`);
-      session.insights.name = extractedData.name;
-      updated = true;
-    }
-
-    if (extractedData.location && session.insights.location && extractedData.location !== session.insights.location) {
-      console.log(`🔄 GPT предлагает исправить локацию: ${session.insights.location} → ${extractedData.location}`);
-      session.insights.location = extractedData.location;
-      updated = true;
+    // Проверяем все 9 параметров
+    const fieldsToCheck = ['name', 'operation', 'budget', 'type', 'location', 'rooms', 'area', 'details', 'preferences'];
+    
+    for (const field of fieldsToCheck) {
+      if (extractedData[field] && !session.insights[field]) {
+        session.insights[field] = extractedData[field];
+        updated = true;
+        console.log(`✅ GPT обновил ${field}: ${extractedData[field]}`);
+      }
+      
+      // Если GPT нашел исправления для существующих данных
+      if (extractedData[field] && session.insights[field] && extractedData[field] !== session.insights[field]) {
+        console.log(`🔄 GPT предлагает исправить ${field}: ${session.insights[field]} → ${extractedData[field]}`);
+        session.insights[field] = extractedData[field];
+        updated = true;
+      }
     }
 
     if (updated) {
-      // Пересчитываем прогресс
-      const filledFields = Object.values(session.insights).filter((val) => val !== null).length - 1;
-      session.insights.progress = Math.round((filledFields / 5) * 100);
+      // Пересчитываем прогресс по системе весов фронтенда
+      const weights = {
+        name: 10, operation: 12, budget: 11,
+        type: 11, location: 11, rooms: 11,
+        area: 11, details: 11, preferences: 11
+      };
       
-      console.log(`🚀 GPT анализ завершен. Прогресс: ${session.insights.progress}%`);
+      let totalProgress = 0;
+      let filledFields = 0;
+      
+      for (const [field, weight] of Object.entries(weights)) {
+        if (session.insights[field] && session.insights[field].trim()) {
+          totalProgress += weight;
+          filledFields++;
+        }
+      }
+      
+      session.insights.progress = Math.min(totalProgress, 99);
+      
+      console.log(`🚀 GPT анализ завершен. Прогресс: ${session.insights.progress}% (${filledFields}/9 полей)`);
       console.log(`📊 Обновленные insights:`, session.insights);
     } else {
       console.log(`ℹ️ GPT не нашел новой информации для обновления`);
@@ -547,7 +745,7 @@ const transcribeAndRespond = async (req, res) => {
 • Используй легкий сарказм и экспертные инсайды для создания rapport
 
 🎯 УРОВЕНЬ 3 - ЛОГИКА ПРОДАЖ:
-• Приоритет: уточняй район, бюджет, сроки, количество комнат
+• Приоритет: уточняй район, бюджет, сроки, количество комнат, площадь, особые предпочтения
 • Не навязывай много районов сразу — фокусируй клиента на 2-3 лучших
 • Подводи к принятию решения о встрече/просмотре
 • Создавай эмоциональную связь с недвижимостью
@@ -583,7 +781,7 @@ const transcribeAndRespond = async (req, res) => {
       sessionId,
       messageCount: session.messages.length,
       inputType,
-      insights: session.insights,
+      insights: session.insights, // 🆕 Теперь содержит все 9 параметров
       tokens: {
         prompt: completion.usage.prompt_tokens,
         completion: completion.usage.completion_tokens,
@@ -635,7 +833,7 @@ const getStats = (req, res) => {
       sessionId,
       messageCount: session.messages.length,
       lastActivity: session.lastActivity,
-      insights: session.insights
+      insights: session.insights // 🆕 Теперь содержит все 9 параметров
     });
   });
 
@@ -656,7 +854,7 @@ const getSessionInfo = (req, res) => {
 
   res.json({
     sessionId,
-    insights: session.insights,
+    insights: session.insights, // 🆕 Теперь содержит все 9 параметров
     messageCount: session.messages.length,
     lastActivity: session.lastActivity
   });
