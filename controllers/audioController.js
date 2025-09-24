@@ -126,9 +126,15 @@ const findBestProperties = (insights, limit = 1) => {
   return ranked;
 };
 
-const formatCardForClient = (p) => ({
+const getBaseUrl = (req) => {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.get('host');
+  return host ? `${proto}://${host}` : '';
+};
+
+const formatCardForClient = (req, p) => ({
   id: p.id,
-  image: p.image,
+  image: (p.image && /^https?:\/\//i.test(p.image)) ? p.image : `${getBaseUrl(req)}${p.image || ''}`,
   price: `${p.priceEUR} €`,
   priceEUR: p.priceEUR,
   city: p.city,
@@ -899,7 +905,7 @@ const transcribeAndRespond = async (req, res) => {
         candidate = found[0];
       }
       if (candidate) {
-        cards = [formatCardForClient(candidate)];
+        cards = [formatCardForClient(req, candidate)];
         ui = { suggestShowCard: true };
       }
     }
@@ -1001,5 +1007,44 @@ export {
   transcribeAndRespond,
   clearSession,
   getSessionInfo,
-  getStats
+  getStats,
+  handleInteraction
 };
+
+// ---------- Взаимодействия (like / next) ----------
+async function handleInteraction(req, res) {
+  try {
+    const { action, variantId, sessionId } = req.body || {};
+    if (!action || !sessionId) return res.status(400).json({ error: 'action и sessionId обязательны' });
+    const session = sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
+
+    // Обеспечим список кандидатов в сессии
+    if (!Array.isArray(session.lastCandidates) || !session.lastCandidates.length) {
+      const ranked = findBestProperties(session.insights, 10);
+      session.lastCandidates = ranked.map(p => p.id);
+      session.candidateIndex = 0;
+    }
+
+    if (action === 'next') {
+      // Перейти к следующему подходящему объекту
+      session.candidateIndex = (session.candidateIndex || 0) + 1;
+      const id = session.lastCandidates[session.candidateIndex % session.lastCandidates.length];
+      const p = properties.find(x => x.id === id) || properties[0];
+      const card = formatCardForClient(req, p);
+      return res.json({ ok: true, card });
+    }
+
+    if (action === 'like') {
+      // Сохраним лайк для аналитики (минимально)
+      session.liked = session.liked || [];
+      if (variantId) session.liked.push(variantId);
+      return res.json({ ok: true });
+    }
+
+    return res.status(400).json({ error: 'Неизвестное действие' });
+  } catch (e) {
+    console.error('interaction error:', e);
+    res.status(500).json({ error: 'internal' });
+  }
+}

@@ -5,7 +5,8 @@ import {
   transcribeAndRespond,
   getSessionInfo,
   clearSession,
-  getStats
+  getStats,
+  handleInteraction
 } from '../controllers/audioController.js';
 
 const router = express.Router();
@@ -140,6 +141,9 @@ router.delete('/session/:sessionId', clearSession);
 
 // 📈 Получить статистику всех сессий
 router.get('/stats', getStats);
+
+// 🔁 Взаимодействие с карточками (like/next)
+router.post('/interaction', handleInteraction);
 
 // 📋 Поддерживаемые форматы и фичи
 router.get('/formats', (req, res) => {
