@@ -16,7 +16,6 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import audioRouter from './routes/audioRoute.js';
 import cardRouter from './routes/cardRoute.js';
-import express from 'express';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
