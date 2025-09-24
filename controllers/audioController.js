@@ -1,6 +1,7 @@
 import { File } from 'node:buffer';
 globalThis.File = File;
 import { OpenAI } from 'openai';
+import properties from '../data/properties.js';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
@@ -56,6 +57,66 @@ const addMessageToSession = (sessionId, role, content) => {
     session.lastActivity = Date.now();
   }
 };
+
+// ====== Подбор карточек на основе insights / текста ======
+const parseBudgetEUR = (s) => {
+  if (!s) return null;
+  const m = String(s).replace(/[^0-9]/g, '');
+  return m ? parseInt(m, 10) : null;
+};
+
+const detectCardIntent = (text = '') => {
+  const t = String(text).toLowerCase();
+  const isShow = /\b(покажи(те)?|показать|посмотреть|подробнее|детальн)/i.test(t);
+  const isVariants = /(какие|что)\s+(есть|можно)\s+(вариант|квартир)/i.test(t)
+    || /подбери(те)?|подобрать|вариант(ы)?|есть\s+вариант/i.test(t)
+    || /квартир(а|ы|у)\s+(есть|бывают)/i.test(t);
+  return { show: isShow, variants: isVariants };
+};
+
+const scoreProperty = (p, insights) => {
+  let score = 0;
+  // rooms
+  const roomsNum = (() => {
+    const m = insights.rooms && String(insights.rooms).match(/\d+/);
+    return m ? parseInt(m[0], 10) : null;
+  })();
+  if (roomsNum != null && Number(p.rooms) === roomsNum) score += 2;
+  // district (insights.location хранит район)
+  if (insights.location && p.district && String(p.district).toLowerCase() === String(insights.location).toLowerCase()) score += 3;
+  // budget
+  const budget = parseBudgetEUR(insights.budget);
+  if (budget != null) {
+    if (Number(p.priceEUR) <= budget) score += 2;
+    const diff = Math.abs(Number(p.priceEUR) - budget) / (budget || 1);
+    if (diff <= 0.2) score += 1; // в пределах 20%
+  }
+  // default city preference (Valencia)
+  if (p.city && String(p.city).toLowerCase() === 'valencia') score += 1;
+  return score;
+};
+
+const findBestProperties = (insights, limit = 1) => {
+  const ranked = properties
+    .map((p) => ({ p, s: scoreProperty(p, insights) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, limit)
+    .map(({ p }) => p);
+  return ranked;
+};
+
+const formatCardForClient = (p) => ({
+  id: p.id,
+  image: p.image,
+  price: `${p.priceEUR} €`,
+  priceEUR: p.priceEUR,
+  city: p.city,
+  district: p.district,
+  rooms: p.rooms,
+  country: p.country,
+  title: p.title,
+  type: p.type
+});
 
 // 🧠 Улучшенная функция извлечения insights (9 параметров)
 const updateInsights = (sessionId, newMessage) => {
@@ -405,8 +466,8 @@ const updateInsights = (sessionId, newMessage) => {
   // 📊 Обновляем прогресс по системе весов фронтенда
   const weights = {
     // Блок 1: Основная информация (33.3%)
-    name: 10,
-    operation: 12,
+    name: 11,
+    operation: 11,
     budget: 11,
     
     // Блок 2: Параметры недвижимости (33.3%)
@@ -545,7 +606,7 @@ ${conversationHistory}
     if (updated) {
       // Пересчитываем прогресс по системе весов фронтенда
       const weights = {
-        name: 10, operation: 12, budget: 11,
+        name: 11, operation: 11, budget: 11,
         type: 11, location: 11, rooms: 11,
         area: 11, details: 11, preferences: 11
       };
@@ -769,7 +830,43 @@ const transcribeAndRespond = async (req, res) => {
     
     const gptTime = Date.now() - gptStart;
 
-    const botResponse = completion.choices[0].message.content.trim();
+    let botResponse = completion.choices[0].message.content.trim();
+
+    // 🔎 Детектор намерения/вариантов
+    const { show, variants } = detectCardIntent(transcription);
+    const enoughContext = session.insights?.progress >= 66;
+    let cards = [];
+    let ui = undefined;
+
+    // Если пользователь просит варианты (или есть достаточно контекста) — опишем 2-3 варианта текстом
+    if (variants || enoughContext) {
+      const top = findBestProperties(session.insights, 3);
+      if (top.length) {
+        // запоминаем кандидатов в сессии
+        session.lastCandidates = top.map((p) => p.id);
+        const total = properties.length;
+        const lines = top.map((p, i) => `${i + 1}) ${p.city}, ${p.district}, ${p.rooms} комнат — ${p.priceEUR} €`);
+        const addendum = `\n\nУ меня есть ${top.length} вариант(а) из ${total} в базе:\n${lines.join('\n')}\nСказать «покажи» — предложу карточку сюда.`;
+        botResponse += addendum;
+      }
+    }
+
+    // Если пользователь просит показать/подробнее — предложим карточку через панель
+    if (show) {
+      let candidate = null;
+      if (Array.isArray(session.lastCandidates) && session.lastCandidates.length) {
+        candidate = properties.find((p) => p.id === session.lastCandidates[0]);
+      }
+      if (!candidate) {
+        const found = findBestProperties(session.insights, 1);
+        candidate = found[0];
+      }
+      if (candidate) {
+        cards = [formatCardForClient(candidate)];
+        ui = { suggestShowCard: true };
+      }
+    }
+
     addMessageToSession(sessionId, 'assistant', botResponse);
 
     const totalTime = Date.now() - startTime;
@@ -782,6 +879,8 @@ const transcribeAndRespond = async (req, res) => {
       messageCount: session.messages.length,
       inputType,
       insights: session.insights, // 🆕 Теперь содержит все 9 параметров
+      cards,
+      ui,
       tokens: {
         prompt: completion.usage.prompt_tokens,
         completion: completion.usage.completion_tokens,

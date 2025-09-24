@@ -13,8 +13,10 @@ if (process.env.OPENAI_API_KEY) {
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import audioRouter from './routes/audioRoute.js';
+import cardRouter from './routes/cardRoute.js';
+import express from 'express';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -55,6 +57,11 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
+// 📦 Раздача статических ассетов (изображения карточек)
+app.use('/static', express.static('public'));
+// Раздаём изображения из data/properties как /static/properties
+app.use('/static/properties', express.static(join(__dirname, 'data/properties')));
+
 // 🚀 Middleware для логирования запросов и времени ответа
 app.use((req, res, next) => {
   const start = Date.now();
@@ -92,6 +99,7 @@ app.get('/health', (req, res) => {
 
 // 🎤 API роуты
 app.use('/api/audio', audioRouter);
+app.use('/api/cards', cardRouter);
 
 // 🔍 Корневой маршрут с информацией об API
 app.get('/', (req, res) => {
