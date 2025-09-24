@@ -1039,7 +1039,9 @@ async function handleInteraction(req, res) {
       // Сохраним лайк для аналитики (минимально)
       session.liked = session.liked || [];
       if (variantId) session.liked.push(variantId);
-      return res.json({ ok: true });
+      const count = session.liked.length;
+      const msg = `Супер, сохранил! Могу предложить записаться на просмотр или показать ещё варианты. Что выберем? (понравилось: ${count})`;
+      return res.json({ ok: true, assistantMessage: msg });
     }
 
     return res.status(400).json({ error: 'Неизвестное действие' });
