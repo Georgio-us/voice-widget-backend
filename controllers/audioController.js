@@ -75,6 +75,12 @@ const detectCardIntent = (text = '') => {
   return { show: isShow, variants: isVariants };
 };
 
+// Намерение: запись на просмотр / передать менеджеру
+const detectScheduleIntent = (text = '') => {
+  const t = String(text).toLowerCase();
+  return /(записать|записаться|просмотр(ы)?|встретить|встреч(а|у)|перезвон|связать|связаться|передать\s+менеджеру|передай\s+менеджеру)/i.test(t);
+};
+
 const normalizeDistrict = (val) => {
   if (!val) return '';
   let s = String(val).toLowerCase().replace(/^район\s+/i, '').trim();
@@ -144,6 +150,17 @@ const formatCardForClient = (req, p) => ({
   title: p.title,
   type: p.type
 });
+
+// Определяем язык по истории сессии (ru/en)
+const detectLangFromSession = (session) => {
+  try {
+    const lastUser = [...session.messages].reverse().find(m => m.role === 'user');
+    const sample = lastUser?.content || '';
+    if (/[А-Яа-яЁё]/.test(sample)) return 'ru';
+    if (/[A-Za-z]/.test(sample)) return 'en';
+  } catch {}
+  return 'ru';
+};
 
 // 🧠 Улучшенная функция извлечения insights (9 параметров)
 const updateInsights = (sessionId, newMessage) => {
@@ -877,12 +894,24 @@ const transcribeAndRespond = async (req, res) => {
 
     // 🔎 Детектор намерения/вариантов
     const { show, variants } = detectCardIntent(transcription);
+    const schedule = detectScheduleIntent(transcription);
     const enoughContext = session.insights?.progress >= 66;
     let cards = [];
     let ui = undefined;
 
-    // Если пользователь просит варианты (или есть достаточно контекста) — опишем 2-3 варианта текстом
-    if (variants || enoughContext) {
+    // Если пользователь просит варианты (или достаточный контекст) — опишем 2–3 варианта, но без повторов и если это не запрос на запись/карточку
+    const now = Date.now();
+    const hashInsights = (ins) => {
+      try { return JSON.stringify({
+        name: !!ins.name, operation: ins.operation, budget: ins.budget,
+        type: ins.type, location: ins.location, rooms: ins.rooms,
+        area: ins.area, details: ins.details, preferences: ins.preferences
+      }); } catch { return ''; }
+    };
+    session.lastListAt = session.lastListAt || 0;
+    session.lastListHash = session.lastListHash || '';
+    const canList = (now - session.lastListAt > 60000) || (session.lastListHash !== hashInsights(session.insights));
+    if (!show && !schedule && (variants || enoughContext) && canList) {
       const top = findBestProperties(session.insights, 3);
       if (top.length) {
         // запоминаем кандидатов в сессии
@@ -891,6 +920,8 @@ const transcribeAndRespond = async (req, res) => {
         const lines = top.map((p, i) => `${i + 1}) ${p.city}, ${p.district}, ${p.rooms} комнат — ${p.priceEUR} €`);
         const addendum = `\n\nУ меня есть ${top.length} вариант(а) из ${total} в базе:\n${lines.join('\n')}\nСказать «покажи» — предложу карточку сюда.`;
         botResponse += addendum;
+        session.lastListAt = now;
+        session.lastListHash = hashInsights(session.insights);
       }
     }
 
@@ -908,6 +939,11 @@ const transcribeAndRespond = async (req, res) => {
         cards = [formatCardForClient(req, candidate)];
         ui = { suggestShowCard: true };
       }
+    }
+
+    // Если пользователь просит запись/встречу — не повторяем варианты, уточняем время
+    if (schedule) {
+      botResponse = `${botResponse}\n\nОтлично! Напиши удобные даты и время для просмотра, или оставь номер — передам менеджеру для согласования.`;
     }
 
     addMessageToSession(sessionId, 'assistant', botResponse);
@@ -1032,7 +1068,11 @@ async function handleInteraction(req, res) {
       const id = session.lastCandidates[session.candidateIndex % session.lastCandidates.length];
       const p = properties.find(x => x.id === id) || properties[0];
       const card = formatCardForClient(req, p);
-      return res.json({ ok: true, card });
+      const lang = detectLangFromSession(session);
+      const assistantMessage = lang === 'en'
+        ? `I’ve got another solid match for you: ${p.city}, ${p.district}, ${p.rooms} rooms — ${p.priceEUR} €. How does it feel?`
+        : `Есть вариант, который хорошо попадает в ваш запрос: ${p.city}, ${p.district}, ${p.rooms} комнат — ${p.priceEUR} €. Как вам?`;
+      return res.json({ ok: true, assistantMessage, card });
     }
 
     if (action === 'like') {
