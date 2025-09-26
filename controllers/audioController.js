@@ -140,15 +140,15 @@ const getBaseUrl = (req) => {
 
 const formatCardForClient = (req, p) => ({
   id: p.id,
-  image: (p.image && /^https?:\/\//i.test(p.image)) ? p.image : `${getBaseUrl(req)}${p.image || ''}`,
-  price: `${p.priceEUR} €`,
-  priceEUR: p.priceEUR,
-  city: p.city,
-  district: p.district,
-  rooms: p.rooms,
-  country: p.country,
-  title: p.title,
-  type: p.type
+  // Левые поля (география)
+  city: p.city ?? p?.location?.city ?? null,
+  district: p.district ?? p?.location?.district ?? null,
+  neighborhood: p.neighborhood ?? p?.location?.neighborhood ?? null,
+  // Правые поля (основные цифры)
+  price: (p.priceEUR != null ? `${p.priceEUR} €` : (p?.price?.amount != null ? `${p.price.amount} €` : null)),
+  priceEUR: p.priceEUR ?? p?.price?.amount ?? null,
+  rooms: p.rooms ?? p?.specs?.rooms ?? null,
+  floor: p.floor ?? p?.specs?.floor ?? null
 });
 
 // Определяем язык по истории сессии (ru/en)
