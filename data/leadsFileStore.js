@@ -1,7 +1,13 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+// Базируемся на директории текущего модуля (…/Voice-Widget-Backend/data),
+// а не на process.cwd(), чтобы избежать записи в неожиданный путь при ином CWD
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const DATA_DIR = __dirname;
 const FILE_PATH = path.join(DATA_DIR, 'leads.json');
 const RETENTION_DAYS = parseInt(process.env.LEADS_RETENTION_DAYS || '90', 10);
 
@@ -38,8 +44,13 @@ function writeToDisk() {
   ensureDir();
   const data = { version: 1, items };
   const tmp = FILE_PATH + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(tmp, FILE_PATH);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+    fs.renameSync(tmp, FILE_PATH);
+  } catch (e) {
+    console.error('leadsFileStore write error:', e);
+    throw e;
+  }
 }
 
 function normalizeEmail(v) {
@@ -113,8 +124,11 @@ export function findDuplicate(lead, hours = 24) {
     if (msSinceIso(it.created_at) > windowMs) break; // items sorted desc
     const ch = it?.contact?.channel;
     const val = normalizeContactValue(ch, it?.contact?.value);
-    if (ch === normChannel && val === normValue && isSameTimeWindow(it.time_window, lead.time_window)) {
-      return it; // duplicate found
+    if (ch === normChannel && val === normValue) {
+      // Если у входящего лида нет слота времени — дубликат по одному контакту
+      if (!lead.time_window) return it;
+      // Иначе сравниваем по контакт+слот
+      if (isSameTimeWindow(it.time_window, lead.time_window)) return it;
     }
   }
   return null;

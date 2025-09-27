@@ -162,6 +162,48 @@ const detectLangFromSession = (session) => {
   return 'ru';
 };
 
+// --------- Simple parsers for contact and time from text ---------
+const parseEmailFromText = (text) => {
+  const m = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return m ? m[0] : null;
+};
+
+const parsePhoneFromText = (text) => {
+  // Allow +, spaces, dashes, parentheses; normalize to +digits
+  const m = text.match(/\+?\s*[0-9][0-9\s()\-]{5,}/);
+  if (!m) return null;
+  const digits = m[0].replace(/[^0-9+]/g, '');
+  const normalized = `+${digits.replace(/^\++/,'')}`;
+  return normalized.length >= 7 ? normalized : null;
+};
+
+const parseTimeWindowFromText = (text) => {
+  try {
+    const lower = text.toLowerCase();
+    const tz = 'Europe/Madrid';
+    const now = new Date();
+    const todayStr = new Date(now).toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
+    const tomorrow = new Date(now.getTime() + 24*60*60*1000);
+    const tomorrowStr = tomorrow.toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
+
+    const isToday = /(сегодня|today)/i.test(lower);
+    const isTomorrow = /(завтра|tomorrow)/i.test(lower);
+
+    // HH or HH:MM
+    const timeSingle = lower.match(/\b(\d{1,2})(?::(\d{2}))?\b/);
+    // ranges like 17–19 or 17-19
+    const timeRange = lower.match(/\b(\d{1,2})\s*[–\-]\s*(\d{1,2})\b/);
+
+    let date = null; let from = null; let to = null;
+    if (isToday) date = todayStr; else if (isTomorrow) date = tomorrowStr;
+    if (timeRange) { from = `${timeRange[1].padStart(2,'0')}:00`; to = `${timeRange[2].padStart(2,'0')}:00`; }
+    else if (timeSingle) { from = `${timeSingle[1].padStart(2,'0')}:${(timeSingle[2]||'00')}`; to = null; }
+
+    if (date && (from || to)) return { date, from, to, timezone: tz };
+    return null;
+  } catch { return null; }
+};
+
 // 🧠 Улучшенная функция извлечения insights (9 параметров)
 const updateInsights = (sessionId, newMessage) => {
   const session = sessions.get(sessionId);
@@ -855,14 +897,13 @@ const transcribeAndRespond = async (req, res) => {
 • Мечтатели → эмоции, виды, атмосфера района.  
 • Неопределившиеся → помоги структурировать запрос вопросами.
 
-ПРОАКТИВНОЕ ПРЕДЛОЖЕНИЕ КОНТАКТА (lead capture):
-• Всегда оценивай намерение и готовность клиента к контакту по контексту диалога, даже если явного триггера нет.  
-• Если клиент «созрел» (понравился объект, обсуждает время звонка/показа, просит уточнения для встречи) — мягко предложи оставить контакт и выбрать удобный канал и окно связи.  
-• Спрашивай согласие прежде чем инициировать форму. При согласии — кратко скажи, что откроешь форму, и жди её от системы (не вставляй форму сам).  
-• Если клиент отказывается — уважай отказ и продолжай подбор без давления.  
-• Если клиент уходит в юридические/ипотечные/документо‑вопросы вне базы — честно скажи, что этим занимается менеджер, и предложи передать контакт.  
-• Не повторяй предложение формы слишком часто: не чаще одного раза на 3–5 сообщений, чтобы не выглядеть навязчиво.  
-• Всегда используй язык клиента.  
+ОРГАНИЧНЫЙ LEAD-CAPTURE (без «системщины»):
+• Оцени намерение клиента (записаться/связаться) и веди диалог естественно: «Отлично, давайте запланируем время.»  
+• Не используй «системные» формулировки типа «Открыть форму?» и не упоминай внутренние триггеры/сервисы.  
+• Инициируй пошаговый inline-flow (плашки в чате), управляй им живыми короткими репликами. Кнопки только для шагов: «Продолжить», «Пропустить / согласуем позже», «Отправить», «Отмена».  
+• Если пользователь прислал контакт/время текстом — подтверди распознавание и продолжай через структурированные плашки, а не перепиской.  
+• Уважай отказ: если пользователь отказывается — не предлагай повторно в течение кулдауна (несколько ходов/минут).  
+• Всегда используй язык клиента; все подписи на плашках соответствуют текущей локали (EN/ES/RU/UK/FR/DE/IT).  
 
 СТИЛЬ ОТВЕТА:
 • Не пересказывай пользователя; отвечай естественно.  
@@ -898,6 +939,23 @@ const transcribeAndRespond = async (req, res) => {
     // 🔎 Детектор намерения/вариантов
     const { show, variants } = detectCardIntent(transcription);
     const schedule = detectScheduleIntent(transcription);
+
+    // Inline lead-capture signals from text (contact/time parsing)
+    const parsedEmail = parseEmailFromText(transcription || '');
+    const parsedPhone = parsedEmail ? null : parsePhoneFromText(transcription || '');
+    const parsedTime = parseTimeWindowFromText(transcription || '');
+    if (!session.inlineLead) session.inlineLead = { contact: null, time_window: null, cooldownUntil: 0 };
+    if (!session.inlineLead.contact && (parsedEmail || parsedPhone)) {
+      session.inlineLead.contact = parsedEmail ? { channel:'email', value: parsedEmail } : { channel:'phone', value: parsedPhone };
+      // signal UI with value
+      ui = Object.assign({}, ui, { inlineLead: Object.assign({}, ui?.inlineLead, { contactFound: true, contact: session.inlineLead.contact }) });
+      console.log('ℹ️ inlineLead: contact parsed');
+    }
+    if (!session.inlineLead.time_window && parsedTime) {
+      session.inlineLead.time_window = parsedTime;
+      ui = Object.assign({}, ui, { inlineLead: Object.assign({}, ui?.inlineLead, { timeFound: true, time_window: session.inlineLead.time_window }) });
+      console.log('ℹ️ inlineLead: time parsed');
+    }
     const enoughContext = session.insights?.progress >= 66;
     let cards = [];
     let ui = undefined;
@@ -921,7 +979,7 @@ const transcribeAndRespond = async (req, res) => {
         session.lastCandidates = top.map((p) => p.id);
         const total = properties.length;
         const lines = top.map((p, i) => `${i + 1}) ${p.city}, ${p.district}, ${p.rooms} комнат — ${p.priceEUR} €`);
-        const addendum = `\n\nУ меня есть ${top.length} вариант(а) из ${total} в базе:\n${lines.join('\n')}\nСказать «покажи» — предложу карточку сюда. Если хотите — могу открыть форму контакта.`;
+        const addendum = `\n\nУ меня есть ${top.length} вариант(а) из ${total} в базе:\n${lines.join('\n')}\nСказать «покажи» — предложу карточку сюда.`;
         botResponse += addendum;
         session.lastListAt = now;
         session.lastListHash = hashInsights(session.insights);
@@ -960,15 +1018,24 @@ const transcribeAndRespond = async (req, res) => {
     const timeRegex = /(время|когда|созвон|звонок)/i;
     const positive = positiveRegex.test(transcription) && timeRegex.test(transcription);
 
-    if (!ui && (tooManyRequests || proactiveIntent || positive)) {
-      ui = { suggestLeadForm: true };
-      const lang = detectLangFromSession(session);
-      const msg = lang === 'en'
-        ? 'Looks like we are close. Shall I open a quick contact form?'
-        : lang === 'es'
-          ? 'Parece que estamos cerca. ¿Abro un formulario rápido de contacto?'
-          : 'Похоже, мы близки к цели. Открыть короткую форму для связи?';
-      botResponse = `${botResponse}\n\n${msg}`;
+    // Cooldown и запрет параллельных flow
+    session.inlineLead = session.inlineLead || { contact: null, time_window: null, cooldownUntil: 0, flowActive: false };
+    const nowMs = Date.now();
+    const cooldownOk = nowMs > (session.inlineLead.cooldownUntil || 0);
+    const canSuggest = cooldownOk && !session.inlineLead.flowActive;
+    // Приоритет: schedule > intent > positive > cards
+    let reason = null;
+    if (schedule) reason = 'schedule';
+    else if (proactiveIntent) reason = 'intent';
+    else if (positive) reason = 'positive';
+    else if (tooManyRequests) reason = 'cards';
+
+    if (!ui && canSuggest && reason) {
+      ui = { suggestLeadForm: true, inlineLead: Object.assign({}, ui?.inlineLead, { startFlow: true, reason }) };
+      // Логируем причину без PII
+      console.log(`ℹ️ inlineLead trigger: reason=${ui.inlineLead.reason}`);
+      // Установим кулдаун на 2 минуты
+      session.inlineLead.cooldownUntil = nowMs + 2*60*1000;
     }
 
     addMessageToSession(sessionId, 'assistant', botResponse);
