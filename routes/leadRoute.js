@@ -47,8 +47,8 @@ router.post('/', (req, res) => {
       return res.status(400).json({ ok: false, error: 'INVALID_INPUT', errors: fieldErrors });
     }
 
-    // Повтор в рамках одной сессии за 10 минут — приоритетнее
-    const repeat = findSessionRepeat(normalized, 10);
+    // Повтор в рамках одной сессии: кулдаун 10 секунд
+    const repeat = findSessionRepeat(normalized, (10/60));
     if (repeat) {
       console.log(`📝 Lead already accepted in session: id=${repeat.id}`);
       return res.json({ ok: true, leadId: repeat.id, accepted: true });
