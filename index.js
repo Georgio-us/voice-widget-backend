@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import audioRouter from './routes/audioRoute.js';
 import cardRouter from './routes/cardRoute.js';
-import leadRouter from './routes/leadRoute.js';
+ 
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -100,7 +100,7 @@ app.get('/health', (req, res) => {
 // 🎤 API роуты
 app.use('/api/audio', audioRouter);
 app.use('/api/cards', cardRouter);
-app.use('/api/leads', leadRouter);
+ 
 
 // 🔍 Корневой маршрут с информацией об API
 app.get('/', (req, res) => {
