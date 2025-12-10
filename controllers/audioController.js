@@ -2,7 +2,9 @@ import { File } from 'node:buffer';
 globalThis.File = File;
 import { OpenAI } from 'openai';
 import properties from '../data/properties.js';
+import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
+const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || '').trim() === '1';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
@@ -27,6 +29,18 @@ const getOrCreateSession = (sessionId) => {
       messages: [],
       createdAt: Date.now(),
       lastActivity: Date.now(),
+      // 🆕 Профиль клиента для логики воронки
+      clientProfile: {
+        language: null,
+        location: null,
+        budgetMin: null,
+        budgetMax: null,
+        purpose: null,
+        propertyType: null,
+        urgency: null
+      },
+      // 🆕 Текущая стадия диалога
+      stage: 'intro',
       // 🆕 РАСШИРЕННАЯ СТРУКТУРА INSIGHTS (9 параметров)
       insights: {
         // Блок 1: Основная информация (33.3%)
@@ -592,7 +606,8 @@ const updateInsights = (sessionId, newMessage) => {
   console.log(`🔍 Текущие insights:`, insights);
 };
 
-// 🤖 ОБНОВЛЕННЫЙ GPT анализатор для извлечения insights (9 параметров)
+// 🤖 [DEPRECATED] GPT анализатор для извлечения insights (9 параметров)
+// Основной механизм анализа теперь через META-JSON в ответе модели внутри основного диалога.
 const analyzeContextWithGPT = async (sessionId) => {
   const session = sessions.get(sessionId);
   if (!session) return;
@@ -732,7 +747,8 @@ ${conversationHistory}
   }
 };
 
-// 📊 Проверяем, нужно ли запустить GPT анализ
+// 📊 [DEPRECATED] Проверяем, нужно ли запустить GPT анализ раз в N сообщений
+// Основной механизм анализа теперь через META-JSON; этот триггер оставлен для совместимости и может быть отключён ENV.
 const checkForGPTAnalysis = async (sessionId) => {
   const session = sessions.get(sessionId);
   if (!session) return;
@@ -819,6 +835,124 @@ const isRetryableError = (error) => {
   return retryableMessages.some(msg => errorMessage.includes(msg));
 };
 
+// ====== Вспомогательные функции профиля/стадий/META ======
+const determineStage = (clientProfile, currentStage, messageHistory) => {
+  try {
+    const nonSystemCount = Array.isArray(messageHistory)
+      ? messageHistory.filter(m => m && m.role !== 'system').length
+      : 0;
+    if (nonSystemCount <= 1) return 'intro';
+    const missingKey =
+      !clientProfile?.location ||
+      !(clientProfile?.budgetMin || clientProfile?.budgetMax) ||
+      !clientProfile?.purpose;
+    if (missingKey) return 'qualification';
+    return 'matching_closing';
+  } catch {
+    return currentStage || 'intro';
+  }
+};
+
+const mergeClientProfile = (current, delta) => {
+  const result = { ...(current || {}) };
+  if (delta && typeof delta === 'object') {
+    for (const [key, value] of Object.entries(delta)) {
+      if (value !== undefined && value !== null) {
+        result[key] = value;
+      }
+    }
+  }
+  return result;
+};
+
+const normalizeNumber = (v) => {
+  if (v === null || v === undefined) return null;
+  const n = Number(String(v).replace(/[^\d.-]/g, ''));
+  return Number.isFinite(n) ? Math.round(n) : null;
+};
+
+const formatBudgetFromRange = (min, max) => {
+  const minNum = normalizeNumber(min);
+  const maxNum = normalizeNumber(max);
+  if (minNum && maxNum) return `${minNum}–${maxNum} €`;
+  if (!minNum && maxNum) return `до ${maxNum} €`;
+  if (minNum && !maxNum) return `от ${minNum} €`;
+  return null;
+};
+
+const mapPurposeToOperationRu = (purpose) => {
+  if (!purpose) return null;
+  const s = String(purpose).toLowerCase();
+  if (/(buy|покуп|купить|purchase|invest|инвест)/i.test(s)) return 'покупка';
+  if (/(rent|аренд|снять|lease)/i.test(s)) return 'аренда';
+  return null;
+};
+
+const mapClientProfileToInsights = (clientProfile, insights) => {
+  if (!clientProfile || !insights) return;
+  // Бюджет
+  const budgetStr = formatBudgetFromRange(clientProfile.budgetMin, clientProfile.budgetMax);
+  if (budgetStr) insights.budget = budgetStr;
+  // Локация
+  if (clientProfile.location) insights.location = clientProfile.location;
+  // Тип
+  if (clientProfile.propertyType) insights.type = clientProfile.propertyType;
+  // Операция
+  const op = mapPurposeToOperationRu(clientProfile.purpose);
+  if (op) insights.operation = op;
+  // Срочность → предпочтения
+  if (clientProfile.urgency && /сроч/i.test(String(clientProfile.urgency))) {
+    insights.preferences = 'срочный поиск';
+  }
+  // Пересчёт прогресса
+  const weights = {
+    name: 11,
+    operation: 11,
+    budget: 11,
+    type: 11,
+    location: 11,
+    rooms: 11,
+    area: 11,
+    details: 11,
+    preferences: 11
+  };
+  let totalProgress = 0;
+  let filledFields = 0;
+  for (const [field, weight] of Object.entries(weights)) {
+    const val = insights[field];
+    if (val != null && String(val).trim()) {
+      totalProgress += weight;
+      filledFields++;
+    }
+  }
+  insights.progress = Math.min(totalProgress, 99);
+};
+
+const extractAssistantAndMeta = (fullText) => {
+  try {
+    const marker = '---META---';
+    const idx = fullText.indexOf(marker);
+    if (idx === -1) {
+      return { assistantText: fullText, meta: null };
+    }
+    const assistantText = fullText.slice(0, idx).trim();
+    let jsonPart = fullText.slice(idx + marker.length).trim();
+    // Срезаем возможные бэктики
+    jsonPart = jsonPart.replace(/```json\s*|\s*```/g, '').trim();
+    // Защитимся от слишком длинного хвоста
+    if (jsonPart.length > 5000) jsonPart = jsonPart.slice(0, 5000);
+    let parsed = null;
+    try {
+      parsed = JSON.parse(jsonPart);
+    } catch {
+      parsed = null;
+    }
+    return { assistantText, meta: parsed };
+  } catch {
+    return { assistantText: fullText, meta: null };
+  }
+};
+
 const transcribeAndRespond = async (req, res) => {
   const startTime = Date.now();
   let sessionId = null;
@@ -861,7 +995,9 @@ const transcribeAndRespond = async (req, res) => {
     updateInsights(sessionId, transcription);
 
     // 🤖 Проверяем, нужен ли GPT анализ каждые 5 сообщений
-    await checkForGPTAnalysis(sessionId);
+    if (ENABLE_PERIODIC_ANALYSIS) {
+      await checkForGPTAnalysis(sessionId);
+    }
 
     const totalProps = properties.length;
     const targetLang = (() => {
@@ -873,37 +1009,70 @@ const transcribeAndRespond = async (req, res) => {
       return 'ru';
     })();
 
-    // Короткая личность Джона (обновлено по ТЗ)
-    const systemPromptCombined = `Ты — Джон, лаконичный и компетентный голосовой AI-помощник по недвижимости в Испании.
+    // Обновляем стадию и язык перед GPT
+    session.stage = determineStage(session.clientProfile, session.stage, session.messages);
+    // Установим язык профиля, если ещё не задан: используем эвристику targetLang
+    if (!session.clientProfile.language) {
+      session.clientProfile.language = targetLang;
+    }
 
-Отвечай кратко, уверенно, по делу.
+    // Базовый системный промпт (личность Джона)
+    const baseSystemPrompt = BASE_SYSTEM_PROMPT;
 
-Твоя задача — помочь пользователю подобрать квартиру или дом в Испании: понять бюджет, тип недвижимости, район, сроки покупки и пожелания.
+    // Инструкции по стадии и формат ответа
+    const stageInstruction = (() => {
+      if (session.stage === 'intro') {
+        return `Режим: INTRO.
+Задача: коротко поприветствовать и понять, с какой задачей по недвижимости обращается клиент.
+Ограничения UX:
+- Не задавай более одного явного вопроса в одном ответе.
+- Не задавай подряд несколько узких анкетных вопросов — приоритет живой диалог.`;
+      }
+      if (session.stage === 'qualification') {
+        return `Режим: QUALIFICATION.
+Задача: естественно собрать недостающие параметры профиля (location, budget, purpose и т.п.).
+Ограничения UX:
+- Не задавай более одного явного вопроса в одном ответе.
+- Не задавай подряд несколько узких анкетных вопросов — приоритет живой диалог.`;
+      }
+      return `Режим: MATCHING_CLOSING.
+Задача: опираться на уже известный профиль, предлагать направления/варианты и мягко предлагать следующий шаг.
+Ограничения UX:
+- Не задавай более одного явного вопроса в одном ответе.
+- Не задавай подряд несколько узких анкетных вопросов — приоритет живой диалог.
+- CTA допустим только если заполнены хотя бы location и бюджет и уже был обмен несколькими репликами.`;
+    })();
 
-Правила:
+    // Инструкция по языку ответа (если определён)
+    const languageInstruction = (() => {
+      const lang = String(session.clientProfile.language || '').toLowerCase();
+      if (lang === 'en') return 'Answer primarily in English.';
+      if (lang === 'ru' || !lang) return 'Отвечай преимущественно на русском.';
+      return ''; // неизвестный язык — без инструкции
+    })();
 
-— Используй только евро (€). Никогда не используй рубли, доллары, XY-значения или placeholder-цены.
-— Ты находишься в Испании. Ты работаешь только с недвижимостью Испании (Коста Бланка, Валенсия, Аликанте, Малага и т.д.).
-— Не выдумывай цены и объекты — описывай типовые варианты (напр.: «в районе X обычно цены от 180–220k»).
-— Будь уверенным, вежливым и конкретным.
-— В диалоге цель — понять нужды клиента и привести к записи на просмотр / консультации.
-— Никогда не уходи в воду, философию или фантазию.
-— Если пользователь отвлекается от темы — мягко возвращай в поиск квартиры.
-— Не дублируй сказанное пользователем.
-— Твоя речь — сухая, профессиональная, логичная.
-
-🎯 Коротко — кто такой Джон
-AI-продавец недвижимости, который:
-— быстро фильтрует по бюджету,
-— уточняет параметры,
-— предлагает 2–3 вариантов направления,
-— ведёт к просмотру или консультации.`;
+    const outputFormatInstruction = `Формат ответа строго двухчастный:
+1) Текст для пользователя.
+2) Строка ---META---
+3) JSON:
+{
+  "clientProfileDelta": {
+    // только обновляемые поля профиля, без null и undefined
+  },
+  "stage": "intro" | "qualification" | "matching_closing"
+}
+Если нечего обновлять, пришли "clientProfileDelta": {}.`;
 
     const messages = [
       {
         role: 'system',
-        content: systemPromptCombined
+        content: baseSystemPrompt
       },
+      {
+        role: 'system',
+        content: `${stageInstruction}\n\n${outputFormatInstruction}`
+      },
+      ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
       ...session.messages
     ];
 
@@ -921,7 +1090,38 @@ AI-продавец недвижимости, который:
     
     const gptTime = Date.now() - gptStart;
 
-    let botResponse = completion.choices[0].message.content.trim();
+    const fullModelText = completion.choices[0].message.content.trim();
+    const { assistantText, meta } = extractAssistantAndMeta(fullModelText);
+    let botResponse = assistantText || fullModelText;
+
+    // META обработка: clientProfileDelta + stage
+    try {
+      const clientProfileDelta = meta?.clientProfileDelta && typeof meta.clientProfileDelta === 'object'
+        ? meta.clientProfileDelta
+        : {};
+      const updatedProfile = mergeClientProfile(session.clientProfile, clientProfileDelta);
+      session.clientProfile = updatedProfile;
+      // Валидируем и принимаем stage из META (если прислали)
+      const allowedStages = new Set(['intro', 'qualification', 'matching_closing']);
+      if (meta && typeof meta.stage === 'string' && allowedStages.has(meta.stage)) {
+        session.stage = meta.stage;
+      }
+      // Синхронизация с insights и пересчёт прогресса
+      mapClientProfileToInsights(session.clientProfile, session.insights);
+      // Компактный лог обновления профиля и стадии
+      const profileLog = {
+        language: session.clientProfile.language,
+        location: session.clientProfile.location,
+        budgetMin: session.clientProfile.budgetMin,
+        budgetMax: session.clientProfile.budgetMax,
+        purpose: session.clientProfile.purpose,
+        propertyType: session.clientProfile.propertyType,
+        urgency: session.clientProfile.urgency
+      };
+      console.log(`🧩 Профиль обновлён [${String(sessionId).slice(-8)}]: ${JSON.stringify(profileLog)} | stage: ${session.stage}`);
+    } catch (e) {
+      console.log('ℹ️ META отсутствует или невалидна, продолжаем без обновления профиля');
+    }
 
     // 🔎 Детектор намерения/вариантов
     const { show, variants } = detectCardIntent(transcription);
@@ -991,6 +1191,8 @@ AI-продавец недвижимости, который:
       sessionId,
       messageCount: session.messages.length,
       inputType,
+      clientProfile: session.clientProfile,
+      stage: session.stage,
       insights: session.insights, // 🆕 Теперь содержит все 9 параметров
       // ui пропускается, если undefined; cards может быть пустым массивом
       cards: DISABLE_SERVER_UI ? [] : cards,
@@ -1067,6 +1269,8 @@ const getSessionInfo = (req, res) => {
 
   res.json({
     sessionId,
+    clientProfile: session.clientProfile,
+    stage: session.stage,
     insights: session.insights, // 🆕 Теперь содержит все 9 параметров
     messageCount: session.messages.length,
     lastActivity: session.lastActivity
