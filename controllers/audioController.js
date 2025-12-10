@@ -185,6 +185,61 @@ const detectLangFromSession = (session) => {
   return 'ru';
 };
 
+// Язык по приоритету: профиль → история
+const getPrimaryLanguage = (session) => {
+  const prof = session?.clientProfile?.language;
+  if (prof) return String(prof).toLowerCase();
+  return detectLangFromSession(session);
+};
+
+// Вариативные короткие фразы при показе карточки (в ответ модели)
+const generateShowIntro = (lang) => {
+  const ru = [
+    'Сейчас покажу.',
+    'Давайте посмотрим этот вариант.',
+    'Окей, открою карточку.',
+    'Покажу подходящий вариант.',
+    'Хорошо, посмотрим подробнее.'
+  ];
+  const en = [
+    'Let me show you.',
+    'Let’s take a look at this option.',
+    'Okay, opening the card.',
+    'I’ll show a matching option.',
+    'Sure, let’s see the details.'
+  ];
+  const bank = (lang === 'en') ? en : ru;
+  return bank[Math.floor(Math.random() * bank.length)];
+};
+
+// Вариативный динамический комментарий под карточкой (для /interaction)
+const generateCardComment = (lang, p) => {
+  const fallback = (lang === 'en')
+    ? 'How does it feel?'
+    : 'Как вам?';
+  const ru = [
+    (p) => `Как вам локация: ${p.city}, ${p.district}?`,
+    (p) => `Здесь ${p.rooms} комнат — ${p.priceEUR} €. Что думаете?`,
+    (p) => `По сочетанию района и цены это неплохой попадание. Как вам?`,
+    (p) => `В ценовом диапазоне это выглядит здраво. Оцените, пожалуйста.`,
+    (p) => `Посмотрите планировку и район, потом скажете впечатления.`
+  ];
+  const en = [
+    (p) => `How do you like the area: ${p.city}, ${p.district}?`,
+    (p) => `${p.rooms} rooms — ${p.priceEUR} €. Thoughts?`,
+    (p) => `Solid fit for the area and budget. How does it feel?`,
+    (p) => `Within this price range, looks reasonable. Your take?`,
+    (p) => `Check the layout and area, then tell me your impression.`
+  ];
+  const bank = (lang === 'en') ? en : ru;
+  try {
+    const pick = bank[Math.floor(Math.random() * bank.length)];
+    return (typeof pick === 'function') ? (p ? pick(p) : fallback) : (pick || fallback);
+  } catch {
+    return fallback;
+  }
+};
+
 // --------- Simple parsers for contact and time from text ---------
 const parseEmailFromText = (text) => {
   const m = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
@@ -1173,6 +1228,10 @@ const transcribeAndRespond = async (req, res) => {
       if (candidate) {
         cards = [formatCardForClient(req, candidate)];
         ui = { suggestShowCard: true };
+        // Естественная короткая фраза без технических оговорок
+        const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
+        const phrase = generateShowIntro(lang);
+        botResponse = botResponse ? `${botResponse}\n\n${phrase}` : phrase;
       }
     }
 
@@ -1319,10 +1378,8 @@ async function handleInteraction(req, res) {
         // крайний случай: вернём первый из базы
         const p = properties[0];
         const card = formatCardForClient(req, p);
-        const lang = detectLangFromSession(session);
-        const assistantMessage = lang === 'en'
-          ? `I've got another solid match for you: ${p.city}, ${p.district}, ${p.rooms} rooms — ${p.priceEUR} €. How does it feel?`
-          : `Есть вариант, который хорошо попадает в ваш запрос: ${p.city}, ${p.district}, ${p.rooms} комнат — ${p.priceEUR} €. Как вам?`;
+        const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
+        const assistantMessage = generateCardComment(lang, p);
         return res.json({ ok: true, assistantMessage, card });
       }
       // Если фронт прислал текущий variantId, делаем шаг относительно него
@@ -1335,10 +1392,8 @@ async function handleInteraction(req, res) {
       const id = list[nextIndex];
       const p = properties.find(x => x.id === id) || properties[0];
       const card = formatCardForClient(req, p);
-      const lang = detectLangFromSession(session);
-      const assistantMessage = lang === 'en'
-        ? `I've got another solid match for you: ${p.city}, ${p.district}, ${p.rooms} rooms — ${p.priceEUR} €. How does it feel?`
-        : `Есть вариант, который хорошо попадает в ваш запрос: ${p.city}, ${p.district}, ${p.rooms} комнат — ${p.priceEUR} €. Как вам?`;
+      const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
+      const assistantMessage = generateCardComment(lang, p);
       return res.json({ ok: true, assistantMessage, card });
     }
 
