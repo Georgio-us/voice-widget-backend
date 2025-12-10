@@ -1217,15 +1217,25 @@ const transcribeAndRespond = async (req, res) => {
 
     // Если пользователь просит показать/подробнее — предложим карточку через панель
     if (show && !DISABLE_SERVER_UI) {
-      let candidate = null;
+      // Начинаем новый "сеанс показа" — сбрасываем набор уже показанных в текущем слайдере
+      session.shownSet = new Set();
+      // Формируем пул кандидатов: либо существующий, либо заново
+      let pool = [];
       if (Array.isArray(session.lastCandidates) && session.lastCandidates.length) {
-        candidate = properties.find((p) => p.id === session.lastCandidates[0]);
+        pool = session.lastCandidates.slice();
+      } else {
+        const ranked = findBestProperties(session.insights, 10);
+        pool = (ranked.length ? ranked : properties).map(p => p.id);
       }
-      if (!candidate) {
-        const found = findBestProperties(session.insights, 1);
-        candidate = found[0];
-      }
+      // Дедупликация пула
+      pool = Array.from(new Set(pool));
+      session.lastCandidates = pool;
+      session.candidateIndex = 0;
+      // Выбираем первый id из пула, которого нет в shownSet (она только что сброшена)
+      let pickedId = pool[0];
+      const candidate = properties.find((p) => p.id === pickedId) || properties[0];
       if (candidate) {
+        session.shownSet.add(candidate.id);
         cards = [formatCardForClient(req, candidate)];
         ui = { suggestShowCard: true };
         // Естественная короткая фраза без технических оговорок
@@ -1387,10 +1397,32 @@ async function handleInteraction(req, res) {
       if (idx === -1) {
         idx = Number.isInteger(session.candidateIndex) ? session.candidateIndex : 0;
       }
-      const nextIndex = (idx + 1) % len;
-      session.candidateIndex = nextIndex;
-      const id = list[nextIndex];
+      // Подготовим набор уже показанных в текущем показе
+      if (!session.shownSet) session.shownSet = new Set();
+      // Найдём следующий id, которого ещё не было показано в текущем показе
+      let steps = 0;
+      let nextIndex = (idx + 1) % len;
+      let id = list[nextIndex];
+      while (steps < len && session.shownSet.has(id)) {
+        nextIndex = (nextIndex + 1) % len;
+        id = list[nextIndex];
+        steps++;
+      }
+      // Если все кандидаты уже показаны — расширим пул лучшими по инсайтам и возьмём первый новый
+      if (steps >= len) {
+        const extended = findBestProperties(session.insights, 100).map(p => p.id);
+        const unseen = extended.find(cid => !session.shownSet.has(cid));
+        if (unseen) {
+          id = unseen;
+          // добавим в пул для будущих переключений
+          const set = new Set(list);
+          set.add(id);
+          session.lastCandidates = Array.from(set);
+        }
+      }
+      session.candidateIndex = list.indexOf(id);
       const p = properties.find(x => x.id === id) || properties[0];
+      session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
       const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
       const assistantMessage = generateCardComment(lang, p);
