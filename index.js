@@ -9,7 +9,7 @@ if (process.env.OPENAI_API_KEY) {
   console.error('❌ OPENAI_API_KEY не найден в переменных окружения!');
   process.exit(1);
 }
-
+import { testDbConnection } from './services/db.js';
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -200,4 +200,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`⚡ Optimizations: Memory storage, GPT-4o-mini, Session context`);
   console.log('🚀 ================================');
+
+  // ✅ проверяем подключение к Postgres
+  testDbConnection();
 });
