@@ -6,7 +6,7 @@ import {
 
 const router = express.Router();
 
-// Приводим raw-объект из БД к формату карточек,
+// Приводим raw-объект из Базы Данных к формату карточек,
 // максимально близкому к тому, что раньше было в properties.js
 const normalizeProperty = (p) => ({
   id: p.id,
