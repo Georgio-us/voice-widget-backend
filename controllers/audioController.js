@@ -201,37 +201,23 @@ const generateShowIntro = (lang) => {
     'Покажу подходящий вариант.',
     'Хорошо, посмотрим подробнее.'
   ];
-  const en = [
-    'Let me show you.',
-    'Let’s take a look at this option.',
-    'Okay, opening the card.',
-    'I’ll show a matching option.',
-    'Sure, let’s see the details.'
-  ];
-  const bank = (lang === 'en') ? en : ru;
+  // Временно фиксируем язык на русский; поддержку языков добавим позже
+  const bank = ru;
   return bank[Math.floor(Math.random() * bank.length)];
 };
 
 // Вариативный динамический комментарий под карточкой (для /interaction)
 const generateCardComment = (lang, p) => {
-  const fallback = (lang === 'en')
-    ? 'How does it feel?'
-    : 'Как вам?';
+  // Временно фиксируем язык на русский; поддержку языков добавим позже
+  const fallback = 'Как вам?';
   const ru = [
-    (p) => `Как вам локация: ${p.city}, ${p.district}?`,
-    (p) => `Здесь ${p.rooms} комнат — ${p.priceEUR} €. Что думаете?`,
-    (p) => `По сочетанию района и цены это неплохой попадание. Как вам?`,
-    (p) => `В ценовом диапазоне это выглядит здраво. Оцените, пожалуйста.`,
-    (p) => `Посмотрите планировку и район, потом скажете впечатления.`
+    (p) => `Как вам район: ${p.city}, ${p.district}?`,
+    (p) => `Комнат: ${p.rooms} — ${p.priceEUR} €. Что думаете?`,
+    (p) => `По району и цене — удачное сочетание. Как вам?`,
+    (p) => `В этом бюджете выглядит здраво. Оцените, пожалуйста.`,
+    (p) => `Посмотрите вариант и скажите впечатления.`
   ];
-  const en = [
-    (p) => `How do you like the area: ${p.city}, ${p.district}?`,
-    (p) => `${p.rooms} rooms — ${p.priceEUR} €. Thoughts?`,
-    (p) => `Solid fit for the area and budget. How does it feel?`,
-    (p) => `Within this price range, looks reasonable. Your take?`,
-    (p) => `Check the layout and area, then tell me your impression.`
-  ];
-  const bank = (lang === 'en') ? en : ru;
+  const bank = ru;
   try {
     const pick = bank[Math.floor(Math.random() * bank.length)];
     return (typeof pick === 'function') ? (p ? pick(p) : fallback) : (pick || fallback);
@@ -1188,32 +1174,26 @@ const transcribeAndRespond = async (req, res) => {
     // (удалено) парсинг inline lead из текста и сигналы формы
     const enoughContext = session.insights?.progress >= 66;
 
-    // Если пользователь просит варианты (или достаточный контекст) — опишем 2–3 варианта, но без повторов и если это не запрос на запись/карточку
-    const now = Date.now();
-    const hashInsights = (ins) => {
-      try { return JSON.stringify({
-        name: !!ins.name, operation: ins.operation, budget: ins.budget,
-        type: ins.type, location: ins.location, rooms: ins.rooms,
-        area: ins.area, details: ins.details, preferences: ins.preferences
-      }); } catch { return ''; }
-    };
-    session.lastListAt = session.lastListAt || 0;
-    session.lastListHash = session.lastListHash || '';
-    const canList = (now - session.lastListAt > 60000) || (session.lastListHash !== hashInsights(session.insights));
-    if (!show && !schedule && (variants || enoughContext) && canList) {
-      const top = findBestProperties(session.insights, 3);
-      if (top.length) {
-        // запоминаем кандидатов в сессии
-        session.lastCandidates = top.map((p) => p.id);
-        const total = properties.length;
-        const lines = top.map((p, i) => `${i + 1}) ${p.city}, ${p.district}, ${p.rooms} комнат — ${p.priceEUR} €`);
-        let listing = `\n\nУ меня есть ${top.length} вариант(а) из ${total} в базе:\n${lines.join('\n')}`;
-        if (!DISABLE_SERVER_UI) listing += `\nСказать «покажи» — предложу карточку сюда.`;
-        botResponse += listing;
-        session.lastListAt = now;
-        session.lastListHash = hashInsights(session.insights);
-      }
-    }
+   /*
+    * УДАЛЁН БЛОК «текстового списка вариантов» (preview-список).
+    *
+    * Что было:
+    * - При достаточном контексте или явном запросе «варианты» генерировался текст:
+    *   «У меня есть N вариант(а) из M в базе: ...» с 2–3 строками примеров.
+    * - Одновременно сохранялись session.lastCandidates, lastListAt/lastListHash
+    *   для антиспама и «якорения» пула кандидатов без показа карточек.
+    *
+    * Почему убрали:
+    * - UX: пользователи ожидают сразу карточки, а не «числа и список строк»; текст создаёт шум.
+    * - Несоответствие ожиданиям: подсказка «Сказать „покажи“...» дублирует UI и конфузит.
+    * - Надёжность: антиспам по времени/хешу инсайтов давал неочевидные ветки (молчание/повтор),
+    *   а цифры «N из M» легко устаревают или воспринимаются как обещание полного каталога.
+    * - Мультиязычность: строка не была локализована, что создавало рассинхрон с интерфейсом.
+    *
+    * Текущая логика:
+    * - Пул кандидатов формируется лениво при явном «показать»/навигации по карточкам (см. ниже).
+    * - UI предлагает карточку напрямую; числовые «N из M» больше не показываем.
+    */
 
     // Если пользователь просит показать/подробнее — предложим карточку через панель
     if (show && !DISABLE_SERVER_UI) {
@@ -1378,6 +1358,26 @@ async function handleInteraction(req, res) {
       }
       session.lastCandidates = Array.from(set);
       if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
+    }
+
+    if (action === 'show') {
+      // Первый показ выбранной карточки: вернуть саму карточку и динамический комментарий
+      const list = session.lastCandidates || [];
+      // Если фронт прислал variantId — используем его, иначе возьмём текущий индекс/первый
+      let id = variantId;
+      if (!id) {
+        id = list[Number.isInteger(session.candidateIndex) ? session.candidateIndex : 0] || (properties[0] && properties[0].id);
+      }
+      const p = properties.find(x => x.id === id) || properties[0];
+      if (!p) return res.status(404).json({ error: 'Карточка не найдена' });
+      // Обновим индекс и отметим показанным
+      session.candidateIndex = list.indexOf(id);
+      if (!session.shownSet) session.shownSet = new Set();
+      session.shownSet.add(p.id);
+      const card = formatCardForClient(req, p);
+      const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
+      const assistantMessage = generateCardComment(lang, p);
+      return res.json({ ok: true, assistantMessage, card });
     }
 
     if (action === 'next') {
