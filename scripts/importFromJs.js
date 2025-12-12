@@ -32,7 +32,20 @@ async function importProperties() {
 
   let count = 0;
 
-  for (const p of properties) {
+  // helpers
+  const toText = (v) => {
+    if (v === undefined || v === null) return null;
+    const s = String(v).trim();
+    return s === '' || s.toLowerCase() === 'null' ? null : s;
+  };
+  const cleanId = (v) => {
+    const s = toText(v);
+    return s ? s.toUpperCase() : null;
+  };
+
+  for (const pRaw of properties) {
+    // нормализуем сырой объект на минимальном уровне
+    const p = { ...pRaw };
     const price = p.price || {};
     const loc = p.location || {};
     const building = p.building || {};
@@ -43,7 +56,8 @@ async function importProperties() {
     // Подготовим JSON-поля для вставки (строки JSON)
     const infraJson = building.infrastructure ? JSON.stringify(building.infrastructure) : null;
     const imagesJson = JSON.stringify(images || []);
-    const rawJson = JSON.stringify(p);
+    const rawJson = JSON.stringify(pRaw);
+    const externalId = cleanId(p.id);
 
     await pool.query(
       `
@@ -88,20 +102,20 @@ async function importProperties() {
       `,
       [
         CLIENT_ID,
-        p.id ?? null,
-        p.operation ?? null,
-        p.property_type ?? null,
+        externalId,
+        toText(p.operation),
+        toText(p.property_type),
         p.furnished ?? null,
 
         price.amount ?? null,
-        price.currency ?? null,
+        toText(price.currency) || 'EUR',
         p.price_per_m2 ?? null,
 
-        loc.country ?? null,
-        loc.city ?? null,
-        loc.district ?? null,
-        loc.neighborhood ?? null,
-        loc.address ?? null,
+        toText(loc.country) || 'ES',
+        toText(loc.city),
+        toText(loc.district),
+        toText(loc.neighborhood),
+        toText(loc.address),
 
         building.year ?? null,
         building.floors ?? null,
@@ -114,8 +128,8 @@ async function importProperties() {
         specs.balcony ?? null,
         specs.terrace ?? null,
 
-        p.title ?? null,
-        p.description ?? null,
+        toText(p.title),
+        toText(p.description),
         imagesJson,
         rawJson,              // raw JSON целиком
         true,           // is_active

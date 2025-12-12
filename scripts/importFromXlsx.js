@@ -49,6 +49,10 @@ const toText = (v) => {
   if (!s || s.toLowerCase() === 'null') return null;
   return s;
 };
+const cleanId = (v) => {
+  const s = toText(v);
+  return s ? s.toUpperCase() : null;
+};
 
 // Иногда Excel/терминал даёт "Ð¢ÐµÑ..." — попробуем мягко починить
 const fixMojibake = (s) => {
@@ -117,7 +121,7 @@ async function importXlsx() {
     const row = normalizeRowKeys(rawRow);
     const now = new Date();
 
-    const externalId = toText(row.external_id || row.id || row.externalid);
+    const externalId = cleanId(row.external_id || row.id || row.externalid);
     if (!externalId) {
       console.warn('⚠️ Пропуск строки без external_id:', rawRow);
       continue;

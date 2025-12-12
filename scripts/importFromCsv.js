@@ -47,6 +47,10 @@ const toText = (v) => {
   if (!s || s.toLowerCase() === 'null') return null;
   return s;
 };
+const cleanId = (v) => {
+  const s = toText(v);
+  return s ? s.toUpperCase() : null;
+};
 const toJsonArray = (v) => {
   // 1) JSON array: ["a","b"]
   // 2) or comma/semicolon separated: a,b,c
@@ -114,7 +118,7 @@ async function importCsv() {
     const now = new Date();
 
     // Минимально обязателен external_id (типа A001 / 123 / etc)
-    const externalId = toText(row.external_id || row.id || row.externalId);
+    const externalId = cleanId(row.external_id || row.id || row.externalId);
     if (!externalId) {
       console.warn('⚠️ Пропуск строки без external_id:', row);
       continue;
