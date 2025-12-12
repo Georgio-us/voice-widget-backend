@@ -1,0 +1,3 @@
+external_id | operation | property_type | location_city | location_district | price_amount | specs_rooms | specs_area_m2 | description
+A102 | sale | apartment | Valencia | Ruzafa | 210000 | 2 | 65 | Тестовый объект из XLSX
+A103 | sale | apartment | Valencia | Patraix | 185000 | 3 | 78 | Еще один объект из XLSX
