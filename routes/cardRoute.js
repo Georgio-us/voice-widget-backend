@@ -9,8 +9,26 @@ const router = express.Router();
 /**
  * Нормализация объекта из БД (Postgres)
  * + поддержка legacy-формата (если где-то ещё используется)
+ * + приведение типов (int / boolean), чтобы UI и фильтры работали корректно
  */
 const normalizeProperty = (p) => {
+
+  // ---------- helpers ----------
+  const toInt = (v) => {
+    if (v === undefined || v === null) return null;
+    const s = String(v).trim();
+    if (!s || s.toLowerCase() === 'null') return null;
+    const n = parseInt(s, 10);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const toBool = (v) => {
+    if (v === undefined || v === null) return null;
+    const s = String(v).trim().toLowerCase();
+    if (!s || s === 'null') return null;
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y';
+  };
+
   // ---------- images ----------
   let images = [];
   try {
@@ -33,19 +51,22 @@ const normalizeProperty = (p) => {
   const address = p.location?.address ?? p.location_address ?? null;
 
   // ---------- specs ----------
-  const rooms = p.specs?.rooms ?? p.specs_rooms ?? null;
-  const bathrooms = p.specs?.bathrooms ?? p.specs_bathrooms ?? null;
-  const area_m2 = p.specs?.area_m2 ?? p.specs_area_m2 ?? null;
-  const floor = p.specs?.floor ?? p.specs_floor ?? null;
-  const balcony = p.specs?.balcony ?? p.specs_balcony ?? null;
-  const terrace = p.specs?.terrace ?? p.specs_terrace ?? null;
+  const rooms = toInt(p.specs?.rooms ?? p.specs_rooms);
+  const bathrooms = toInt(p.specs?.bathrooms ?? p.specs_bathrooms);
+  const area_m2 = toInt(p.specs?.area_m2 ?? p.specs_area_m2);
+  const floor = toInt(p.specs?.floor ?? p.specs_floor);
+  const balcony = toBool(p.specs?.balcony ?? p.specs_balcony);
+  const terrace = toBool(p.specs?.terrace ?? p.specs_terrace);
 
   // ---------- price ----------
   const priceEUR =
-    p.price?.amount ??
-    p.price_amount ??
-    p.priceEUR ??
-    null;
+    toInt(
+      p.price?.amount ??
+      p.price_amount ??
+      p.priceEUR
+    );
+
+  const price_per_m2 = toInt(p.price_per_m2);
 
   return {
     id,
@@ -69,7 +90,7 @@ const normalizeProperty = (p) => {
 
     // price
     priceEUR,
-    price_per_m2: p.price_per_m2 ?? null,
+    price_per_m2,
 
     // texts
     title: p.title ?? null,
