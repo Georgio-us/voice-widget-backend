@@ -1,7 +1,8 @@
 import { File } from 'node:buffer';
 globalThis.File = File;
 import { OpenAI } from 'openai';
-import properties from '../data/properties.js';
+// DB repository (Postgres)
+import { getAllProperties } from '../services/propertiesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || '').trim() === '1';
@@ -138,8 +139,34 @@ const scoreProperty = (p, insights) => {
   return score;
 };
 
-const findBestProperties = (insights, limit = 1) => {
-  const ranked = properties
+// Нормализация строки из БД к формату карточек, совместимому с фронтом
+const mapRowToProperty = (row) => {
+  const images = Array.isArray(row.images)
+    ? row.images
+    : (typeof row.images === 'string'
+        ? (() => { try { return JSON.parse(row.images); } catch { return []; } })()
+        : []);
+  return {
+    // важный момент: используем external_id как основной id (совместимость со старым фронтом)
+    id: row.external_id || String(row.id),
+    city: row.location_city || null,
+    district: row.location_district || null,
+    neighborhood: row.location_neighborhood || null,
+    priceEUR: row.price_amount != null ? Number(row.price_amount) : null,
+    rooms: row.specs_rooms != null ? Number(row.specs_rooms) : null,
+    floor: row.specs_floor != null ? Number(row.specs_floor) : null,
+    images,
+  };
+};
+
+const getAllNormalizedProperties = async () => {
+  const rows = await getAllProperties();
+  return rows.map(mapRowToProperty);
+};
+
+const findBestProperties = async (insights, limit = 1) => {
+  const all = await getAllNormalizedProperties();
+  const ranked = all
     .map((p) => ({ p, s: scoreProperty(p, insights) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, limit)
@@ -1040,7 +1067,7 @@ const transcribeAndRespond = async (req, res) => {
       await checkForGPTAnalysis(sessionId);
     }
 
-    const totalProps = properties.length;
+    // const totalProps = properties.length; // устарело – переезд на БД
     const targetLang = (() => {
       const fromReq = (req.body && req.body.lang) ? String(req.body.lang).toLowerCase() : null;
       if (fromReq) return fromReq;
@@ -1204,8 +1231,9 @@ const transcribeAndRespond = async (req, res) => {
       if (Array.isArray(session.lastCandidates) && session.lastCandidates.length) {
         pool = session.lastCandidates.slice();
       } else {
-        const ranked = findBestProperties(session.insights, 10);
-        pool = (ranked.length ? ranked : properties).map(p => p.id);
+        const ranked = await findBestProperties(session.insights, 10);
+        const all = ranked.length ? ranked : await getAllNormalizedProperties();
+        pool = all.map(p => p.id);
       }
       // Дедупликация пула
       pool = Array.from(new Set(pool));
@@ -1213,7 +1241,8 @@ const transcribeAndRespond = async (req, res) => {
       session.candidateIndex = 0;
       // Выбираем первый id из пула, которого нет в shownSet (она только что сброшена)
       let pickedId = pool[0];
-      const candidate = properties.find((p) => p.id === pickedId) || properties[0];
+      const allNow = await getAllNormalizedProperties();
+      const candidate = allNow.find((p) => p.id === pickedId) || allNow[0];
       if (candidate) {
         session.shownSet.add(candidate.id);
         cards = [formatCardForClient(req, candidate)];
@@ -1345,17 +1374,16 @@ async function handleInteraction(req, res) {
 
     // Обеспечим список кандидатов в сессии
     if (!Array.isArray(session.lastCandidates) || !session.lastCandidates.length) {
-      const ranked = findBestProperties(session.insights, 10);
+      const ranked = await findBestProperties(session.insights, 10);
       // Если нет ничего по инсайтам — используем всю базу
-      const pool = ranked.length ? ranked : properties;
+      const pool = ranked.length ? ranked : await getAllNormalizedProperties();
       session.lastCandidates = pool.map(p => p.id);
       session.candidateIndex = 0;
     } else if (session.lastCandidates.length < 2) {
       // Гарантируем минимум 2 кандидата, расширив до всей базы (без дубликатов)
       const set = new Set(session.lastCandidates);
-      for (const p of properties) {
-        if (!set.has(p.id)) set.add(p.id);
-      }
+      const all = await getAllNormalizedProperties();
+      for (const p of all) { if (!set.has(p.id)) set.add(p.id); }
       session.lastCandidates = Array.from(set);
       if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
     }
@@ -1366,9 +1394,11 @@ async function handleInteraction(req, res) {
       // Если фронт прислал variantId — используем его, иначе возьмём текущий индекс/первый
       let id = variantId;
       if (!id) {
-        id = list[Number.isInteger(session.candidateIndex) ? session.candidateIndex : 0] || (properties[0] && properties[0].id);
+        const all = await getAllNormalizedProperties();
+        id = list[Number.isInteger(session.candidateIndex) ? session.candidateIndex : 0] || (all[0] && all[0].id);
       }
-      const p = properties.find(x => x.id === id) || properties[0];
+      const all = await getAllNormalizedProperties();
+      const p = all.find(x => x.id === id) || all[0];
       if (!p) return res.status(404).json({ error: 'Карточка не найдена' });
       // Обновим индекс и отметим показанным
       session.candidateIndex = list.indexOf(id);
@@ -1386,7 +1416,8 @@ async function handleInteraction(req, res) {
       const len = list.length;
       if (!len) {
         // крайний случай: вернём первый из базы
-        const p = properties[0];
+        const all = await getAllNormalizedProperties();
+        const p = all[0];
         const card = formatCardForClient(req, p);
         const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
         const assistantMessage = generateCardComment(lang, p);
@@ -1410,7 +1441,7 @@ async function handleInteraction(req, res) {
       }
       // Если все кандидаты уже показаны — расширим пул лучшими по инсайтам и возьмём первый новый
       if (steps >= len) {
-        const extended = findBestProperties(session.insights, 100).map(p => p.id);
+        const extended = (await findBestProperties(session.insights, 100)).map(p => p.id);
         const unseen = extended.find(cid => !session.shownSet.has(cid));
         if (unseen) {
           id = unseen;
@@ -1421,7 +1452,8 @@ async function handleInteraction(req, res) {
         }
       }
       session.candidateIndex = list.indexOf(id);
-      const p = properties.find(x => x.id === id) || properties[0];
+      const all2 = await getAllNormalizedProperties();
+      const p = all2.find(x => x.id === id) || all2[0];
       session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
       const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
