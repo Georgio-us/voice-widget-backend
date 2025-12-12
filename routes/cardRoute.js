@@ -6,45 +6,85 @@ import {
 
 const router = express.Router();
 
-// Приводим raw-объект из Базы Данных к формату карточек,
-// максимально близкому к тому, что раньше было в properties.js
-const normalizeProperty = (p) => ({
-  id: p.id,
-  operation: p.operation,
-  property_type: p.property_type,
-  furnished: p.furnished ?? null,
+/**
+ * Нормализация объекта из БД (Postgres)
+ * + поддержка legacy-формата (если где-то ещё используется)
+ */
+const normalizeProperty = (p) => {
+  // ---------- images ----------
+  let images = [];
+  try {
+    if (Array.isArray(p.images)) {
+      images = p.images;
+    } else if (typeof p.images === 'string') {
+      images = JSON.parse(p.images);
+    }
+  } catch {
+    images = [];
+  }
 
-  // Локация
-  city: p.location?.city ?? null,
-  district: p.location?.district ?? null,
-  neighborhood: p.location?.neighborhood ?? null,
-  address: p.location?.address ?? null,
+  // ---------- id ----------
+  const id = p.external_id ?? p.id ?? null;
 
-  // Характеристики
-  rooms: p.specs?.rooms ?? null,
-  bathrooms: p.specs?.bathrooms ?? null,
-  area_m2: p.specs?.area_m2 ?? null,
-  floor: p.specs?.floor ?? null,
-  balcony: p.specs?.balcony ?? null,
-  terrace: p.specs?.terrace ?? null,
+  // ---------- location ----------
+  const city = p.location?.city ?? p.location_city ?? null;
+  const district = p.location?.district ?? p.location_district ?? null;
+  const neighborhood = p.location?.neighborhood ?? p.location_neighborhood ?? null;
+  const address = p.location?.address ?? p.location_address ?? null;
 
-  // Цена
-  priceEUR: p.price?.amount ?? null,
-  price_per_m2: p.price_per_m2 ?? null,
+  // ---------- specs ----------
+  const rooms = p.specs?.rooms ?? p.specs_rooms ?? null;
+  const bathrooms = p.specs?.bathrooms ?? p.specs_bathrooms ?? null;
+  const area_m2 = p.specs?.area_m2 ?? p.specs_area_m2 ?? null;
+  const floor = p.specs?.floor ?? p.specs_floor ?? null;
+  const balcony = p.specs?.balcony ?? p.specs_balcony ?? null;
+  const terrace = p.specs?.terrace ?? p.specs_terrace ?? null;
 
-  // Тексты
-  title: p.title ?? null,
-  description: p.description ?? null,
+  // ---------- price ----------
+  const priceEUR =
+    p.price?.amount ??
+    p.price_amount ??
+    p.priceEUR ??
+    null;
 
-  // Картинки
-  images: Array.isArray(p.images) ? p.images : [],
-});
+  return {
+    id,
+    operation: p.operation ?? null,
+    property_type: p.property_type ?? null,
+    furnished: p.furnished ?? null,
+
+    // location
+    city,
+    district,
+    neighborhood,
+    address,
+
+    // specs
+    rooms,
+    bathrooms,
+    area_m2,
+    floor,
+    balcony,
+    terrace,
+
+    // price
+    priceEUR,
+    price_per_m2: p.price_per_m2 ?? null,
+
+    // texts
+    title: p.title ?? null,
+    description: p.description ?? null,
+
+    // images
+    images
+  };
+};
 
 // ===============================
-//        ROUTES
+//            ROUTES
 // ===============================
 
-// Поиск по фильтрам (город, район, комнаты, тип, цена)
+// Поиск по фильтрам
 router.get('/search', async (req, res) => {
   try {
     const { city, district, rooms, type, minPrice, maxPrice, limit = 10 } = req.query;
@@ -58,24 +98,29 @@ router.get('/search', async (req, res) => {
     const rawList = await getAllProperties();
     let list = rawList.map(normalizeProperty);
 
-    // Фильтры
+    // ---------- filters ----------
     if (city) {
       const c = String(city).toLowerCase();
       list = list.filter(p => p.city && p.city.toLowerCase() === c);
     }
+
     if (district) {
       const d = String(district).toLowerCase();
       list = list.filter(p => p.district && p.district.toLowerCase() === d);
     }
+
     if (type) {
       list = list.filter(p => p.property_type === type);
     }
+
     if (r != null) {
       list = list.filter(p => Number(p.rooms) === r);
     }
+
     if (min != null) {
       list = list.filter(p => Number(p.priceEUR) >= min);
     }
+
     if (max != null) {
       list = list.filter(p => Number(p.priceEUR) <= max);
     }
@@ -87,7 +132,7 @@ router.get('/search', async (req, res) => {
   }
 });
 
-// Получить карточку по ID
+// Получить карточку по external_id
 router.get('/:id', async (req, res) => {
   try {
     const raw = await getPropertyByExternalId(req.params.id);
