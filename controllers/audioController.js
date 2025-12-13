@@ -4,6 +4,7 @@ import { OpenAI } from 'openai';
 // DB repository (Postgres)
 import { getAllProperties } from '../services/propertiesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
+import { logEvent } from '../services/eventLogger.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || '').trim() === '1';
 
@@ -1263,6 +1264,34 @@ const transcribeAndRespond = async (req, res) => {
     const totalTime = Date.now() - startTime;
     const inputType = req.file ? 'аудио' : 'текст';
 
+    // Логируем успешный ответ ассистента
+    const userIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.connection?.remoteAddress || null;
+    const userAgent = req.headers['user-agent'] || null;
+    const messageId = `${sessionId}_${Date.now()}`;
+    logEvent({
+      sessionId,
+      eventType: 'assistant_reply',
+      userIp,
+      userAgent,
+      source: 'backend',
+      payload: {
+        messageId,
+        inputType,
+        tokens: {
+          prompt: completion.usage.prompt_tokens,
+          completion: completion.usage.completion_tokens,
+          total: completion.usage.total_tokens
+        },
+        timing: {
+          transcription: transcriptionTime,
+          gpt: gptTime,
+          total: totalTime
+        }
+      }
+    }).catch(err => {
+      console.error('❌ Failed to log assistant_reply event:', err);
+    });
+
     res.json({
       response: botResponse,
       transcription,
@@ -1304,6 +1333,23 @@ const transcribeAndRespond = async (req, res) => {
       userMessage = 'Запрос выполняется слишком долго. Попробуйте сократить сообщение.';
       statusCode = 408;
     }
+    
+    // Логируем ошибку
+    const userIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.connection?.remoteAddress || null;
+    const userAgent = req.headers['user-agent'] || null;
+    logEvent({
+      sessionId: sessionId || null,
+      eventType: 'error',
+      userIp,
+      userAgent,
+      source: 'backend',
+      payload: {
+        message: error.message,
+        stack: error.stack
+      }
+    }).catch(err => {
+      console.error('❌ Failed to log error event:', err);
+    });
     
     res.status(statusCode).json({ 
       error: userMessage,
