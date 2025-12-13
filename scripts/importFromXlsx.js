@@ -53,6 +53,17 @@ const cleanId = (v) => {
   const s = toText(v);
   return s ? s.toUpperCase() : null;
 };
+const toJsonArray = (v) => {
+  // 1) JSON array: ["a","b"]
+  // 2) или строка с разделителями: a,b,c или a; b; c
+  const s = toText(v);
+  if (!s) return [];
+  try {
+    const parsed = JSON.parse(s);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return s.split(/[;,]/g).map(x => x.trim()).filter(Boolean);
+};
 
 // Иногда Excel/терминал даёт "Ð¢ÐµÑ..." — попробуем мягко починить
 const fixMojibake = (s) => {
@@ -128,6 +139,10 @@ async function importXlsx() {
     }
 
     const rawJson = JSON.stringify(row);
+
+    // images: берём из нескольких возможных колонок и нормализуем к массиву строк
+    const imagesArr = toJsonArray(row.images || row.image_urls || row.imageurl || row.image);
+    const imagesJson = JSON.stringify(imagesArr);
 
     await pool.query(
       `
@@ -227,7 +242,7 @@ async function importXlsx() {
 
         toText(row.title),
         fixMojibake(toText(row.description)),
-        '[]', // images пусто для теста
+        imagesJson,
         rawJson,
         true,
         now,

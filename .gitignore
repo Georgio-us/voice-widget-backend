@@ -3,3 +3,13 @@ node_modules/
 uploads/
 .DS_Store
 *.log
+
+# Docs and internal notes (exclude from repo)
+/README.txt
+/readme_db.txt
+/Дополняющая информация.txt
+/Личность Джона.txt
+
+# Import source data (do not track)
+/data/properties.csv
+/data/properties.xlsx
