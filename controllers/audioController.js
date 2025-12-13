@@ -4,7 +4,7 @@ import { OpenAI } from 'openai';
 // DB repository (Postgres)
 import { getAllProperties } from '../services/propertiesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
-import { logEvent } from '../services/eventLogger.js';
+import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || '').trim() === '1';
 
@@ -1034,6 +1034,11 @@ const transcribeAndRespond = async (req, res) => {
     sessionId = req.body.sessionId || generateSessionId();
     const session = getOrCreateSession(sessionId);
 
+    // Извлекаем IP и User-Agent один раз для всех логирований
+    const userIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.connection?.remoteAddress || null;
+    const userAgent = req.headers['user-agent'] || null;
+    const inputTypeForLog = req.file ? 'audio' : 'text'; // для логирования (английский)
+
     let transcription = '';
     let transcriptionTime = 0;
 
@@ -1062,6 +1067,37 @@ const transcribeAndRespond = async (req, res) => {
 
     addMessageToSession(sessionId, 'user', transcription);
     updateInsights(sessionId, transcription);
+
+    // Логируем сообщение пользователя
+    const audioDurationMs = req.file ? null : null; // TODO: можно добавить извлечение длительности из аудио
+    
+    logEvent({
+      sessionId,
+      eventType: EventTypes.USER_MESSAGE,
+      userIp,
+      userAgent,
+      source: 'backend',
+      payload: buildPayload({
+        inputType: inputTypeForLog,
+        text: transcription,
+        textLength: transcription.length,
+        audioDurationMs,
+        stage: session.stage,
+        clientProfile: {
+          language: session.clientProfile.language,
+          location: session.clientProfile.location,
+          budgetMin: session.clientProfile.budgetMin,
+          budgetMax: session.clientProfile.budgetMax,
+          purpose: session.clientProfile.purpose,
+          propertyType: session.clientProfile.propertyType,
+          urgency: session.clientProfile.urgency
+        },
+        insights: session.insights,
+        cardsCount: session.shownSet ? session.shownSet.size : 0
+      })
+    }).catch(err => {
+      console.error('❌ Failed to log user_message event:', err);
+    });
 
     // 🤖 Проверяем, нужен ли GPT анализ каждые 5 сообщений
     if (ENABLE_PERIODIC_ANALYSIS) {
@@ -1262,21 +1298,38 @@ const transcribeAndRespond = async (req, res) => {
     addMessageToSession(sessionId, 'assistant', botResponse);
 
     const totalTime = Date.now() - startTime;
-    const inputType = req.file ? 'аудио' : 'текст';
+    const inputType = req.file ? 'аудио' : 'текст'; // для ответа API (русский)
 
     // Логируем успешный ответ ассистента
-    const userIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.connection?.remoteAddress || null;
-    const userAgent = req.headers['user-agent'] || null;
     const messageId = `${sessionId}_${Date.now()}`;
+    // inputTypeForLog уже объявлен в начале функции
+    
+    // Подготавливаем данные о карточках для логирования (только ключевые поля)
+    const cardsForLog = Array.isArray(cards) && cards.length > 0
+      ? cards.map(card => ({
+          id: card.id,
+          city: card.city || null,
+          district: card.district || null,
+          priceEUR: card.priceEUR || null,
+          rooms: card.rooms || null
+        }))
+      : [];
+    
+    // Короткий отрывок сообщения (первые 200 символов)
+    const messageText = botResponse ? botResponse.substring(0, 200) : null;
+    
     logEvent({
       sessionId,
-      eventType: 'assistant_reply',
+      eventType: EventTypes.ASSISTANT_REPLY,
       userIp,
       userAgent,
       source: 'backend',
-      payload: {
+      payload: buildPayload({
         messageId,
-        inputType,
+        messageText,
+        hasCards: cards.length > 0,
+        cards: cardsForLog,
+        inputType: inputTypeForLog,
         tokens: {
           prompt: completion.usage.prompt_tokens,
           completion: completion.usage.completion_tokens,
@@ -1286,8 +1339,10 @@ const transcribeAndRespond = async (req, res) => {
           transcription: transcriptionTime,
           gpt: gptTime,
           total: totalTime
-        }
-      }
+        },
+        stage: session.stage,
+        insights: session.insights
+      })
     }).catch(err => {
       console.error('❌ Failed to log assistant_reply event:', err);
     });
@@ -1335,18 +1390,28 @@ const transcribeAndRespond = async (req, res) => {
     }
     
     // Логируем ошибку
-    const userIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.connection?.remoteAddress || null;
-    const userAgent = req.headers['user-agent'] || null;
+    // userIp и userAgent уже объявлены в начале функции
+    
+    // Обрезаем stack до разумной длины (первые 500 символов)
+    const stackTruncated = error.stack ? error.stack.substring(0, 500) : null;
+    
     logEvent({
       sessionId: sessionId || null,
-      eventType: 'error',
+      eventType: EventTypes.ERROR,
       userIp,
       userAgent,
       source: 'backend',
-      payload: {
+      payload: buildPayload({
+        scope: 'backend',
         message: error.message,
-        stack: error.stack
-      }
+        stack: stackTruncated,
+        meta: {
+          statusCode,
+          path: req.path,
+          method: req.method,
+          eventType: 'transcribeAndRespond'
+        }
+      })
     }).catch(err => {
       console.error('❌ Failed to log error event:', err);
     });
