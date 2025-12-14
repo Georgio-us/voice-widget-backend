@@ -17,6 +17,7 @@ import { dirname, join } from 'path';
 import audioRouter from './routes/audioRoute.js';
 import cardRouter from './routes/cardRoute.js';
 import telemetryRouter from './routes/telemetryRoute.js';
+import leadsRouter from './routes/leadsRoute.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -101,6 +102,7 @@ app.get('/health', (req, res) => {
 app.use('/api/audio', audioRouter);
 app.use('/api/cards', cardRouter);
 app.use('/api/telemetry', telemetryRouter);
+app.use('/api/leads', leadsRouter);
 
 // 🔍 Корневой маршрут с информацией об API
 app.get('/', (req, res) => {
