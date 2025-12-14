@@ -5,6 +5,8 @@ import { OpenAI } from 'openai';
 import { getAllProperties } from '../services/propertiesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
+// Session-level logging: логирование целого диалога по одной строке на сессию
+import { appendMessage } from '../services/sessionLogger.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || '').trim() === '1';
 
@@ -1025,6 +1027,10 @@ const extractAssistantAndMeta = (fullText) => {
 const transcribeAndRespond = async (req, res) => {
   const startTime = Date.now();
   let sessionId = null;
+  
+  // Извлекаем IP и User-Agent в начале функции, чтобы они были доступны в блоке catch
+  const userIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.connection?.remoteAddress || null;
+  const userAgent = req.headers['user-agent'] || null;
 
   try {
     if (!req.file && !req.body.text) {
@@ -1033,10 +1039,6 @@ const transcribeAndRespond = async (req, res) => {
 
     sessionId = req.body.sessionId || generateSessionId();
     const session = getOrCreateSession(sessionId);
-
-    // Извлекаем IP и User-Agent один раз для всех логирований
-    const userIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.connection?.remoteAddress || null;
-    const userAgent = req.headers['user-agent'] || null;
     const inputTypeForLog = req.file ? 'audio' : 'text'; // для логирования (английский)
 
     let transcription = '';
@@ -1068,7 +1070,7 @@ const transcribeAndRespond = async (req, res) => {
     addMessageToSession(sessionId, 'user', transcription);
     updateInsights(sessionId, transcription);
 
-    // Логируем сообщение пользователя
+    // Логируем сообщение пользователя (event-level logging - существующая телеметрия)
     const audioDurationMs = req.file ? null : null; // TODO: можно добавить извлечение длительности из аудио
     
     logEvent({
@@ -1097,6 +1099,25 @@ const transcribeAndRespond = async (req, res) => {
       })
     }).catch(err => {
       console.error('❌ Failed to log user_message event:', err);
+    });
+
+    // Session-level logging: добавляем сообщение пользователя в session_logs
+    appendMessage({
+      sessionId,
+      role: 'user',
+      message: {
+        inputType: inputTypeForLog,
+        text: transcription, // текст всегда есть (либо из транскрипции, либо прямой ввод)
+        ...(req.file ? { transcription: transcription } : {}), // для аудио дублируем в transcription
+        meta: {
+          stage: session.stage,
+          insights: session.insights
+        }
+      },
+      userAgent,
+      userIp
+    }).catch(err => {
+      console.error('❌ Failed to append user message to session log:', err);
     });
 
     // 🤖 Проверяем, нужен ли GPT анализ каждые 5 сообщений
@@ -1347,6 +1368,34 @@ const transcribeAndRespond = async (req, res) => {
       console.error('❌ Failed to log assistant_reply event:', err);
     });
 
+    // Session-level logging: добавляем ответ ассистента в session_logs
+    appendMessage({
+      sessionId,
+      role: 'assistant',
+      message: {
+        text: botResponse,
+        cards: cardsForLog,
+        tokens: {
+          prompt: completion.usage.prompt_tokens,
+          completion: completion.usage.completion_tokens,
+          total: completion.usage.total_tokens
+        },
+        timing: {
+          transcription: transcriptionTime,
+          gpt: gptTime,
+          total: totalTime
+        },
+        meta: {
+          stage: session.stage,
+          insights: session.insights
+        }
+      },
+      userAgent,
+      userIp
+    }).catch(err => {
+      console.error('❌ Failed to append assistant message to session log:', err);
+    });
+
     res.json({
       response: botResponse,
       transcription,
@@ -1415,6 +1464,26 @@ const transcribeAndRespond = async (req, res) => {
     }).catch(err => {
       console.error('❌ Failed to log error event:', err);
     });
+
+    // Session-level logging: добавляем системное сообщение об ошибке в session_logs
+    if (sessionId) {
+      appendMessage({
+        sessionId,
+        role: 'system',
+        message: {
+          text: `Ошибка: ${error.message}`,
+          meta: {
+            statusCode,
+            path: req.path,
+            method: req.method
+          }
+        },
+        userAgent,
+        userIp
+      }).catch(err => {
+        console.error('❌ Failed to append error message to session log:', err);
+      });
+    }
     
     res.status(statusCode).json({ 
       error: userMessage,
