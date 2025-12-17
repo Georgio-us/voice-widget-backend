@@ -13,6 +13,54 @@ const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
 
+// 🆕 Sprint II / Block A: Allowed Facts Schema — явный список разрешённых фактов для AI
+// Определяет, какие поля карточки считаются допустимыми фактами
+const ALLOWED_FACTS_SCHEMA = [
+  'cardId',      // ID показанной карточки
+  'city',        // Город
+  'district',    // Район
+  'neighborhood', // Район/квартал
+  'priceEUR',    // Цена в евро (число)
+  'rooms',       // Количество комнат (число)
+  'floor',       // Этаж (число)
+  'hasImage'     // Наличие изображений (boolean)
+];
+
+// 🆕 Sprint III: Role State Machine — детерминированное управление состояниями role
+// Таблица допустимых переходов: fromRole -> event -> toRole
+const ROLE_TRANSITIONS = [
+  // Начальные переходы
+  { from: 'initial_request', event: 'user_message', to: 'request_calibration' },
+  { from: 'request_calibration', event: 'user_message', to: 'expectation_calibration' },
+  { from: 'expectation_calibration', event: 'ui_card_rendered', to: 'show' },
+  { from: 'show', event: 'user_message', to: 'post_show_calibration' },
+  { from: 'post_show_calibration', event: 'ui_slider_ended', to: 'post_show_slider' },
+  // Возможность вернуться к показу после калибровки
+  { from: 'post_show_calibration', event: 'ui_card_rendered', to: 'show' },
+  { from: 'post_show_slider', event: 'ui_card_rendered', to: 'show' }
+];
+
+// 🆕 Sprint III: централизованная функция смены role через state machine
+const transitionRole = (session, event) => {
+  const currentRole = session.role || 'initial_request';
+  
+  // Ищем разрешённый переход
+  const transition = ROLE_TRANSITIONS.find(
+    t => t.from === currentRole && t.event === event
+  );
+  
+  if (transition) {
+    const oldRole = session.role;
+    session.role = transition.to;
+    console.log(`🔄 [Sprint III] Role transition: ${oldRole} --[${event}]--> ${session.role} (сессия ${session.sessionId?.slice(-8) || 'unknown'})`);
+    return true;
+  }
+  
+  // Переход не разрешён — role не меняется
+  console.log(`⚠️ [Sprint III] Role transition blocked: ${currentRole} --[${event}]--> (не разрешено)`);
+  return false;
+};
+
 const cleanupOldSessions = () => {
   const oneHourAgo = Date.now() - 60 * 60 * 1000;
   for (const [sessionId, session] of sessions.entries()) {
@@ -45,6 +93,8 @@ const getOrCreateSession = (sessionId) => {
       },
       // 🆕 Текущая стадия диалога
       stage: 'intro',
+      // 🆕 Sprint III: server-side role (детерминированное состояние через state machine)
+      role: 'initial_request',
       // 🆕 РАСШИРЕННАЯ СТРУКТУРА INSIGHTS (9 параметров)
       insights: {
         // Блок 1: Основная информация (33.3%)
@@ -63,7 +113,23 @@ const getOrCreateSession = (sessionId) => {
         preferences: null,    // 11%
         
         progress: 0
-      }
+      },
+      // 🆕 Sprint II / Block A: allowedFactsSnapshot (разрешённые факты для AI)
+      // Формируется только после подтверждённого показа карточки (ui_card_rendered)
+      // Пока не используется ни UI, ни AI — чистое введение структуры
+      allowedFactsSnapshot: {},
+      // 🆕 Sprint III: handoff как системный механизм (boundary), не роль
+      handoffDone: false,
+      handoffAt: null,
+      // 🆕 Sprint III: lead snapshot (read-only после создания при handoff)
+      leadSnapshot: null,
+      leadSnapshotAt: null,
+      // 🆕 Sprint III: post-handoff enrichment (данные после handoff)
+      postHandoffEnrichment: [],
+      // 🆕 Sprint III: completion conditions (завершение диалога после handoff)
+      completionDone: false,
+      completionAt: null,
+      completionReason: null
     });
   }
   return sessions.get(sessionId);
@@ -298,10 +364,37 @@ const parseTimeWindowFromText = (text) => {
   } catch { return null; }
 };
 
+// 🆕 Sprint III: добавление записи в post-handoff enrichment
+const addPostHandoffEnrichment = (session, source, content, meta = {}) => {
+  if (!session || !session.handoffDone) return;
+  
+  if (!Array.isArray(session.postHandoffEnrichment)) {
+    session.postHandoffEnrichment = [];
+  }
+  
+  session.postHandoffEnrichment.push({
+    at: Date.now(),
+    source: source,
+    content: content,
+    meta: meta
+  });
+  
+  console.log(`📝 [Sprint III] Post-handoff enrichment добавлен (source: ${source}, сессия ${session.sessionId?.slice(-8) || 'unknown'})`);
+};
+
 // 🧠 Улучшенная функция извлечения insights (9 параметров)
 const updateInsights = (sessionId, newMessage) => {
   const session = sessions.get(sessionId);
   if (!session) return;
+  
+  // 🆕 Sprint III: после handoff не обновляем insights, только логируем в enrichment
+  if (session.handoffDone) {
+    addPostHandoffEnrichment(session, 'user_message', newMessage, {
+      role: session.role,
+      stage: session.stage
+    });
+    return;
+  }
 
   const { insights } = session;
   const text = newMessage.toLowerCase();
@@ -762,6 +855,15 @@ ${conversationHistory}
       return;
     }
 
+    // 🆕 Sprint III: после handoff не обновляем insights, только логируем в enrichment
+    if (session.handoffDone) {
+      addPostHandoffEnrichment(session, 'gpt_analysis', JSON.stringify(extractedData), {
+        role: session.role,
+        stage: session.stage
+      });
+      return;
+    }
+    
     // Обновляем insights только если GPT нашел что-то новое
     let updated = false;
     const oldInsights = { ...session.insights };
@@ -1069,6 +1171,9 @@ const transcribeAndRespond = async (req, res) => {
 
     addMessageToSession(sessionId, 'user', transcription);
     updateInsights(sessionId, transcription);
+    
+    // 🆕 Sprint III: переход role по событию user_message
+    transitionRole(session, 'user_message');
 
     // Логируем сообщение пользователя (event-level logging - существующая телеметрия)
     const audioDurationMs = req.file ? null : null; // TODO: можно добавить извлечение длительности из аудио
@@ -1189,6 +1294,57 @@ const transcribeAndRespond = async (req, res) => {
 }
 Если нечего обновлять, пришли "clientProfileDelta": {}.`;
 
+    // 🆕 Sprint II / Block A: добавляем allowedFactsSnapshot в контекст модели (если есть факты)
+    const allowedFactsInstruction = (() => {
+      const snapshot = session.allowedFactsSnapshot || {};
+      const hasFacts = snapshot && Object.keys(snapshot).length > 0 && Object.values(snapshot).some(v => v !== null && v !== undefined);
+      
+      if (!hasFacts) {
+        return null; // Если snapshot пустой, не добавляем инструкцию
+      }
+      
+      // Формируем список фактов для модели
+      const factsList = [];
+      if (snapshot.city) factsList.push(`Город: ${snapshot.city}`);
+      if (snapshot.district) factsList.push(`Район: ${snapshot.district}`);
+      if (snapshot.neighborhood) factsList.push(`Район/квартал: ${snapshot.neighborhood}`);
+      if (snapshot.priceEUR) factsList.push(`Цена: ${snapshot.priceEUR} €`);
+      if (snapshot.rooms) factsList.push(`Количество комнат: ${snapshot.rooms}`);
+      if (snapshot.floor) factsList.push(`Этаж: ${snapshot.floor}`);
+      if (snapshot.hasImage) factsList.push(`Есть изображения: да`);
+      
+      if (factsList.length === 0) {
+        return null;
+      }
+      
+      return `РАЗРЕШЁННЫЕ ФАКТЫ О ПОКАЗАННОЙ КАРТОЧКЕ:
+${factsList.join('\n')}
+
+ВАЖНО: Ты можешь говорить только об этих фактах. Не упоминай характеристики объекта, которых нет в списке выше. Можешь интерпретировать, сравнивать, советовать, но не добавляй новых фактов.`;
+    })();
+
+    // 🆕 Sprint III: post-handoff mode instruction для AI
+    const postHandoffInstruction = (() => {
+      if (!session.handoffDone) {
+        return null; // До handoff — инструкция не нужна
+      }
+      
+      return `РЕЖИМ POST-HANDOFF:
+Ты находишься в post-handoff режиме. Данные лида уже заморожены и не могут быть изменены.
+
+ОГРАНИЧЕНИЯ:
+- Не собирай контакт заново (имя, телефон, email).
+- Не утверждай, что лид передан менеджеру, если это не подтверждено явно.
+- Факты об объектах недвижимости — только из allowedFactsSnapshot (если он предоставлен выше), иначе не упоминай конкретные характеристики объектов.
+- Можешь отвечать на вопросы и помогать, но не обновляй профиль клиента или insights.
+
+Продолжай диалог естественно, но соблюдай эти ограничения.`;
+    })();
+
+    // 🆕 Sprint II / Block A: исключаем assistant-сообщения из истории, чтобы предотвратить утечку фактов
+    // Модель получает только user messages, system prompts и allowedFactsSnapshot
+    const userMessages = session.messages.filter(msg => msg.role === 'user');
+    
     const messages = [
       {
         role: 'system',
@@ -1199,7 +1355,9 @@ const transcribeAndRespond = async (req, res) => {
         content: `${stageInstruction}\n\n${outputFormatInstruction}`
       },
       ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
-      ...session.messages
+      ...(allowedFactsInstruction ? [{ role: 'system', content: allowedFactsInstruction }] : []),
+      ...(postHandoffInstruction ? [{ role: 'system', content: postHandoffInstruction }] : []),
+      ...userMessages
     ];
 
     const gptStart = Date.now();
@@ -1225,26 +1383,39 @@ const transcribeAndRespond = async (req, res) => {
       const clientProfileDelta = meta?.clientProfileDelta && typeof meta.clientProfileDelta === 'object'
         ? meta.clientProfileDelta
         : {};
-      const updatedProfile = mergeClientProfile(session.clientProfile, clientProfileDelta);
-      session.clientProfile = updatedProfile;
-      // Валидируем и принимаем stage из META (если прислали)
-      const allowedStages = new Set(['intro', 'qualification', 'matching_closing']);
-      if (meta && typeof meta.stage === 'string' && allowedStages.has(meta.stage)) {
-        session.stage = meta.stage;
+      
+      // 🆕 Sprint III: после handoff не обновляем clientProfile и insights, только логируем в enrichment
+      if (session.handoffDone) {
+        addPostHandoffEnrichment(session, 'assistant_meta', JSON.stringify({
+          clientProfileDelta: clientProfileDelta,
+          stage: meta?.stage || null
+        }), {
+          role: session.role,
+          stage: session.stage
+        });
+      } else {
+        // До handoff: обновляем как раньше
+        const updatedProfile = mergeClientProfile(session.clientProfile, clientProfileDelta);
+        session.clientProfile = updatedProfile;
+        // Валидируем и принимаем stage из META (если прислали)
+        const allowedStages = new Set(['intro', 'qualification', 'matching_closing']);
+        if (meta && typeof meta.stage === 'string' && allowedStages.has(meta.stage)) {
+          session.stage = meta.stage;
+        }
+        // Синхронизация с insights и пересчёт прогресса
+        mapClientProfileToInsights(session.clientProfile, session.insights);
+        // Компактный лог обновления профиля и стадии
+        const profileLog = {
+          language: session.clientProfile.language,
+          location: session.clientProfile.location,
+          budgetMin: session.clientProfile.budgetMin,
+          budgetMax: session.clientProfile.budgetMax,
+          purpose: session.clientProfile.purpose,
+          propertyType: session.clientProfile.propertyType,
+          urgency: session.clientProfile.urgency
+        };
+        console.log(`🧩 Профиль обновлён [${String(sessionId).slice(-8)}]: ${JSON.stringify(profileLog)} | stage: ${session.stage}`);
       }
-      // Синхронизация с insights и пересчёт прогресса
-      mapClientProfileToInsights(session.clientProfile, session.insights);
-      // Компактный лог обновления профиля и стадии
-      const profileLog = {
-        language: session.clientProfile.language,
-        location: session.clientProfile.location,
-        budgetMin: session.clientProfile.budgetMin,
-        budgetMax: session.clientProfile.budgetMax,
-        purpose: session.clientProfile.purpose,
-        propertyType: session.clientProfile.propertyType,
-        urgency: session.clientProfile.urgency
-      };
-      console.log(`🧩 Профиль обновлён [${String(sessionId).slice(-8)}]: ${JSON.stringify(profileLog)} | stage: ${session.stage}`);
     } catch (e) {
       console.log('ℹ️ META отсутствует или невалидна, продолжаем без обновления профиля');
     }
@@ -1404,6 +1575,7 @@ const transcribeAndRespond = async (req, res) => {
       inputType,
       clientProfile: session.clientProfile,
       stage: session.stage,
+      role: session.role, // 🆕 Sprint I: server-side role
       insights: session.insights, // 🆕 Теперь содержит все 9 параметров
       // ui пропускается, если undefined; cards может быть пустым массивом
       cards: DISABLE_SERVER_UI ? [] : cards,
@@ -1529,10 +1701,72 @@ const getSessionInfo = (req, res) => {
     sessionId,
     clientProfile: session.clientProfile,
     stage: session.stage,
+    role: session.role, // 🆕 Sprint I: server-side role
     insights: session.insights, // 🆕 Теперь содержит все 9 параметров
     messageCount: session.messages.length,
     lastActivity: session.lastActivity
   });
+};
+
+// 🆕 Sprint III: централизованная функция установки handoff как boundary-события
+const triggerHandoff = (session, reason = 'lead_submitted') => {
+  if (!session) {
+    console.warn('⚠️ [Sprint III] triggerHandoff вызван без session');
+    return false;
+  }
+  
+  if (session.handoffDone) {
+    console.log(`ℹ️ [Sprint III] Handoff уже выполнен для сессии ${session.sessionId?.slice(-8) || 'unknown'}`);
+    return false;
+  }
+  
+  // 🆕 Sprint III: создаём lead snapshot как часть boundary-события
+  if (!session.leadSnapshot) {
+    const snapshotAt = Date.now();
+    session.leadSnapshot = {
+      sessionId: session.sessionId || null,
+      createdAt: session.createdAt || null,
+      snapshotAt: snapshotAt,
+      clientProfile: session.clientProfile ? { ...session.clientProfile } : null,
+      insights: session.insights ? { ...session.insights } : null,
+      // Дополнительные данные, если они есть
+      likedProperties: Array.isArray(session.liked) ? [...session.liked] : null,
+      shownProperties: session.shownSet ? Array.from(session.shownSet) : null
+    };
+    session.leadSnapshotAt = snapshotAt;
+    console.log(`📸 [Sprint III] Lead snapshot создан для сессии ${session.sessionId?.slice(-8) || 'unknown'}`);
+  }
+  
+  session.handoffDone = true;
+  session.handoffAt = Date.now();
+  console.log(`✅ [Sprint III] Handoff установлен для сессии ${session.sessionId?.slice(-8) || 'unknown'} (reason: ${reason})`);
+  return true;
+};
+
+// 🆕 Sprint III: централизованная функция установки completion (завершение диалога после handoff)
+const triggerCompletion = (session, reason = 'post_handoff_cycle_complete') => {
+  if (!session) {
+    console.warn('⚠️ [Sprint III] triggerCompletion вызван без session');
+    return false;
+  }
+  
+  // Completion возможен только после handoff
+  if (!session.handoffDone) {
+    console.warn(`⚠️ [Sprint III] Completion невозможен до handoff (сессия ${session.sessionId?.slice(-8) || 'unknown'})`);
+    return false;
+  }
+  
+  // Идемпотентность: если completion уже установлен, не перезаписываем
+  if (session.completionDone) {
+    console.log(`ℹ️ [Sprint III] Completion уже выполнен для сессии ${session.sessionId?.slice(-8) || 'unknown'}`);
+    return false;
+  }
+  
+  session.completionDone = true;
+  session.completionAt = Date.now();
+  session.completionReason = reason;
+  console.log(`✅ [Sprint III] Completion установлен для сессии ${session.sessionId?.slice(-8) || 'unknown'} (reason: ${reason})`);
+  return true;
 };
 
 // ✅ Экспорт всех нужных функций
@@ -1541,7 +1775,9 @@ export {
   clearSession,
   getSessionInfo,
   getStats,
-  handleInteraction
+  handleInteraction,
+  triggerHandoff,
+  triggerCompletion
 };
 
 // ---------- Взаимодействия (like / next) ----------
@@ -1587,7 +1823,7 @@ async function handleInteraction(req, res) {
       const card = formatCardForClient(req, p);
       const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
       const assistantMessage = generateCardComment(lang, p);
-      return res.json({ ok: true, assistantMessage, card });
+      return res.json({ ok: true, assistantMessage, card, role: session.role }); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'next') {
@@ -1601,7 +1837,7 @@ async function handleInteraction(req, res) {
         const card = formatCardForClient(req, p);
         const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
         const assistantMessage = generateCardComment(lang, p);
-        return res.json({ ok: true, assistantMessage, card });
+        return res.json({ ok: true, assistantMessage, card, role: session.role }); // 🆕 Sprint I: server-side role
       }
       // Если фронт прислал текущий variantId, делаем шаг относительно него
       let idx = list.indexOf(variantId);
@@ -1638,7 +1874,7 @@ async function handleInteraction(req, res) {
       const card = formatCardForClient(req, p);
       const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
       const assistantMessage = generateCardComment(lang, p);
-      return res.json({ ok: true, assistantMessage, card });
+      return res.json({ ok: true, assistantMessage, card, role: session.role }); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'like') {
@@ -1647,7 +1883,61 @@ async function handleInteraction(req, res) {
       if (variantId) session.liked.push(variantId);
       const count = session.liked.length;
       const msg = `Супер, сохранил! Могу предложить записаться на просмотр или показать ещё варианты. Что выберем? (понравилось: ${count})`;
-      return res.json({ ok: true, assistantMessage: msg });
+      return res.json({ ok: true, assistantMessage: msg, role: session.role }); // 🆕 Sprint I: server-side role
+    }
+
+    // 🆕 Sprint I: подтверждение факта рендера карточки в UI
+    if (action === 'ui_card_rendered') {
+      if (!variantId) {
+        return res.status(400).json({ error: 'variantId обязателен для ui_card_rendered' });
+      }
+      // Фиксируем карточку как показанную в server state
+      if (!session.shownSet) session.shownSet = new Set();
+      session.shownSet.add(variantId);
+      
+      // 🆕 Sprint III: переход role по событию ui_card_rendered
+      transitionRole(session, 'ui_card_rendered');
+      
+      // 🆕 Sprint II / Block A: наполняем allowedFactsSnapshot фактами показанной карточки
+      try {
+        const all = await getAllNormalizedProperties();
+        const cardData = all.find(p => p.id === variantId);
+        
+        if (cardData) {
+          // Формируем snapshot строго по ALLOWED_FACTS_SCHEMA
+          const snapshot = {};
+          
+          // Извлекаем факты согласно schema
+          ALLOWED_FACTS_SCHEMA.forEach(field => {
+            if (field === 'cardId') {
+              snapshot.cardId = variantId;
+            } else if (field === 'hasImage') {
+              // Специальная обработка для hasImage (вычисляемый факт)
+              snapshot.hasImage = !!(cardData.images && Array.isArray(cardData.images) && cardData.images.length > 0);
+            } else {
+              // Прямое извлечение полей из cardData
+              snapshot[field] = cardData[field] || null;
+            }
+          });
+          
+          session.allowedFactsSnapshot = snapshot;
+          console.log(`✅ [Sprint II] allowedFactsSnapshot наполнен фактами карточки ${variantId} по schema (сессия ${sessionId.slice(-8)})`);
+        } else {
+          console.warn(`⚠️ [Sprint II] Карточка ${variantId} не найдена для наполнения snapshot`);
+        }
+      } catch (e) {
+        console.error(`❌ [Sprint II] Ошибка при наполнении allowedFactsSnapshot:`, e);
+      }
+      
+      console.log(`✅ [Sprint I] Карточка ${variantId} зафиксирована как показанная в UI (сессия ${sessionId.slice(-8)})`);
+      return res.json({ ok: true, role: session.role }); // 🆕 Sprint I: server-side role
+    }
+
+    // 🆕 Sprint III: обработка события ui_slider_ended для перехода role
+    if (action === 'ui_slider_ended') {
+      // 🆕 Sprint III: переход role по событию ui_slider_ended
+      transitionRole(session, 'ui_slider_ended');
+      return res.json({ ok: true, role: session.role }); // 🆕 Sprint I: server-side role
     }
 
     return res.status(400).json({ error: 'Неизвестное действие' });
