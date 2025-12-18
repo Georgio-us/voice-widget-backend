@@ -1224,6 +1224,7 @@ const mapClientProfileToInsights = (clientProfile, insights) => {
 
 // 🆕 Sprint V: детекция reference в тексте пользователя (без интерпретации)
 // 🔧 Hotfix: Reference Detector Stabilization (Roadmap v2)
+// ВАЖНО: JS \b НЕ работает с кириллицей, поэтому RU матчим через пробельные границы
 const detectReferenceIntent = (text) => {
   if (!text || typeof text !== 'string') return null;
 
@@ -1236,59 +1237,65 @@ const detectReferenceIntent = (text) => {
 
   if (!normalized) return null;
 
+  // Пробельные границы для RU (JS \b не работает с кириллицей)
+  const norm = ' ' + normalized + ' ';
+
   // order: multi -> single -> unknown -> null
 
-  const multiRules = [
-    { id: 'multi_ru_vot_eti', pattern: /\bвот эти\b/ },
-    { id: 'multi_ru_eti_varianty', pattern: /\bэти варианты\b/ },
-    { id: 'multi_ru_eti_kvartiry', pattern: /\bэти квартиры\b/ },
-    { id: 'multi_ru_eti', pattern: /\bэти\b/ },
-    { id: 'multi_ru_oba', pattern: /\bоба\b/ },
-    { id: 'multi_ru_neskolko', pattern: /\bнесколько\b/ },
-    { id: 'multi_en_these', pattern: /\bthese\b/ },
-    { id: 'multi_en_both', pattern: /\bboth\b/ }
+  // === MULTI (RU через includes, EN через regex \b) ===
+  const multiRuChecks = [
+    { id: 'multi_ru_vot_eti', phrase: ' вот эти ' },
+    { id: 'multi_ru_eti_varianty', phrase: ' эти варианты ' },
+    { id: 'multi_ru_eti_kvartiry', phrase: ' эти квартиры ' },
+    { id: 'multi_ru_eti', phrase: ' эти ' },
+    { id: 'multi_ru_oba', phrase: ' оба ' },
+    { id: 'multi_ru_neskolko', phrase: ' несколько ' }
   ];
-
-  for (const r of multiRules) {
-    if (r.pattern.test(normalized)) {
-      return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id, normalized };
+  for (const r of multiRuChecks) {
+    if (norm.includes(r.phrase)) {
+      return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
     }
   }
+  // EN multi (regex ok)
+  if (/\bthese\b/.test(normalized)) return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'multi_en_these' };
+  if (/\bboth\b/.test(normalized)) return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'multi_en_both' };
 
-  const singleRules = [
-    { id: 'single_ru_vot_eta', pattern: /\bвот эта\b/ },
-    { id: 'single_ru_vot_eto', pattern: /\bвот это\b/ },
-    { id: 'single_ru_i_eta', pattern: /\bи эта\b/ },
-    { id: 'single_ru_eta_tozhe', pattern: /\bэта тоже\b/ },
-    { id: 'single_ru_eta_norm', pattern: /\bэта норм\b/ },
-    { id: 'single_ru_eta_kvartira', pattern: /\bэта квартира\b/ },
-    { id: 'single_ru_etot_variant', pattern: /\bэтот вариант\b/ },
-    { id: 'single_ru_eto', pattern: /\bэто\b/ },
-    { id: 'single_ru_eta', pattern: /\bэта\b/ },
-    { id: 'single_en_this_one', pattern: /\bthis one\b/ },
-    { id: 'single_en_that_one', pattern: /\bthat one\b/ },
-    { id: 'single_en_this', pattern: /\bthis\b/ },
-    { id: 'single_en_that', pattern: /\bthat\b/ }
+  // === SINGLE (RU через includes, EN через regex \b) ===
+  const singleRuChecks = [
+    { id: 'single_ru_vot_eta', phrase: ' вот эта ' },
+    { id: 'single_ru_vot_eto', phrase: ' вот это ' },
+    { id: 'single_ru_i_eta', phrase: ' и эта ' },
+    { id: 'single_ru_eta_tozhe', phrase: ' эта тоже ' },
+    { id: 'single_ru_eta_norm', phrase: ' эта норм ' },
+    { id: 'single_ru_eta_kvartira', phrase: ' эта квартира ' },
+    { id: 'single_ru_etot_variant', phrase: ' этот вариант ' },
+    { id: 'single_ru_eto', phrase: ' это ' },
+    { id: 'single_ru_eta', phrase: ' эта ' }
   ];
-
-  for (const r of singleRules) {
-    if (r.pattern.test(normalized)) {
-      return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id, normalized };
+  for (const r of singleRuChecks) {
+    if (norm.includes(r.phrase)) {
+      return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
     }
   }
+  // EN single (regex ok)
+  if (/\bthis one\b/.test(normalized)) return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'single_en_this_one' };
+  if (/\bthat one\b/.test(normalized)) return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'single_en_that_one' };
+  if (/\bthis\b/.test(normalized)) return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'single_en_this' };
+  if (/\bthat\b/.test(normalized)) return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'single_en_that' };
 
-  const unknownRules = [
-    { id: 'unknown_ru_tot_variant', pattern: /\bтот вариант\b/ },
-    { id: 'unknown_ru_tot', pattern: /\bтот\b/ },
-    { id: 'unknown_ru_takaya', pattern: /\bтакая\b/ },
-    { id: 'unknown_en_that_one_there', pattern: /\bthat one there\b/ }
+  // === UNKNOWN (RU через includes, EN через regex \b) ===
+  const unknownRuChecks = [
+    { id: 'unknown_ru_tot_variant', phrase: ' тот вариант ' },
+    { id: 'unknown_ru_tot', phrase: ' тот ' },
+    { id: 'unknown_ru_takaya', phrase: ' такая ' }
   ];
-
-  for (const r of unknownRules) {
-    if (r.pattern.test(normalized)) {
-      return { type: 'unknown', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id, normalized };
+  for (const r of unknownRuChecks) {
+    if (norm.includes(r.phrase)) {
+      return { type: 'unknown', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
     }
   }
+  // EN unknown (regex ok)
+  if (/\bthat one there\b/.test(normalized)) return { type: 'unknown', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'unknown_en_that_one_there' };
 
   return null;
 };
@@ -1382,7 +1389,10 @@ const transcribeAndRespond = async (req, res) => {
       session.debugTrace = { items: [] };
     }
     const rawSnippet = transcription ? transcription.slice(0, 40) : '';
-    const normSnippet = refDetectResult?.normalized ? refDetectResult.normalized.slice(0, 40) : '';
+    // Вычисляем normalized независимо от результата детектора (для диагностики)
+    const normalizedForTrace = transcription
+      ? String(transcription).toLowerCase().replace(/ё/g, 'е').replace(/[^a-z0-9а-я\s]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40)
+      : '';
     session.debugTrace.items.push({
       type: 'reference_detected',
       at: Date.now(),
@@ -1390,7 +1400,7 @@ const transcribeAndRespond = async (req, res) => {
         referenceType: refDetectResult?.type || null,
         matchRuleId: refDetectResult?.matchRuleId || null,
         rawTextSnippet: rawSnippet,
-        normalizedTextSnippet: normSnippet,
+        normalizedTextSnippet: normalizedForTrace,
         inputType: inputTypeForLog,
         language: session.clientProfile?.language || null
       }
@@ -1401,7 +1411,7 @@ const transcribeAndRespond = async (req, res) => {
     const focusCardId = session.currentFocusCard?.cardId || null;
     const ambiguousFlag = session.referenceAmbiguity?.isAmbiguous === true;
     const clarificationActive = session.clarificationBoundaryActive === true;
-    console.log(`[REF] sid=${shortSid} input=${inputTypeForLog} lang=${session.clientProfile?.language || 'null'} raw="${rawSnippet}" norm="${normSnippet}" intent=${refDetectResult?.type || 'null'} rule=${refDetectResult?.matchRuleId || 'null'} amb=${ambiguousFlag} clar=${clarificationActive} focus=${focusCardId}`);
+    console.log(`[REF] sid=${shortSid} input=${inputTypeForLog} lang=${session.clientProfile?.language || 'null'} raw="${rawSnippet}" norm="${normalizedForTrace}" intent=${refDetectResult?.type || 'null'} rule=${refDetectResult?.matchRuleId || 'null'} amb=${ambiguousFlag} clar=${clarificationActive} focus=${focusCardId}`);
     
     // 🆕 Sprint V: детекция ambiguity для reference (детерминированное правило, без интерпретации)
     if (!session.referenceAmbiguity) {
