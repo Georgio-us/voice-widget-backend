@@ -1223,95 +1223,73 @@ const mapClientProfileToInsights = (clientProfile, insights) => {
 };
 
 // 🆕 Sprint V: детекция reference в тексте пользователя (без интерпретации)
+// 🔧 Hotfix: Reference Detector Stabilization (Roadmap v2)
 const detectReferenceIntent = (text) => {
-  if (!text || typeof text !== 'string') {
-    return null;
-  }
-  
-  // Нормализация (без библиотек):
-  // - toLowerCase + trim
-  // - ё→е
-  // - пунктуацию/символы → в пробелы
-  // - схлопнуть повторные пробелы
-  // - сохранить буквы/цифры/пробелы
+  if (!text || typeof text !== 'string') return null;
+
   const normalized = String(text)
     .toLowerCase()
     .replace(/ё/g, 'е')
     .replace(/[^a-z0-9а-я\s]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  
-  // ВАЖНО: порядок строго multi → single → unknown → null
-  // (чтобы "эти варианты" не улетали в single из-за "эт"/"et")
-  
-  // Multi patterns (RU + транслит)
-  const multiPatterns = [
-    /\bвот эти\b/,
-    /\bэти варианты\b/,
-    /\bэти квартиры\b/,
-    /\bэти\b/,
-    /\bоба\b/,
-    /\bобе\b/,
-    /\bнесколько\b/,
-    // translit
-    /\bvot eti\b/,
-    /\beti\b/
+
+  if (!normalized) return null;
+
+  // order: multi -> single -> unknown -> null
+
+  const multiRules = [
+    { id: 'multi_ru_vot_eti', pattern: /\bвот эти\b/ },
+    { id: 'multi_ru_eti_varianty', pattern: /\bэти варианты\b/ },
+    { id: 'multi_ru_eti_kvartiry', pattern: /\bэти квартиры\b/ },
+    { id: 'multi_ru_eti', pattern: /\bэти\b/ },
+    { id: 'multi_ru_oba', pattern: /\bоба\b/ },
+    { id: 'multi_ru_neskolko', pattern: /\bнесколько\b/ },
+    { id: 'multi_en_these', pattern: /\bthese\b/ },
+    { id: 'multi_en_both', pattern: /\bboth\b/ }
   ];
-  
-  for (const pattern of multiPatterns) {
-    if (pattern.test(normalized)) {
-      return {
-        type: 'multi',
-        detectedAt: Date.now(),
-        source: 'user_message'
-      };
+
+  for (const r of multiRules) {
+    if (r.pattern.test(normalized)) {
+      return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id, normalized };
     }
   }
-  
-  // Single patterns (RU + транслит + короткие обрезки как отдельный токен)
-  const singlePatterns = [
-    /\bвот эта\b/,
-    /\bвот это\b/,
-    /\bи эта\b/,
-    /\bэто\b/,
-    /\bэта квартира\b/,
-    /\bэтот вариант\b/,
-    /\bвот та\b/,
-    /\bэта\b/,
-    // translit
-    /\bvot eta\b/,
-    /\bvot eto\b/,
-    /\beta\b/,
-    /\beto\b/
+
+  const singleRules = [
+    { id: 'single_ru_vot_eta', pattern: /\bвот эта\b/ },
+    { id: 'single_ru_vot_eto', pattern: /\bвот это\b/ },
+    { id: 'single_ru_i_eta', pattern: /\bи эта\b/ },
+    { id: 'single_ru_eta_tozhe', pattern: /\bэта тоже\b/ },
+    { id: 'single_ru_eta_norm', pattern: /\bэта норм\b/ },
+    { id: 'single_ru_eta_kvartira', pattern: /\bэта квартира\b/ },
+    { id: 'single_ru_etot_variant', pattern: /\bэтот вариант\b/ },
+    { id: 'single_ru_eto', pattern: /\bэто\b/ },
+    { id: 'single_ru_eta', pattern: /\bэта\b/ },
+    { id: 'single_en_this_one', pattern: /\bthis one\b/ },
+    { id: 'single_en_that_one', pattern: /\bthat one\b/ },
+    { id: 'single_en_this', pattern: /\bthis\b/ },
+    { id: 'single_en_that', pattern: /\bthat\b/ }
   ];
-  
-  for (const pattern of singlePatterns) {
-    if (pattern.test(normalized)) {
-      return {
-        type: 'single',
-        detectedAt: Date.now(),
-        source: 'user_message'
-      };
+
+  for (const r of singleRules) {
+    if (r.pattern.test(normalized)) {
+      return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id, normalized };
     }
   }
-  
-  // Unknown markers (есть указатели, но нельзя уверенно классифицировать)
-  const unknownMarkers = [
-    /\bтот вариант\b/,
-    /\bтот самый\b/,
-    /\bтот\b/,
-    /\bтакая\b/
+
+  const unknownRules = [
+    { id: 'unknown_ru_tot_variant', pattern: /\bтот вариант\b/ },
+    { id: 'unknown_ru_tot', pattern: /\bтот\b/ },
+    { id: 'unknown_ru_takaya', pattern: /\bтакая\b/ },
+    { id: 'unknown_en_that_one_there', pattern: /\bthat one there\b/ }
   ];
-  
-  const hasUnknownMarker = unknownMarkers.some(pattern => pattern.test(normalized));
-  if (hasUnknownMarker) {
-    return {
-      type: 'unknown',
-      detectedAt: Date.now(),
-      source: 'user_message'
-    };
+
+  for (const r of unknownRules) {
+    if (r.pattern.test(normalized)) {
+      return { type: 'unknown', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id, normalized };
+    }
   }
-  
+
   return null;
 };
 
@@ -1391,16 +1369,39 @@ const transcribeAndRespond = async (req, res) => {
     updateInsights(sessionId, transcription);
     
     // 🆕 Sprint V: детекция reference intent в сообщении пользователя (без интерпретации)
-    session.referenceIntent = detectReferenceIntent(transcription);
-    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
+    // 🔧 Hotfix: Reference Detector Stabilization (Roadmap v2)
+    const refDetectResult = detectReferenceIntent(transcription);
+    session.referenceIntent = refDetectResult ? {
+      type: refDetectResult.type,
+      detectedAt: refDetectResult.detectedAt,
+      source: refDetectResult.source
+    } : null;
+    
+    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — расширенный payload для reference_detected
     if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
       session.debugTrace = { items: [] };
     }
+    const rawSnippet = transcription ? transcription.slice(0, 40) : '';
+    const normSnippet = refDetectResult?.normalized ? refDetectResult.normalized.slice(0, 40) : '';
     session.debugTrace.items.push({
       type: 'reference_detected',
       at: Date.now(),
-      payload: { referenceType: session.referenceIntent?.type || null }
+      payload: {
+        referenceType: refDetectResult?.type || null,
+        matchRuleId: refDetectResult?.matchRuleId || null,
+        rawTextSnippet: rawSnippet,
+        normalizedTextSnippet: normSnippet,
+        inputType: inputTypeForLog,
+        language: session.clientProfile?.language || null
+      }
     });
+    
+    // 🔧 Hotfix: временный server log для reference_detected
+    const shortSid = sessionId ? sessionId.slice(-8) : 'unknown';
+    const focusCardId = session.currentFocusCard?.cardId || null;
+    const ambiguousFlag = session.referenceAmbiguity?.isAmbiguous === true;
+    const clarificationActive = session.clarificationBoundaryActive === true;
+    console.log(`[REF] sid=${shortSid} input=${inputTypeForLog} lang=${session.clientProfile?.language || 'null'} raw="${rawSnippet}" norm="${normSnippet}" intent=${refDetectResult?.type || 'null'} rule=${refDetectResult?.matchRuleId || 'null'} amb=${ambiguousFlag} clar=${clarificationActive} focus=${focusCardId}`);
     
     // 🆕 Sprint V: детекция ambiguity для reference (детерминированное правило, без интерпретации)
     if (!session.referenceAmbiguity) {
