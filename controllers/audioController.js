@@ -129,7 +129,50 @@ const getOrCreateSession = (sessionId) => {
       // 🆕 Sprint III: completion conditions (завершение диалога после handoff)
       completionDone: false,
       completionAt: null,
-      completionReason: null
+      completionReason: null,
+      // 🆕 Sprint IV: slider context state (активность slider в UI)
+      sliderContext: {
+        active: false,
+        updatedAt: null
+      },
+      // 🆕 Sprint IV: current focus card (какая карточка сейчас в фокусе UI)
+      currentFocusCard: {
+        cardId: null,
+        updatedAt: null
+      },
+      // 🆕 Sprint IV: last shown card (последняя показанная карточка, подтверждённая ui_card_rendered)
+      lastShown: {
+        cardId: null,
+        updatedAt: null
+      },
+      // 🆕 Sprint IV: last focus snapshot (последний подтверждённый фокус, фиксируется только при ui_focus_changed)
+      lastFocusSnapshot: null,
+      // 🆕 Sprint V: reference intent (фиксация факта ссылки в сообщении пользователя, без интерпретации)
+      referenceIntent: null,
+      // 🆕 Sprint V: reference ambiguity (фиксация факта неоднозначности reference, без разрешения)
+      referenceAmbiguity: {
+        isAmbiguous: false,
+        reason: null,
+        detectedAt: null,
+        source: 'server_contract'
+      },
+      // 🆕 Sprint V: clarification required state (требуется уточнение из-за reference ambiguity)
+      clarificationRequired: {
+        isRequired: false,
+        reason: null,
+        detectedAt: null,
+        source: 'server_contract'
+      },
+      // 🆕 Sprint V: single-reference binding proposal (предложение cardId из currentFocusCard, не выбор)
+      singleReferenceBinding: {
+        hasProposal: false,
+        proposedCardId: null,
+        source: 'server_contract',
+        detectedAt: null,
+        basis: null
+      },
+      // 🆕 Sprint V: clarification boundary active (диагностическое поле: активна ли граница уточнения)
+      clarificationBoundaryActive: false
     });
   }
   return sessions.get(sessionId);
@@ -1101,6 +1144,78 @@ const mapClientProfileToInsights = (clientProfile, insights) => {
   insights.progress = Math.min(totalProgress, 99);
 };
 
+// 🆕 Sprint V: детекция reference в тексте пользователя (без интерпретации)
+const detectReferenceIntent = (text) => {
+  if (!text || typeof text !== 'string') {
+    return null;
+  }
+  
+  const normalized = text.toLowerCase().trim();
+  
+  // Single reference маркеры: "эта", "вот эта", "этот вариант", "этот", "эта квартира"
+  const singlePatterns = [
+    /\bэта\b/,
+    /\bвот эта\b/,
+    /\bэтот\b/,
+    /\bэтот вариант\b/,
+    /\bэта квартира\b/,
+    /\bэтот дом\b/,
+    /\bэтот объект\b/
+  ];
+  
+  // Multi reference маркеры: "эти", "эти варианты", "такие", "такие варианты"
+  const multiPatterns = [
+    /\bэти\b/,
+    /\bэти варианты\b/,
+    /\bтакие\b/,
+    /\bтакие варианты\b/,
+    /\bэти квартиры\b/
+  ];
+  
+  // Проверяем single reference
+  for (const pattern of singlePatterns) {
+    if (pattern.test(normalized)) {
+      return {
+        type: 'single',
+        detectedAt: Date.now(),
+        source: 'user_message'
+      };
+    }
+  }
+  
+  // Проверяем multi reference
+  for (const pattern of multiPatterns) {
+    if (pattern.test(normalized)) {
+      return {
+        type: 'multi',
+        detectedAt: Date.now(),
+        source: 'user_message'
+      };
+    }
+  }
+  
+  // Если есть неочевидные маркеры, но не подходят под single/multi
+  const ambiguousMarkers = [
+    /\bтот\b/,
+    /\bта\b/,
+    /\bте\b/,
+    /\bвариант\b/,
+    /\bварианты\b/
+  ];
+  
+  const hasAmbiguousMarker = ambiguousMarkers.some(pattern => pattern.test(normalized));
+  if (hasAmbiguousMarker) {
+    return {
+      type: 'unknown',
+      detectedAt: Date.now(),
+      source: 'user_message'
+    };
+  }
+  
+  // Reference не найден
+  return null;
+};
+
 const extractAssistantAndMeta = (fullText) => {
   try {
     const marker = '---META---';
@@ -1171,6 +1286,95 @@ const transcribeAndRespond = async (req, res) => {
 
     addMessageToSession(sessionId, 'user', transcription);
     updateInsights(sessionId, transcription);
+    
+    // 🆕 Sprint V: детекция reference intent в сообщении пользователя (без интерпретации)
+    session.referenceIntent = detectReferenceIntent(transcription);
+    
+    // 🆕 Sprint V: детекция ambiguity для reference (детерминированное правило, без интерпретации)
+    if (!session.referenceAmbiguity) {
+      session.referenceAmbiguity = {
+        isAmbiguous: false,
+        reason: null,
+        detectedAt: null,
+        source: 'server_contract'
+      };
+    }
+    
+    if (session.referenceIntent === null) {
+      // Reference не найден → неоднозначности нет
+      session.referenceAmbiguity.isAmbiguous = false;
+      session.referenceAmbiguity.reason = null;
+      session.referenceAmbiguity.detectedAt = null;
+    } else if (session.referenceIntent.type === 'multi') {
+      // Multi reference → неоднозначен
+      session.referenceAmbiguity.isAmbiguous = true;
+      session.referenceAmbiguity.reason = 'multi_reference';
+      session.referenceAmbiguity.detectedAt = Date.now();
+    } else if (session.referenceIntent.type === 'unknown') {
+      // Unknown reference → неоднозначен
+      session.referenceAmbiguity.isAmbiguous = true;
+      session.referenceAmbiguity.reason = 'unknown_reference';
+      session.referenceAmbiguity.detectedAt = Date.now();
+    } else if (session.referenceIntent.type === 'single') {
+      // Single reference → не неоднозначен (но объект всё равно не выбран)
+      session.referenceAmbiguity.isAmbiguous = false;
+      session.referenceAmbiguity.reason = null;
+      session.referenceAmbiguity.detectedAt = null;
+    }
+    
+    // 🆕 Sprint V: установка clarificationRequired на основе referenceAmbiguity (детерминированное правило)
+    if (!session.clarificationRequired) {
+      session.clarificationRequired = {
+        isRequired: false,
+        reason: null,
+        detectedAt: null,
+        source: 'server_contract'
+      };
+    }
+    
+    if (session.referenceAmbiguity.isAmbiguous === true) {
+      // Reference неоднозначен → требуется уточнение
+      session.clarificationRequired.isRequired = true;
+      session.clarificationRequired.reason = session.referenceAmbiguity.reason;
+      session.clarificationRequired.detectedAt = Date.now();
+    } else {
+      // Reference не неоднозначен → уточнение не требуется
+      session.clarificationRequired.isRequired = false;
+      session.clarificationRequired.reason = null;
+      session.clarificationRequired.detectedAt = null;
+    }
+    
+    // 🆕 Sprint V: single-reference binding proposal (предложение cardId из currentFocusCard, только если условия выполнены)
+    if (!session.singleReferenceBinding) {
+      session.singleReferenceBinding = {
+        hasProposal: false,
+        proposedCardId: null,
+        source: 'server_contract',
+        detectedAt: null,
+        basis: null
+      };
+    }
+    
+    // Правило: proposal только если single reference, не требуется clarification, и есть currentFocusCard
+    if (session.referenceIntent?.type === 'single' && 
+        session.clarificationRequired.isRequired === false &&
+        session.currentFocusCard?.cardId) {
+      session.singleReferenceBinding.hasProposal = true;
+      session.singleReferenceBinding.proposedCardId = session.currentFocusCard.cardId;
+      session.singleReferenceBinding.basis = 'currentFocusCard';
+      session.singleReferenceBinding.detectedAt = Date.now();
+    } else {
+      // Условия не выполнены → proposal отсутствует
+      session.singleReferenceBinding.hasProposal = false;
+      session.singleReferenceBinding.proposedCardId = null;
+      session.singleReferenceBinding.basis = null;
+      session.singleReferenceBinding.detectedAt = null;
+    }
+    
+    // 🆕 Sprint V: clarification boundary active (диагностическое поле: активна ли граница уточнения)
+    // Если clarificationRequired.isRequired === true, система находится в состоянии clarification_pending
+    // и не имеет права использовать proposal / binding / продвигать сценарий
+    session.clarificationBoundaryActive = session.clarificationRequired.isRequired === true;
     
     // 🆕 Sprint III: переход role по событию user_message
     transitionRole(session, 'user_message');
@@ -1704,7 +1908,17 @@ const getSessionInfo = (req, res) => {
     role: session.role, // 🆕 Sprint I: server-side role
     insights: session.insights, // 🆕 Теперь содержит все 9 параметров
     messageCount: session.messages.length,
-    lastActivity: session.lastActivity
+    lastActivity: session.lastActivity,
+    // 🆕 Sprint IV: distinction between shown and focused (для валидации/debug)
+    currentFocusCard: session.currentFocusCard || { cardId: null, updatedAt: null },
+    lastShown: session.lastShown || { cardId: null, updatedAt: null },
+    lastFocusSnapshot: session.lastFocusSnapshot || null,
+    // 🆕 Sprint V: reference and ambiguity states (для валидации/debug)
+    referenceIntent: session.referenceIntent || null,
+    referenceAmbiguity: session.referenceAmbiguity || { isAmbiguous: false, reason: null, detectedAt: null, source: 'server_contract' },
+    clarificationRequired: session.clarificationRequired || { isRequired: false, reason: null, detectedAt: null, source: 'server_contract' },
+    singleReferenceBinding: session.singleReferenceBinding || { hasProposal: false, proposedCardId: null, source: 'server_contract', detectedAt: null, basis: null },
+    clarificationBoundaryActive: session.clarificationBoundaryActive || false
   });
 };
 
@@ -1895,6 +2109,13 @@ async function handleInteraction(req, res) {
       if (!session.shownSet) session.shownSet = new Set();
       session.shownSet.add(variantId);
       
+      // 🆕 Sprint IV: обновляем lastShown при ui_card_rendered (отдельно от currentFocusCard)
+      if (!session.lastShown) {
+        session.lastShown = { cardId: null, updatedAt: null };
+      }
+      session.lastShown.cardId = variantId;
+      session.lastShown.updatedAt = Date.now();
+      
       // 🆕 Sprint III: переход role по событию ui_card_rendered
       transitionRole(session, 'ui_card_rendered');
       
@@ -1933,11 +2154,59 @@ async function handleInteraction(req, res) {
       return res.json({ ok: true, role: session.role }); // 🆕 Sprint I: server-side role
     }
 
+    // 🆕 Sprint IV: обработка события ui_slider_started для фиксации активности slider
+    if (action === 'ui_slider_started') {
+      if (!session.sliderContext) {
+        session.sliderContext = { active: false, updatedAt: null };
+      }
+      session.sliderContext.active = true;
+      session.sliderContext.updatedAt = Date.now();
+      console.log(`📱 [Sprint IV] Slider стал активным (сессия ${sessionId.slice(-8)})`);
+      return res.json({ ok: true, role: session.role });
+    }
+
     // 🆕 Sprint III: обработка события ui_slider_ended для перехода role
+    // 🆕 Sprint IV: также обновляем sliderContext при завершении slider
     if (action === 'ui_slider_ended') {
       // 🆕 Sprint III: переход role по событию ui_slider_ended
       transitionRole(session, 'ui_slider_ended');
+      
+      // 🆕 Sprint IV: обновляем sliderContext
+      if (!session.sliderContext) {
+        session.sliderContext = { active: false, updatedAt: null };
+      }
+      session.sliderContext.active = false;
+      session.sliderContext.updatedAt = Date.now();
+      console.log(`📱 [Sprint IV] Slider стал неактивным (сессия ${sessionId.slice(-8)})`);
+      
       return res.json({ ok: true, role: session.role }); // 🆕 Sprint I: server-side role
+    }
+
+    // 🆕 Sprint IV: обработка события ui_focus_changed для фиксации текущей карточки в фокусе
+    if (action === 'ui_focus_changed') {
+      const cardId = req.body.cardId;
+      
+      if (!cardId || typeof cardId !== 'string' || cardId.trim().length === 0) {
+        console.warn(`⚠️ [Sprint IV] ui_focus_changed с невалидным cardId (сессия ${sessionId.slice(-8)})`);
+        return res.status(400).json({ error: 'cardId is required and must be a non-empty string' });
+      }
+      
+      if (!session.currentFocusCard) {
+        session.currentFocusCard = { cardId: null, updatedAt: null };
+      }
+      
+      const trimmedCardId = cardId.trim();
+      session.currentFocusCard.cardId = trimmedCardId;
+      session.currentFocusCard.updatedAt = Date.now();
+      
+      // 🆕 Sprint IV: обновляем lastFocusSnapshot при ui_focus_changed (отдельно от lastShown и allowedFactsSnapshot)
+      session.lastFocusSnapshot = {
+        cardId: trimmedCardId,
+        updatedAt: Date.now()
+      };
+      
+      console.log(`🎯 [Sprint IV] Focus изменён на карточку ${trimmedCardId} (сессия ${sessionId.slice(-8)})`);
+      return res.json({ ok: true, role: session.role });
     }
 
     return res.status(400).json({ error: 'Неизвестное действие' });
