@@ -43,6 +43,10 @@ const ROLE_TRANSITIONS = [
 // 🆕 Sprint III: централизованная функция смены role через state machine
 const transitionRole = (session, event) => {
   const currentRole = session.role || 'initial_request';
+  // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — defensive guard
+  if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+    session.debugTrace = { items: [] };
+  }
   
   // Ищем разрешённый переход
   const transition = ROLE_TRANSITIONS.find(
@@ -53,6 +57,11 @@ const transitionRole = (session, event) => {
     const oldRole = session.role;
     session.role = transition.to;
     console.log(`🔄 [Sprint III] Role transition: ${oldRole} --[${event}]--> ${session.role} (сессия ${session.sessionId?.slice(-8) || 'unknown'})`);
+    session.debugTrace.items.push({
+      type: 'role_transition',
+      at: Date.now(),
+      payload: { from: oldRole, to: session.role, event }
+    });
     return true;
   }
   
@@ -171,6 +180,57 @@ const getOrCreateSession = (sessionId) => {
         detectedAt: null,
         basis: null
       },
+      // 🆕 Sprint VI / Task #1: Candidate Shortlist (server-side, observation only)
+      // Инфраструктура Roadmap v2: фиксируем, какие карточки обсуждаются пользователем.
+      // ВАЖНО:
+      // - shortlist ≠ выбор, ≠ handoff, ≠ UX-решение
+      // - append-only, без удаления и автоочистки
+      // - не зависит от like / shownSet / lastShown
+      // - source допустим: 'focus_proposal' | 'explicit_choice_event'
+      candidateShortlist: {
+        items: []
+      },
+      // 🆕 Sprint VI / Task #2: Explicit Choice Event (infrastructure only)
+      // Фиксация факта явного выбора пользователем (речь), НЕ действие:
+      // - не запускает handoff
+      // - не меняет role
+      // - не влияет на UX
+      explicitChoiceEvent: {
+        isConfirmed: false,
+        cardId: null,
+        detectedAt: null,
+        source: 'user_message'
+      },
+      // 🆕 Sprint VI / Task #3: Choice Confirmation Boundary (infrastructure only)
+      // Граница "выбор подтверждён" — чистый state, НЕ действие:
+      // - не запускает handoff
+      // - не меняет role
+      // - не влияет на UX
+      // - не сбрасывается автоматически
+      choiceConfirmationBoundary: {
+        active: false,
+        chosenCardId: null,
+        detectedAt: null,
+        source: null // 'explicit_choice_event'
+      },
+      // 🆕 Sprint VI / Task #4: No-Guessing Invariant (server guard, derived state)
+      // active === true только если clarificationBoundaryActive === true
+      // Это инвариант целостности, не UX и не действие.
+      noGuessingInvariant: {
+        active: false,
+        reason: null, // 'clarification_required'
+        enforcedAt: null
+      },
+      // 🆕 Sprint VII / Task #1: Unknown UI Actions (diagnostics only)
+      // Фиксация неизвестных action, пришедших от UI, без side-effects.
+      unknownUiActions: {
+        count: 0,
+        items: []
+      },
+      // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
+      debugTrace: {
+        items: []
+      },
       // 🆕 Sprint V: clarification boundary active (диагностическое поле: активна ли граница уточнения)
       clarificationBoundaryActive: false
     });
@@ -207,6 +267,24 @@ const detectCardIntent = (text = '') => {
 const detectScheduleIntent = (text = '') => {
   const t = String(text).toLowerCase();
   return /(записать|записаться|просмотр(ы)?|встретить|встреч(а|у)|перезвон|связать|связаться|передать\s+менеджеру|передай\s+менеджеру)/i.test(t);
+};
+
+// 🆕 Sprint VI / Task #2: явная фиксация explicit choice по строгому whitelist (без LLM)
+// Разрешённые маркеры (строгий whitelist):
+// - «беру эту»
+// - «выбираю эту»
+// - «остановимся на этом варианте»
+// - «да, эту квартиру»
+// Запрещено: «нравится», «подходит», «вроде норм», «давай дальше» и т.п.
+const detectExplicitChoiceMarker = (text = '') => {
+  const t = String(text).toLowerCase().trim();
+  const patterns = [
+    /(?:^|[.!?]\s*|,\s*)беру\s+эту\b/i,
+    /(?:^|[.!?]\s*|,\s*)выбираю\s+эту\b/i,
+    /(?:^|[.!?]\s*|,\s*)остановимся\s+на\s+этом\s+варианте\b/i,
+    /(?:^|[.!?]\s*|,\s*)да,?\s+эту\s+квартиру\b/i
+  ];
+  return patterns.some((re) => re.test(t));
 };
 
 const normalizeDistrict = (val) => {
@@ -1257,6 +1335,10 @@ const transcribeAndRespond = async (req, res) => {
     sessionId = req.body.sessionId || generateSessionId();
     const session = getOrCreateSession(sessionId);
     const inputTypeForLog = req.file ? 'audio' : 'text'; // для логирования (английский)
+    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — defensive guard
+    if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+      session.debugTrace = { items: [] };
+    }
 
     let transcription = '';
     let transcriptionTime = 0;
@@ -1289,6 +1371,15 @@ const transcribeAndRespond = async (req, res) => {
     
     // 🆕 Sprint V: детекция reference intent в сообщении пользователя (без интерпретации)
     session.referenceIntent = detectReferenceIntent(transcription);
+    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
+    if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+      session.debugTrace = { items: [] };
+    }
+    session.debugTrace.items.push({
+      type: 'reference_detected',
+      at: Date.now(),
+      payload: { referenceType: session.referenceIntent?.type || null }
+    });
     
     // 🆕 Sprint V: детекция ambiguity для reference (детерминированное правило, без интерпретации)
     if (!session.referenceAmbiguity) {
@@ -1374,7 +1465,153 @@ const transcribeAndRespond = async (req, res) => {
     // 🆕 Sprint V: clarification boundary active (диагностическое поле: активна ли граница уточнения)
     // Если clarificationRequired.isRequired === true, система находится в состоянии clarification_pending
     // и не имеет права использовать proposal / binding / продвигать сценарий
+    const prevClarificationBoundaryActive = session.clarificationBoundaryActive === true;
     session.clarificationBoundaryActive = session.clarificationRequired.isRequired === true;
+    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
+    if (prevClarificationBoundaryActive !== true && session.clarificationBoundaryActive === true) {
+      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+        session.debugTrace = { items: [] };
+      }
+      session.debugTrace.items.push({
+        type: 'clarification_boundary',
+        at: Date.now(),
+        payload: { reason: session.clarificationRequired?.reason || null }
+      });
+    }
+
+    // 🆕 Sprint VI / Task #4: No-Guessing Invariant (server guard, derived state + enforcement)
+    // Правило: пока clarificationBoundaryActive === true, запрещено использовать reference/proposal/choice downstream.
+    if (!session.noGuessingInvariant) {
+      session.noGuessingInvariant = { active: false, reason: null, enforcedAt: null };
+    }
+    if (session.clarificationBoundaryActive === true) {
+      session.noGuessingInvariant.active = true;
+      session.noGuessingInvariant.reason = 'clarification_required';
+      session.noGuessingInvariant.enforcedAt = Date.now();
+    } else {
+      // derived state: если boundary не активна — инвариант не активен
+      session.noGuessingInvariant.active = false;
+      session.noGuessingInvariant.reason = null;
+      session.noGuessingInvariant.enforcedAt = null;
+    }
+
+    // Enforcement (поверх существующих блоков, без переписывания логики):
+    // - пока noGuessingInvariant.active === true: proposal должен быть отключён (hasProposal=false)
+    //   это также блокирует фиксацию explicit choice в текущем проходе (условие explicit choice требует hasProposal=true)
+    if (session.noGuessingInvariant.active === true) {
+      // Safe reset: не создаём новый объект и не трогаем поля кроме hasProposal/proposedCardId
+      if (session.singleReferenceBinding) {
+        session.singleReferenceBinding.hasProposal = false;
+        session.singleReferenceBinding.proposedCardId = null;
+      }
+    }
+
+    // 🆕 Sprint VI / Task #1: Candidate Shortlist append (server-side, observation only)
+    // Разрешённый источник (ТОЛЬКО): single-reference binding proposal (focus_proposal)
+    // Условия:
+    // - session.singleReferenceBinding.hasProposal === true
+    // - clarificationBoundaryActive === false
+    // Правила:
+    // - идемпотентно (один cardId — один раз)
+    // - только append (без удаления/очистки)
+    // - без связи с legacy like / shownSet / lastShown
+    if (!session.candidateShortlist || !Array.isArray(session.candidateShortlist.items)) {
+      session.candidateShortlist = { items: [] };
+    }
+
+    const proposedCardIdForShortlist = session.singleReferenceBinding?.hasProposal === true
+      ? session.singleReferenceBinding?.proposedCardId
+      : null;
+
+    if (session.clarificationBoundaryActive === false && proposedCardIdForShortlist) {
+      const alreadyAdded = session.candidateShortlist.items.some(it => it && it.cardId === proposedCardIdForShortlist);
+      if (!alreadyAdded) {
+        session.candidateShortlist.items.push({
+          cardId: proposedCardIdForShortlist,
+          source: 'focus_proposal',
+          detectedAt: Date.now()
+        });
+      }
+    }
+
+    // 🆕 Sprint VI / Task #2: Explicit Choice Event (infrastructure only)
+    // Устанавливается ТОЛЬКО при одновременном выполнении условий:
+    // - singleReferenceBinding.hasProposal === true
+    // - clarificationBoundaryActive === false
+    // - есть proposedCardId
+    // - текст содержит строгий whitelist-маркер явного выбора
+    // Если хотя бы одно условие не выполнено → explicitChoiceEvent НЕ устанавливается.
+    if (!session.explicitChoiceEvent) {
+      session.explicitChoiceEvent = { isConfirmed: false, cardId: null, detectedAt: null, source: 'user_message' };
+    }
+    if (session.explicitChoiceEvent.isConfirmed !== true) {
+      const eligibleForExplicitChoice =
+        session.clarificationBoundaryActive === false &&
+        session.singleReferenceBinding?.hasProposal === true &&
+        Boolean(session.singleReferenceBinding?.proposedCardId);
+
+      if (eligibleForExplicitChoice && detectExplicitChoiceMarker(transcription)) {
+        session.explicitChoiceEvent.isConfirmed = true;
+        session.explicitChoiceEvent.cardId = session.singleReferenceBinding.proposedCardId;
+        session.explicitChoiceEvent.detectedAt = Date.now();
+        session.explicitChoiceEvent.source = 'user_message';
+        // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
+        if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+          session.debugTrace = { items: [] };
+        }
+        session.debugTrace.items.push({
+          type: 'explicit_choice',
+          at: Date.now(),
+          payload: { cardId: session.explicitChoiceEvent.cardId || null }
+        });
+      }
+    }
+
+    // 🆕 Sprint VI Micro Task: reflect explicitChoiceEvent into candidateShortlist (as separate source)
+    // Условия (все одновременно):
+    // - explicitChoiceEvent.isConfirmed === true
+    // - explicitChoiceEvent.cardId truthy
+    // - noGuessingInvariant.active !== true
+    // - идемпотентно по (cardId, source='explicit_choice_event')
+    if (
+      session.explicitChoiceEvent?.isConfirmed === true &&
+      Boolean(session.explicitChoiceEvent?.cardId) === true &&
+      session.noGuessingInvariant?.active !== true
+    ) {
+      const alreadyAddedExplicitChoice = session.candidateShortlist?.items?.some(
+        (it) => it && it.cardId === session.explicitChoiceEvent.cardId && it.source === 'explicit_choice_event'
+      );
+      if (!alreadyAddedExplicitChoice) {
+        session.candidateShortlist.items.push({
+          cardId: session.explicitChoiceEvent.cardId,
+          source: 'explicit_choice_event',
+          detectedAt: session.explicitChoiceEvent.detectedAt || Date.now()
+        });
+      }
+    }
+
+    // 🆕 Sprint VI / Task #3: Choice Confirmation Boundary (infrastructure only)
+    // Write-path: после обработки explicitChoiceEvent.
+    // Если explicitChoiceEvent.isConfirmed === true → активируем boundary (один раз, без auto-reset).
+    // Если explicitChoiceEvent не подтверждён → boundary не активируется (и не сбрасывается).
+    if (!session.choiceConfirmationBoundary) {
+      session.choiceConfirmationBoundary = { active: false, chosenCardId: null, detectedAt: null, source: null };
+    }
+    if (session.choiceConfirmationBoundary.active !== true && session.explicitChoiceEvent?.isConfirmed === true && Boolean(session.explicitChoiceEvent?.cardId) && session.noGuessingInvariant?.active !== true) {
+      session.choiceConfirmationBoundary.active = true;
+      session.choiceConfirmationBoundary.chosenCardId = session.explicitChoiceEvent.cardId || null;
+      session.choiceConfirmationBoundary.detectedAt = session.explicitChoiceEvent.detectedAt || null;
+      session.choiceConfirmationBoundary.source = 'explicit_choice_event';
+      // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
+      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+        session.debugTrace = { items: [] };
+      }
+      session.debugTrace.items.push({
+        type: 'choice_boundary',
+        at: Date.now(),
+        payload: { cardId: session.choiceConfirmationBoundary.chosenCardId || null }
+      });
+    }
     
     // 🆕 Sprint III: переход role по событию user_message
     transitionRole(session, 'user_message');
@@ -1918,7 +2155,19 @@ const getSessionInfo = (req, res) => {
     referenceAmbiguity: session.referenceAmbiguity || { isAmbiguous: false, reason: null, detectedAt: null, source: 'server_contract' },
     clarificationRequired: session.clarificationRequired || { isRequired: false, reason: null, detectedAt: null, source: 'server_contract' },
     singleReferenceBinding: session.singleReferenceBinding || { hasProposal: false, proposedCardId: null, source: 'server_contract', detectedAt: null, basis: null },
-    clarificationBoundaryActive: session.clarificationBoundaryActive || false
+    clarificationBoundaryActive: session.clarificationBoundaryActive || false,
+    // 🆕 Sprint VI / Task #1: Candidate Shortlist (debug/diagnostics only)
+    candidateShortlist: session.candidateShortlist || { items: [] },
+    // 🆕 Sprint VI / Task #2: Explicit Choice Event (debug/diagnostics only)
+    explicitChoiceEvent: session.explicitChoiceEvent || { isConfirmed: false, cardId: null, detectedAt: null, source: 'user_message' },
+    // 🆕 Sprint VI / Task #3: Choice Confirmation Boundary (debug/diagnostics only)
+    choiceConfirmationBoundary: session.choiceConfirmationBoundary || { active: false, chosenCardId: null, detectedAt: null, source: null },
+    // 🆕 Sprint VI / Task #4: No-Guessing Invariant (debug/diagnostics only)
+    noGuessingInvariant: session.noGuessingInvariant || { active: false, reason: null, enforcedAt: null },
+    // 🆕 Sprint VII / Task #1: Unknown UI Actions (debug/diagnostics only)
+    unknownUiActions: session.unknownUiActions || { count: 0, items: [] },
+    // 🆕 Sprint VII / Task #2: Debug Trace (debug/diagnostics only)
+    debugTrace: session.debugTrace || { items: [] }
   });
 };
 
@@ -2001,6 +2250,16 @@ async function handleInteraction(req, res) {
     if (!action || !sessionId) return res.status(400).json({ error: 'action и sessionId обязательны' });
     const session = sessions.get(sessionId);
     if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
+    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
+    if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+      session.debugTrace = { items: [] };
+    }
+    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — 100% UI action coverage (single write)
+    session.debugTrace.items.push({
+      type: 'ui_action',
+      at: Date.now(),
+      payload: { action }
+    });
 
     // Обеспечим список кандидатов в сессии
     if (!Array.isArray(session.lastCandidates) || !session.lastCandidates.length) {
@@ -2209,7 +2468,18 @@ async function handleInteraction(req, res) {
       return res.json({ ok: true, role: session.role });
     }
 
-    return res.status(400).json({ error: 'Неизвестное действие' });
+    // 🆕 Sprint VII / Task #1: Unknown UI Action Capture (diagnostics only)
+    // Неизвестный action не должен ломать выполнение и не должен вызывать side-effects.
+    if (!session.unknownUiActions || !Array.isArray(session.unknownUiActions.items)) {
+      session.unknownUiActions = { count: 0, items: [] };
+    }
+    session.unknownUiActions.count += 1;
+    session.unknownUiActions.items.push({
+      action: String(action),
+      payload: req.body ? { ...req.body } : null,
+      detectedAt: Date.now()
+    });
+    return res.json({ ok: true, role: session.role });
   } catch (e) {
     console.error('interaction error:', e);
     res.status(500).json({ error: 'internal' });
