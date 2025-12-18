@@ -1228,40 +1228,36 @@ const detectReferenceIntent = (text) => {
     return null;
   }
   
-  const normalized = text.toLowerCase().trim();
+  // Нормализация (без библиотек):
+  // - toLowerCase + trim
+  // - ё→е
+  // - пунктуацию/символы → в пробелы
+  // - схлопнуть повторные пробелы
+  // - сохранить буквы/цифры/пробелы
+  const normalized = String(text)
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[^a-z0-9а-я\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   
-  // Single reference маркеры: "эта", "вот эта", "этот вариант", "этот", "эта квартира"
-  const singlePatterns = [
-    /\bэта\b/,
-    /\bвот эта\b/,
-    /\bэтот\b/,
-    /\bэтот вариант\b/,
-    /\bэта квартира\b/,
-    /\bэтот дом\b/,
-    /\bэтот объект\b/
-  ];
+  // ВАЖНО: порядок строго multi → single → unknown → null
+  // (чтобы "эти варианты" не улетали в single из-за "эт"/"et")
   
-  // Multi reference маркеры: "эти", "эти варианты", "такие", "такие варианты"
+  // Multi patterns (RU + транслит)
   const multiPatterns = [
-    /\bэти\b/,
+    /\bвот эти\b/,
     /\bэти варианты\b/,
-    /\bтакие\b/,
-    /\bтакие варианты\b/,
-    /\bэти квартиры\b/
+    /\bэти квартиры\b/,
+    /\bэти\b/,
+    /\bоба\b/,
+    /\bобе\b/,
+    /\bнесколько\b/,
+    // translit
+    /\bvot eti\b/,
+    /\beti\b/
   ];
   
-  // Проверяем single reference
-  for (const pattern of singlePatterns) {
-    if (pattern.test(normalized)) {
-      return {
-        type: 'single',
-        detectedAt: Date.now(),
-        source: 'user_message'
-      };
-    }
-  }
-  
-  // Проверяем multi reference
   for (const pattern of multiPatterns) {
     if (pattern.test(normalized)) {
       return {
@@ -1272,17 +1268,43 @@ const detectReferenceIntent = (text) => {
     }
   }
   
-  // Если есть неочевидные маркеры, но не подходят под single/multi
-  const ambiguousMarkers = [
-    /\bтот\b/,
-    /\bта\b/,
-    /\bте\b/,
-    /\bвариант\b/,
-    /\bварианты\b/
+  // Single patterns (RU + транслит + короткие обрезки как отдельный токен)
+  const singlePatterns = [
+    /\bвот эта\b/,
+    /\bвот это\b/,
+    /\bи эта\b/,
+    /\bэто\b/,
+    /\bэта квартира\b/,
+    /\bэтот вариант\b/,
+    /\bвот та\b/,
+    /\bэта\b/,
+    // translit
+    /\bvot eta\b/,
+    /\bvot eto\b/,
+    /\beta\b/,
+    /\beto\b/
   ];
   
-  const hasAmbiguousMarker = ambiguousMarkers.some(pattern => pattern.test(normalized));
-  if (hasAmbiguousMarker) {
+  for (const pattern of singlePatterns) {
+    if (pattern.test(normalized)) {
+      return {
+        type: 'single',
+        detectedAt: Date.now(),
+        source: 'user_message'
+      };
+    }
+  }
+  
+  // Unknown markers (есть указатели, но нельзя уверенно классифицировать)
+  const unknownMarkers = [
+    /\bтот вариант\b/,
+    /\bтот самый\b/,
+    /\bтот\b/,
+    /\bтакая\b/
+  ];
+  
+  const hasUnknownMarker = unknownMarkers.some(pattern => pattern.test(normalized));
+  if (hasUnknownMarker) {
     return {
       type: 'unknown',
       detectedAt: Date.now(),
@@ -1290,7 +1312,6 @@ const detectReferenceIntent = (text) => {
     };
   }
   
-  // Reference не найден
   return null;
 };
 
