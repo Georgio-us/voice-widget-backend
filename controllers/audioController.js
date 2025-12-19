@@ -28,13 +28,6 @@ const logBuildOnce = () => {
   console.log(`[BUILD] deploy=${DEPLOY_TAG_FULL}`);
 };
 
-// ====== Client-visible debug gate (Safari-friendly) ======
-const isClientDebugEnabled = (req) => {
-  const envOn = String(process.env.VW_DEBUG_CLIENT || '').trim() === '1';
-  const headerOn = String(req?.headers?.['x-vw-debug'] || '').trim() === '1';
-  return envOn && headerOn;
-};
-
 const clip = (str, n = 80) => {
   if (str === null || str === undefined) return '';
   const s = String(str);
@@ -52,14 +45,6 @@ const normalizeForClientDebug = (text) => {
     .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-};
-
-const extractSpokeCardId = (text) => {
-  if (!text || typeof text !== 'string') return { cardId: null, confidence: 'none' };
-  const matches = String(text).match(/\bA\d{3}\b/g) || [];
-  const uniq = Array.from(new Set(matches));
-  if (uniq.length === 1) return { cardId: uniq[0], confidence: 'exact' };
-  return { cardId: null, confidence: 'none' };
 };
 
 const getLatestMatchRuleId = (session) => {
@@ -1978,7 +1963,6 @@ const transcribeAndRespond = async (req, res) => {
     sessionId = req.body.sessionId || generateSessionId();
     const session = getOrCreateSession(sessionId);
     const inputTypeForLog = req.file ? 'audio' : 'text'; // для логирования (английский)
-    const clientDebugEnabled = isClientDebugEnabled(req);
     // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — defensive guard
     if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
       session.debugTrace = { items: [] };
@@ -2022,6 +2006,26 @@ const transcribeAndRespond = async (req, res) => {
       transcription = whisperResponse.trim();
     } else {
       transcription = req.body.text.trim();
+    }
+
+    // Patch (outside roadmap): race-safe focus ordering using clientTs
+    const clientTsNum = Number.isFinite(Number(req.body?.clientTs)) ? Number(req.body.clientTs) : null;
+    const lastFocusClientTs = session?.uiClient?.lastFocus?.clientTs ?? null;
+    const lastShownClientTs = session?.uiClient?.lastShown?.clientTs ?? null;
+    const lastFocusCardIdByClientTs = session?.uiClient?.lastFocus?.cardId ?? null;
+    const serverSnapshotFocusCardId = session.currentFocusCard?.cardId || null;
+    const effectiveFocusCardId = (clientTsNum != null && lastFocusClientTs != null && lastFocusClientTs <= clientTsNum && lastFocusCardIdByClientTs)
+      ? String(lastFocusCardIdByClientTs)
+      : serverSnapshotFocusCardId;
+    const focusSource = (clientTsNum != null && lastFocusClientTs != null && lastFocusClientTs <= clientTsNum && lastFocusCardIdByClientTs)
+      ? 'clientTs'
+      : 'serverSnapshot';
+
+    // Ensure binding uses the effective focus snapshot for this user_message turn
+    if (effectiveFocusCardId && effectiveFocusCardId !== serverSnapshotFocusCardId) {
+      if (!session.currentFocusCard) session.currentFocusCard = { cardId: null, updatedAt: null };
+      session.currentFocusCard.cardId = effectiveFocusCardId;
+      session.currentFocusCard.updatedAt = Date.now();
     }
 
     addMessageToSession(sessionId, 'user', transcription);
@@ -2686,15 +2690,9 @@ ${factsList.join('\n')}
     const { assistantText, meta } = extractAssistantAndMeta(fullModelText);
     let botResponse = assistantText || fullModelText;
 
-    // Patch (outside roadmap): client-visible bind vs spoke measurement (Safari DevTools)
-    const spoke = extractSpokeCardId(botResponse);
+    // Patch (outside roadmap): client-visible bind measurement (Safari DevTools)
     const bindHas = session.singleReferenceBinding?.hasProposal === true;
     const bindCardId = session.singleReferenceBinding?.proposedCardId || null;
-    const mismatchBindVsSpoke = (bindHas && spoke.cardId && spoke.cardId !== bindCardId) ? 1 : 0;
-    if (mismatchBindVsSpoke === 1) {
-      const rule = getLatestMatchRuleId(session);
-      console.log(`[MISMATCH] sid=${String(sessionId || '').slice(-8) || 'unknown'} bind=${bindCardId || 'null'} spoke=${spoke.cardId || 'null'} focus=${session.currentFocusCard?.cardId || 'null'} lastShown=${session.lastShown?.cardId || 'null'} rule=${rule || 'null'}`);
-    }
 
     // META обработка: clientProfileDelta + stage
     try {
@@ -2946,52 +2944,51 @@ ${factsList.join('\n')}
       }
     };
 
-    // Patch (outside roadmap): Browser-visible compact debug (only under exact gate)
-    if (clientDebugEnabled === true) {
-      const matchRuleId = getLatestMatchRuleId(session);
-      const pack = llmContextPackForMainCall || buildLlmContextPack(session, sessionId, 'main');
-      const factsIds = Array.isArray(pack?.facts?.factsCardIds) ? pack.facts.factsCardIds.filter(Boolean) : [];
-      const allowedFactsSnapshot = pack?.facts?.allowedFactsSnapshot ?? null;
-      const allowedFacts = (allowedFactsSnapshot && typeof allowedFactsSnapshot === 'object' && Object.keys(allowedFactsSnapshot).length > 0) ? 1 : 0;
+    // Browser-visible compact debug (ALWAYS, no ENV/headers gate)
+    const matchRuleId = getLatestMatchRuleId(session);
+    const pack = llmContextPackForMainCall || buildLlmContextPack(session, sessionId, 'main');
+    const factsIds = Array.isArray(pack?.facts?.factsCardIds) ? pack.facts.factsCardIds.filter(Boolean) : [];
+    const allowedFactsSnapshot = pack?.facts?.allowedFactsSnapshot ?? null;
+    const allowedFacts = (allowedFactsSnapshot && typeof allowedFactsSnapshot === 'object' && Object.keys(allowedFactsSnapshot).length > 0) ? 1 : 0;
 
-      responsePayload.debug = {
-        deploy: getDeployShortOrNull(),
-        sid: String(sessionId || '').slice(-8) || 'unknown',
-        ts: Date.now(),
-        input: {
-          type: inputTypeForLog,
-          raw: clip(transcription, 80),
-          norm: clip(normalizeForClientDebug(transcription), 80)
-        },
-        ref: {
-          type: session.referenceIntent?.type ?? null,
-          rule: matchRuleId
-        },
-        ui: {
-          focus: session.currentFocusCard?.cardId || null,
-          lastShown: session.lastShown?.cardId || null,
-          lastFocus: session.lastFocusSnapshot?.cardId || null,
-          slider: session.sliderContext?.active === true ? 1 : 0
-        },
-        bind: {
-          has: bindHas ? 1 : 0,
-          cardId: bindCardId,
-          basis: session.singleReferenceBinding?.basis ?? null
-        },
-        facts: {
-          ids: factsIds,
-          allowed: allowedFacts,
-          count: factsIds.length
-        },
-        spoke: {
-          cardId: spoke.cardId,
-          confidence: spoke.confidence
-        },
-        mismatch: {
-          bindVsSpoke: mismatchBindVsSpoke
-        }
-      };
-    }
+    responsePayload.debug = {
+      deploy: getDeployShortOrNull(),
+      sid: String(sessionId || '').slice(-8) || 'unknown',
+      ts: Date.now(),
+      timing: {
+        clientTs: clientTsNum,
+        receivedAt: startTime,
+        lastFocusClientTs: lastFocusClientTs ?? null,
+        lastShownClientTs: lastShownClientTs ?? null,
+        focusSource
+      },
+      input: {
+        type: inputTypeForLog,
+        raw: clip(transcription, 80),
+        norm: clip(normalizeForClientDebug(transcription), 80)
+      },
+      ref: {
+        type: session.referenceIntent?.type ?? null,
+        rule: matchRuleId
+      },
+      ui: {
+        focus: effectiveFocusCardId || session.currentFocusCard?.cardId || null,
+        lastShown: session.lastShown?.cardId || null,
+        lastFocus: session.lastFocusSnapshot?.cardId || null,
+        slider: session.sliderContext?.active === true ? 1 : 0
+      },
+      bind: {
+        has: bindHas ? 1 : 0,
+        cardId: bindCardId,
+        basis: session.singleReferenceBinding?.basis ?? null,
+        effectiveFocus: effectiveFocusCardId || null
+      },
+      facts: {
+        ids: factsIds,
+        allowed: allowedFacts,
+        count: factsIds.length
+      }
+    };
 
     res.json(responsePayload);
 
@@ -3209,13 +3206,11 @@ export {
 // ---------- Взаимодействия (like / next) ----------
 async function handleInteraction(req, res) {
   try {
-    const { action, variantId, sessionId } = req.body || {};
+    const { action, variantId, sessionId, clientTs } = req.body || {};
     if (!action || !sessionId) return res.status(400).json({ error: 'action и sessionId обязательны' });
     const session = sessions.get(sessionId);
     if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
-    const clientDebugEnabled = isClientDebugEnabled(req);
     const withDebug = (payload) => {
-      if (clientDebugEnabled !== true) return payload;
       return {
         ...payload,
         debug: {
@@ -3355,6 +3350,11 @@ async function handleInteraction(req, res) {
       }
       session.lastShown.cardId = variantId;
       session.lastShown.updatedAt = Date.now();
+
+      // Patch (outside roadmap): persist lastShown by clientTs for race-safe focus ordering
+      if (!session.uiClient || typeof session.uiClient !== 'object') session.uiClient = {};
+      const clientTsNum = Number.isFinite(Number(clientTs)) ? Number(clientTs) : null;
+      session.uiClient.lastShown = { cardId: variantId, clientTs: clientTsNum, receivedAt: Date.now() };
       
       // 🆕 Sprint III: переход role по событию ui_card_rendered
       transitionRole(session, 'ui_card_rendered');
@@ -3438,6 +3438,11 @@ async function handleInteraction(req, res) {
       const trimmedCardId = cardId.trim();
       session.currentFocusCard.cardId = trimmedCardId;
       session.currentFocusCard.updatedAt = Date.now();
+
+      // Patch (outside roadmap): persist lastFocus by clientTs for race-safe binding on /upload
+      if (!session.uiClient || typeof session.uiClient !== 'object') session.uiClient = {};
+      const clientTsNum = Number.isFinite(Number(clientTs)) ? Number(clientTs) : null;
+      session.uiClient.lastFocus = { cardId: trimmedCardId, clientTs: clientTsNum, receivedAt: Date.now() };
       
       // 🆕 Sprint IV: обновляем lastFocusSnapshot при ui_focus_changed (отдельно от lastShown и allowedFactsSnapshot)
       session.lastFocusSnapshot = {
