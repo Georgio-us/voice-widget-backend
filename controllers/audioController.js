@@ -13,6 +13,20 @@ const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
 
+// ====== Diagnostic build tag (DEPLOY_TAG) ======
+const DEPLOY_TAG_FULL = process.env.DEPLOY_TAG || process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown';
+const DEPLOY_TAG_SHORT = (() => {
+  const t = String(DEPLOY_TAG_FULL || 'unknown');
+  if (t.length <= 8) return t;
+  return t.slice(-8);
+})();
+let BUILD_LOGGED = false;
+const logBuildOnce = () => {
+  if (BUILD_LOGGED) return;
+  BUILD_LOGGED = true;
+  console.log(`[BUILD] deploy=${DEPLOY_TAG_FULL}`);
+};
+
 // 🆕 Sprint II / Block A: Allowed Facts Schema — явный список разрешённых фактов для AI
 // Определяет, какие поля карточки считаются допустимыми фактами
 const ALLOWED_FACTS_SCHEMA = [
@@ -950,9 +964,37 @@ ${conversationHistory}
 }`;
 
     // Делаем запрос к GPT для анализа
+    // RMv3 / Sprint 1: transient LLM Context Pack + [CTX] log (infrastructure only)
+    const llmContextPack = buildLlmContextPack(session, sessionId, 'analysis');
+    logCtx(llmContextPack);
+    const factsMsg = buildLlmFactsSystemMessage(llmContextPack);
+    const guardMsg = buildRmv3GuardrailsSystemMessage();
+    // RMv3 / Sprint 2 / Task 5: expose clarificationMode + diagnostics (only if active)
+    const shapedForDiag = buildShapedFactsPackForLLM(llmContextPack);
+    if (shapedForDiag?.clarificationMode === true) {
+      const reasons = [];
+      if (shapedForDiag?.ref?.ambiguity === true) reasons.push('ambiguity');
+      if (shapedForDiag?.ref?.clarificationRequired === true) reasons.push('clarificationRequired');
+      if (shapedForDiag?.ref?.clarificationBoundaryActive === true) reasons.push('clarificationBoundary');
+      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+        session.debugTrace = { items: [] };
+      }
+      session.debugTrace.items.push({
+        type: 'clarification_mode_exposed',
+        at: Date.now(),
+        payload: {
+          active: true,
+          reasons
+        }
+      });
+      const sid = String(sessionId || '').slice(-8) || 'unknown';
+      console.log(`[CLARIFICATION_MODE] sid=${sid} reasons=${reasons.join(',')}`);
+    }
     const analysisResponse = await callOpenAIWithRetry(() => 
       openai.chat.completions.create({
         messages: [
+          factsMsg,
+          guardMsg,
           { role: 'system', content: 'Ты эксперт по анализу диалогов с клиентами недвижимости. Отвечай только валидным JSON.' },
           { role: 'user', content: analysisPrompt }
         ],
@@ -1129,6 +1171,328 @@ const isRetryableError = (error) => {
   return retryableMessages.some(msg => errorMessage.includes(msg));
 };
 
+// ====== RMv3 / Sprint 1 / Task 1: LLM Context Pack + structured [CTX] log (infrastructure only) ======
+// ВАЖНО:
+// - Context Pack transient: НЕ сохраняется в session, НЕ влияет на логику/промпты/ответ
+// - [CTX] — одна читаемая строка перед каждым LLM-вызовом (chat.completions)
+const buildLlmContextPack = (session, sessionId, call) => {
+  // RMv3 / Sprint 1 / Task 2:
+  // Нормализованный контракт LLM Context Pack (только server-side facts, без вычислений и без записи в session).
+  const sid = String(sessionId || session?.sessionId || '');
+  const meta = {
+    sessionId: sid,
+    role: session?.role ?? null,
+    stage: session?.stage ?? null,
+    call: call ?? null
+  };
+
+  const cp = session?.clientProfile || {};
+  const clientProfile = {
+    language: cp.language ?? null,
+    location: cp.location ?? null,
+    purpose: cp.purpose ?? null,
+    // budget — скалярный server-fact (без нормализации/парсинга):
+    // приоритет: clientProfile.budget -> budgetMax -> budgetMin -> insights.budget -> null
+    budget: (cp.budget ?? cp.budgetMax ?? cp.budgetMin ?? session?.insights?.budget ?? null),
+    // rooms как server-fact: если нет в clientProfile, читаем из insights (если есть)
+    rooms: (cp.rooms ?? session?.insights?.rooms ?? null)
+  };
+
+  const uiContext = {
+    currentFocusCard: { cardId: session?.currentFocusCard?.cardId ?? null },
+    lastShown: { cardId: session?.lastShown?.cardId ?? null },
+    lastFocusSnapshot: { cardId: session?.lastFocusSnapshot?.cardId ?? null },
+    sliderActive: session?.sliderContext?.active === true
+  };
+
+  const referencePipeline = {
+    referenceIntent: { type: session?.referenceIntent?.type ?? null },
+    referenceAmbiguity: { isAmbiguous: session?.referenceAmbiguity?.isAmbiguous === true },
+    clarificationRequired: { isRequired: session?.clarificationRequired?.isRequired === true },
+    clarificationBoundaryActive: session?.clarificationBoundaryActive === true,
+    singleReferenceBinding: {
+      hasProposal: session?.singleReferenceBinding?.hasProposal === true,
+      proposedCardId: session?.singleReferenceBinding?.proposedCardId ?? null
+    }
+  };
+
+  const shortlistItems = Array.isArray(session?.candidateShortlist?.items)
+    ? session.candidateShortlist.items
+        .filter((it) => it && it.cardId)
+        .map((it) => ({ cardId: it.cardId }))
+    : [];
+
+  const choice = {
+    candidateShortlist: { items: shortlistItems },
+    explicitChoiceEvent: { isConfirmed: session?.explicitChoiceEvent?.isConfirmed === true },
+    choiceConfirmationBoundary: { active: session?.choiceConfirmationBoundary?.active === true }
+  };
+
+  const invariants = {
+    noGuessingInvariant: { active: session?.noGuessingInvariant?.active === true }
+  };
+
+  // RMv3 / Sprint 1 / Task 3: Facts Bundle (allowedFacts + cardFacts) for relevant cardIds
+  // ВАЖНО: никаких вычислений/нормализаций фактов — только прокидывание server-facts.
+  const factsCardIdsCandidates = [
+    session?.singleReferenceBinding?.proposedCardId ?? null,
+    session?.currentFocusCard?.cardId ?? null,
+    session?.lastShown?.cardId ?? null,
+    session?.lastFocusSnapshot?.cardId ?? null,
+    ...(Array.isArray(session?.candidateShortlist?.items)
+      ? session.candidateShortlist.items.slice(0, 3).map((it) => it?.cardId ?? null)
+      : [])
+  ];
+
+  const factsCardIds = [];
+  for (const id of factsCardIdsCandidates) {
+    if (!id) continue;
+    if (factsCardIds.includes(id)) continue;
+    factsCardIds.push(id);
+    if (factsCardIds.length >= 5) break;
+  }
+
+  const cardFactsById = {};
+  for (const cardId of factsCardIds) {
+    cardFactsById[String(cardId)] = session?.cardFacts?.[cardId] ?? null;
+  }
+
+  const facts = {
+    allowedFactsSnapshot: session?.allowedFactsSnapshot ?? null,
+    cardFactsById,
+    factsCardIds
+  };
+
+  return { meta, clientProfile, uiContext, referencePipeline, choice, invariants, facts };
+};
+
+const formatCtxLogLine = (pack) => {
+  // [CTX] логирует ТОЛЬКО нормализованный Context Pack (RMv3 / Sprint 1 / Task 2).
+  const deploy = DEPLOY_TAG_SHORT;
+  const sid = String(pack?.meta?.sessionId || '');
+  const shortSid = sid ? sid.slice(-8) : 'unknown';
+  const role = pack?.meta?.role ?? null;
+  const stage = pack?.meta?.stage ?? null;
+  const call = pack?.meta?.call ?? null;
+  const budget = pack?.clientProfile?.budget ?? null;
+
+  const focus = pack?.uiContext?.currentFocusCard?.cardId ?? null;
+  const lastShown = pack?.uiContext?.lastShown?.cardId ?? null;
+  const lastFocus = pack?.uiContext?.lastFocusSnapshot?.cardId ?? null;
+  const slider = pack?.uiContext?.sliderActive === true;
+
+  const refType = pack?.referencePipeline?.referenceIntent?.type ?? null;
+  const amb = pack?.referencePipeline?.referenceAmbiguity?.isAmbiguous === true;
+  const clarReq = pack?.referencePipeline?.clarificationRequired?.isRequired === true;
+  const clarBoundary = pack?.referencePipeline?.clarificationBoundaryActive === true;
+  const bind = pack?.referencePipeline?.singleReferenceBinding?.hasProposal === true;
+  const bindCard = pack?.referencePipeline?.singleReferenceBinding?.proposedCardId ?? null;
+
+  const shortlistIds = Array.isArray(pack?.choice?.candidateShortlist?.items)
+    ? Array.from(new Set(pack.choice.candidateShortlist.items.map((it) => it?.cardId).filter(Boolean)))
+    : [];
+  const choice = pack?.choice?.explicitChoiceEvent?.isConfirmed === true;
+  const choiceBoundary = pack?.choice?.choiceConfirmationBoundary?.active === true;
+
+  const noGuess = pack?.invariants?.noGuessingInvariant?.active === true;
+  const factsIds = Array.isArray(pack?.facts?.factsCardIds) ? pack.facts.factsCardIds.filter(Boolean) : [];
+  const factsCount = factsIds.length;
+  const allowedFacts = (() => {
+    const snap = pack?.facts?.allowedFactsSnapshot ?? null;
+    if (!snap || typeof snap !== 'object') return false;
+    return Object.keys(snap).length > 0;
+  })();
+
+  const fmt = (v) => (v === null || v === undefined || v === '' ? 'null' : String(v));
+  const fmtBool = (b) => (b ? '1' : '0');
+
+  // Одна строка, плоский читаемый формат, стабильный порядок полей.
+  return `[CTX] deploy=${deploy} sid=${shortSid} role=${fmt(role)} stage=${fmt(stage)} call=${fmt(call)} budget=${fmt(budget)} focus=${fmt(focus)} lastShown=${fmt(lastShown)} lastFocus=${fmt(lastFocus)} slider=${fmtBool(slider)} ref=${fmt(refType)} amb=${fmtBool(amb)} clarReq=${fmtBool(clarReq)} clarBoundary=${fmtBool(clarBoundary)} bind=${fmtBool(bind)} bindCard=${fmt(bindCard)} shortlist=[${shortlistIds.join(',')}] choice=${fmtBool(choice)} choiceBoundary=${fmtBool(choiceBoundary)} noGuess=${fmtBool(noGuess)} factsIds=[${factsIds.join(',')}] allowedFacts=${fmtBool(allowedFacts)} factsCount=${fmt(factsCount)}`;
+};
+
+const logCtx = (pack) => {
+  try {
+    logBuildOnce();
+    console.log(formatCtxLogLine(pack));
+  } catch (e) {
+    // diagnostics only — не ломаем runtime
+    console.log('[CTX] (failed_to_format)');
+  }
+};
+
+// RMv3 / Sprint 1 / Task 5: expose server facts to LLM as the FIRST system message (infrastructure only)
+// content format (strict): "RMV3_SERVER_FACTS_V1 " + JSON.stringify(shapedPack)
+// NOTE: Shaping reduces token usage; diagnostics ([CTX]) still uses the full normalized pack.
+const buildCardSummaryLines = (shaped) => {
+  const ids = Array.isArray(shaped?.facts?.factsCardIds) ? shaped.facts.factsCardIds.slice(0, 3) : [];
+  const byId = (shaped?.facts?.cardFactsById && typeof shaped.facts.cardFactsById === 'object')
+    ? shaped.facts.cardFactsById
+    : {};
+
+  const lines = [];
+  for (const cardId of ids) {
+    if (!cardId) continue;
+    const raw = byId[cardId] && typeof byId[cardId] === 'object' ? byId[cardId] : null;
+
+    const city = raw?.city ?? null;
+    const district = raw?.district ?? null;
+    const neighborhood = raw?.neighborhood ?? null;
+    const rooms = raw?.rooms ?? null;
+    const priceEUR = raw?.priceEUR ?? null;
+    const price = raw?.price ?? null;
+
+    const parts = [String(cardId)];
+
+    const locParts = [city, district, neighborhood].filter((v) => v !== null && v !== undefined && String(v).trim() !== '');
+    if (locParts.length > 0) {
+      parts.push(locParts.map(String).join(', '));
+    }
+
+    if (rooms !== null && rooms !== undefined && String(rooms).trim() !== '') {
+      const roomsStr = String(rooms);
+      const alreadyHasRoomsWord = /\brooms?\b/i.test(roomsStr) || /\bкомн/i.test(roomsStr);
+      parts.push(alreadyHasRoomsWord ? roomsStr : `${roomsStr} rooms`);
+    }
+
+    const priceVal = (priceEUR !== null && priceEUR !== undefined && String(priceEUR).trim() !== '')
+      ? { key: 'priceEUR', val: priceEUR }
+      : ((price !== null && price !== undefined && String(price).trim() !== '') ? { key: 'price', val: price } : null);
+
+    if (priceVal) {
+      const s = String(priceVal.val);
+      const hasCurrencyHint = /€|eur/i.test(s);
+      parts.push(hasCurrencyHint ? s : `${priceVal.key}=${s}`);
+    }
+
+    // Если кроме id ничего нет — строка должна быть просто CARD_ID
+    lines.push(parts.join(' | '));
+  }
+
+  return lines.slice(0, 3);
+};
+
+const buildShapedFactsPackForLLM = (pack) => {
+  const meta = {
+    sessionId: pack?.meta?.sessionId ?? null,
+    role: pack?.meta?.role ?? null,
+    stage: pack?.meta?.stage ?? null,
+    call: pack?.meta?.call ?? null
+  };
+
+  const ui = {
+    currentFocusCardId: pack?.uiContext?.currentFocusCard?.cardId ?? null,
+    lastShownCardId: pack?.uiContext?.lastShown?.cardId ?? null
+  };
+
+  const ref = {
+    referenceIntentType: pack?.referencePipeline?.referenceIntent?.type ?? null,
+    ambiguity: pack?.referencePipeline?.referenceAmbiguity?.isAmbiguous === true,
+    clarificationRequired: pack?.referencePipeline?.clarificationRequired?.isRequired === true,
+    clarificationBoundaryActive: pack?.referencePipeline?.clarificationBoundaryActive === true,
+    binding: {
+      hasProposal: pack?.referencePipeline?.singleReferenceBinding?.hasProposal === true,
+      proposedCardId: pack?.referencePipeline?.singleReferenceBinding?.proposedCardId ?? null
+    }
+  };
+
+  const rawAllowed = pack?.facts?.allowedFactsSnapshot ?? null;
+  const allowedFactsKeys = (rawAllowed && typeof rawAllowed === 'object')
+    ? Object.keys(rawAllowed).slice(0, 20)
+    : [];
+  const allowedFactsCount = (rawAllowed && typeof rawAllowed === 'object')
+    ? Object.keys(rawAllowed).length
+    : 0;
+
+  // factsCardIds max 3 (priority): proposed -> focus -> lastShown
+  const factsCardIds = [];
+  const candIds = [
+    ref.binding.proposedCardId ?? null,
+    ui.currentFocusCardId ?? null,
+    ui.lastShownCardId ?? null
+  ];
+  for (const id of candIds) {
+    if (!id) continue;
+    if (factsCardIds.includes(id)) continue;
+    factsCardIds.push(id);
+    if (factsCardIds.length >= 3) break;
+  }
+
+  const whitelist = new Set([
+    'id',
+    'cardId',
+    'title',
+    'city',
+    'district',
+    'neighborhood',
+    'price',
+    'priceEUR',
+    'rooms',
+    'area',
+    'floor'
+  ]);
+
+  const cardFactsById = {};
+  for (const cardId of factsCardIds) {
+    const raw = pack?.facts?.cardFactsById?.[cardId] ?? null;
+    if (!raw || typeof raw !== 'object') {
+      cardFactsById[String(cardId)] = null;
+      continue;
+    }
+    const shapedCard = {};
+    for (const key of Object.keys(raw)) {
+      if (!whitelist.has(key)) continue;
+      const val = raw[key];
+      if (val === undefined || val === null) continue;
+      shapedCard[key] = val;
+    }
+    // если вообще ничего не попало — всё равно возвращаем объект (не null), чтобы видеть "есть, но пусто"
+    cardFactsById[String(cardId)] = shapedCard;
+  }
+
+  const shaped = {
+    meta,
+    ui,
+    ref,
+    clarificationMode:
+      ref.clarificationBoundaryActive === true ||
+      ref.ambiguity === true ||
+      ref.clarificationRequired === true,
+    facts: {
+      factsCardIds,
+      allowedFactsKeys,
+      allowedFactsCount,
+      cardFactsById
+    }
+  };
+
+  shaped.facts.cardSummaryLines = buildCardSummaryLines(shaped);
+
+  return shaped;
+};
+
+const buildLlmFactsSystemMessage = (pack) => {
+  const shaped = buildShapedFactsPackForLLM(pack);
+  return {
+    role: 'system',
+    content: `RMV3_SERVER_FACTS_V1 ${JSON.stringify(shaped)}`
+  };
+};
+
+// RMv3 / Sprint 1 / Task 6: deterministic guardrails system layer (infrastructure only)
+// Must be inserted AFTER FACTS and BEFORE existing prompts/messages.
+const buildRmv3GuardrailsSystemMessage = () => ({
+  role: 'system',
+  content: [
+    'RMV3_GUARDRAILS_V1',
+    '1) FACTS precedence: Используй только server facts из RMV3_SERVER_FACTS_V1. Если факта нет — скажи что нет данных или задай уточняющий вопрос.',
+    '2) Card ≠ image: Карточки — UI-объекты. Не говори, что ты "не видишь/не можешь показать изображения".',
+    '3) Boundaries: Если clarificationBoundaryActive=true ИЛИ referenceAmbiguity.isAmbiguous=true ИЛИ clarificationRequired.isRequired=true — задавай уточняющий вопрос; не выбирай карточку и не подтверждай выбор.',
+    '3b) Clarification enforcement: If any clarification boundary is active, respond ONLY with a clarification question. Do NOT confirm choice. Do NOT describe any card as selected.',
+    '4) Binding: Если singleReferenceBinding.hasProposal=true — говори про proposedCardId как "вы про эту карточку…"; не меняй id.',
+    '5) No guessing: Не выдумывай цену/район/комнаты/наличие объектов. Только факты из server facts.'
+  ].join('\n')
+});
+
 // ====== Вспомогательные функции профиля/стадий/META ======
 const determineStage = (clientProfile, currentStage, messageHistory) => {
   try {
@@ -1231,7 +1595,12 @@ const detectReferenceIntent = (text) => {
   const normalized = String(text)
     .toLowerCase()
     .replace(/ё/g, 'е')
-    .replace(/[^a-z0-9а-я\s]+/g, ' ')
+    // Unicode-safe normalization:
+    // - keep all letters/numbers across scripts (incl. ES diacritics/ñ)
+    // - strip diacritics (é -> e, ñ -> n) for stable matching
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -1256,6 +1625,20 @@ const detectReferenceIntent = (text) => {
       return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
     }
   }
+  // ES multi (через includes; без \b)
+  const multiEsChecks = [
+    { id: 'multi_es_estas', phrase: ' estas ' },
+    { id: 'multi_es_estos', phrase: ' estos ' },
+    { id: 'multi_es_esas', phrase: ' esas ' },
+    { id: 'multi_es_esos', phrase: ' esos ' },
+    { id: 'multi_es_aquellos', phrase: ' aquellos ' },
+    { id: 'multi_es_aquellas', phrase: ' aquellas ' }
+  ];
+  for (const r of multiEsChecks) {
+    if (norm.includes(r.phrase)) {
+      return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
+    }
+  }
   // EN multi (regex ok)
   if (/\bthese\b/.test(normalized)) return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'multi_en_these' };
   if (/\bboth\b/.test(normalized)) return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'multi_en_both' };
@@ -1273,6 +1656,20 @@ const detectReferenceIntent = (text) => {
     { id: 'single_ru_eta', phrase: ' эта ' }
   ];
   for (const r of singleRuChecks) {
+    if (norm.includes(r.phrase)) {
+      return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
+    }
+  }
+  // ES single (через includes; без \b)
+  const singleEsChecks = [
+    { id: 'single_es_esta', phrase: ' esta ' },
+    { id: 'single_es_este', phrase: ' este ' },
+    { id: 'single_es_esa', phrase: ' esa ' },
+    { id: 'single_es_ese', phrase: ' ese ' },
+    { id: 'single_es_aquel', phrase: ' aquel ' },
+    { id: 'single_es_aquella', phrase: ' aquella ' }
+  ];
+  for (const r of singleEsChecks) {
     if (norm.includes(r.phrase)) {
       return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
     }
@@ -1299,6 +1696,194 @@ const detectReferenceIntent = (text) => {
 
   return null;
 };
+
+// ====== RMv3 / Sprint 2 / Task 1: Reference Fallback Gate (WHEN to call LLM fallback) ======
+// ВАЖНО:
+// - Не вызывает LLM
+// - Не меняет session
+// - Не пишет в referenceIntent
+// - Не логирует при false
+// - При true: один лог [REF_FALLBACK_GATE] reason=eligible
+const shouldUseReferenceFallback = (session, userInput) => {
+  // A) Reference detector не сработал
+  if (!(session?.referenceIntent == null)) return false;
+
+  // Sprint 2 / Task 10: do NOT call fallback if server is already in clarification/boundary mode
+  if (
+    session?.referenceAmbiguity?.isAmbiguous === true ||
+    session?.clarificationRequired?.isRequired === true ||
+    session?.clarificationBoundaryActive === true
+  ) {
+    return false;
+  }
+
+  // B) Есть активный UI-контекст (server-truth)
+  const hasActiveUiContext =
+    Boolean(session?.currentFocusCard?.cardId) ||
+    session?.singleReferenceBinding?.hasProposal === true ||
+    (Array.isArray(session?.candidateShortlist?.items) && session.candidateShortlist.items.length > 0);
+  if (!hasActiveUiContext) return false;
+
+  // C) Сообщение короткое и указательное
+  if (typeof userInput !== 'string') return false;
+  const raw = userInput;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > 15) return false;
+  // Block any numeric characters (ASCII + Unicode digits)
+  if (/\p{Number}/u.test(trimmed)) return false;
+  if (/(€|\$|\beur\b|\busd\b)/i.test(trimmed)) return false;
+
+  // D) Похоже на ссылку, а не вопрос/описание
+  const normalized = trimmed
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    // Unicode-safe normalization (ES diacritics + punctuation handling)
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+
+  // быстрый отсев: вопросы/описания/фильтры/глаголы
+  if (/[?]/.test(trimmed)) return false;
+  const banned = [
+    // RU verbs / intent
+    /покаж/i, /показат/i, /хочу/i, /интерес/i, /нрав/i, /отправ/i, /пришл/i, /дай/i, /возьм/i, /выбер/i,
+    // RU filters
+    /цен/i, /район/i, /комнат/i, /площад/i, /метр/i, /\bдо\b/i,
+    // EN verbs / intent
+    /\bshow\b/i, /\bwant\b/i, /\blike\b/i, /\bsend\b/i, /\bchoose\b/i, /\btake\b/i,
+    // EN filters / question-ish
+    /\bprice\b/i, /\bdistrict\b/i, /\barea\b/i, /\brooms?\b/i, /\bunder\b/i, /\bup\s*to\b/i,
+    /\bwhat\b/i, /\bwhich\b/i, /\bhow\b/i, /\bwhy\b/i
+  ];
+  if (banned.some((re) => re.test(normalized))) return false;
+
+  const words = normalized.split(' ').filter(Boolean);
+  if (words.length === 0 || words.length > 2) return false;
+
+  const allowedSingle = new Set([
+    'эта', 'эт', 'eto', 'eta',
+    'this', 'that', 'thsi', 'dis',
+    // ES minimal deictics (Sprint 2 / Task 6)
+    'esta', 'este', 'eso', 'esa', 'estas', 'estos', 'ese', 'aquel',
+    'one', 'onee'
+  ]);
+  const allowedFirstForOne = new Set([
+    'this', 'that', 'thsi', 'dis',
+    // ES minimal deictics (Sprint 2 / Task 6)
+    'esta', 'este', 'eso', 'esa', 'estas', 'estos', 'ese', 'aquel'
+  ]);
+  const allowedSecond = new Set(['one', 'onee']);
+
+  let eligible = false;
+  if (words.length === 1) {
+    eligible = allowedSingle.has(words[0]);
+  } else if (words.length === 2) {
+    eligible = allowedFirstForOne.has(words[0]) && allowedSecond.has(words[1]);
+  }
+
+  if (!eligible) return false;
+
+  // Диагностика: логируем только при true
+  const sid = String(session?.sessionId || '').slice(-8) || 'unknown';
+  const safeInput = trimmed.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+  console.log(`[REF_FALLBACK_GATE] sid=${sid} input="${safeInput}" reason=eligible`);
+  return true;
+};
+
+// ====== RMv3 / Sprint 2 / Task 2: LLM reference fallback classifier (classifier only) ======
+// ВАЖНО:
+// - Возвращает только классификацию referenceType + диагностические поля
+// - Не выбирает карточки, не читает UI, не добавляет факты
+// - При любой ошибке/мусоре возвращает безопасный дефолт
+const REF_FALLBACK_CONFIDENCE_THRESHOLD = 0.6;
+async function classifyReferenceIntentFallbackLLM({ openai, text, language }) {
+  const safeDefault = {
+    referenceType: null,
+    normalizedText: null,
+    confidence: 0,
+    reasonTag: 'other'
+  };
+
+  try {
+    if (!text || typeof text !== 'string') return safeDefault;
+    const langHint = typeof language === 'string' && language.trim() ? language.trim().toLowerCase() : null;
+
+    const system = [
+      'You are a strict JSON-only classifier.',
+      'Return ONLY valid JSON. No extra text, no markdown, no code fences.',
+      'Task: classify a short user utterance as a reference intent only.',
+      'You MUST NOT pick any card or infer UI state.',
+      '',
+      'Output schema (exact keys only):',
+      '{',
+      '  "referenceType": "single" | "multi" | "unknown" | null,',
+      '  "normalizedText": string | null,',
+      '  "confidence": number,',
+      '  "reasonTag": "typo" | "keyboard_layout" | "mixed_language" | "other" | null',
+      '}',
+      '',
+      'Rules:',
+      '- If not confident, set referenceType=null and confidence=0.',
+      '- confidence must be between 0 and 1.',
+      '- normalizedText: a cleaned/lowercased version of the input (or null).',
+      '- Keep it minimal and deterministic.'
+    ].join('\n');
+
+    const user = JSON.stringify({
+      text: String(text),
+      language: langHint
+    });
+
+    const completion = await callOpenAIWithRetry(() =>
+      openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        temperature: 0,
+        max_tokens: 160,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user }
+        ]
+      }), 2, 'REF-Fallback-Classifier'
+    );
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw || typeof raw !== 'string') return safeDefault;
+
+    const cleaned = raw.replace(/```json\s*|\s*```/g, '').trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      return safeDefault;
+    }
+
+    const allowedTypes = new Set(['single', 'multi', 'unknown']);
+    const allowedReasons = new Set(['typo', 'keyboard_layout', 'mixed_language', 'other']);
+
+    const referenceType = (parsed && typeof parsed.referenceType === 'string' && allowedTypes.has(parsed.referenceType))
+      ? parsed.referenceType
+      : (parsed?.referenceType === null ? null : null);
+
+    const normalizedText = (parsed && typeof parsed.normalizedText === 'string' && parsed.normalizedText.trim())
+      ? parsed.normalizedText
+      : null;
+
+    const confidence = (parsed && typeof parsed.confidence === 'number' && Number.isFinite(parsed.confidence) && parsed.confidence >= 0 && parsed.confidence <= 1)
+      ? parsed.confidence
+      : 0;
+
+    const reasonTag = (parsed && typeof parsed.reasonTag === 'string' && allowedReasons.has(parsed.reasonTag))
+      ? parsed.reasonTag
+      : (parsed?.reasonTag === null ? null : 'other');
+
+    return { referenceType, normalizedText, confidence, reasonTag };
+  } catch {
+    return safeDefault;
+  }
+}
 
 const extractAssistantAndMeta = (fullText) => {
   try {
@@ -1345,6 +1930,20 @@ const transcribeAndRespond = async (req, res) => {
     if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
       session.debugTrace = { items: [] };
     }
+
+    // 🆕 Sprint 2 / Task 11: per-turn fallback observability summary (local, not stored in session)
+    const refFallbackSummary = {
+      gateChecked: false,
+      gateEligible: false,
+      gateBlockedByBoundary: false,
+      called: false,
+      outputType: null,
+      confidence: 0,
+      threshold: REF_FALLBACK_CONFIDENCE_THRESHOLD,
+      decision: 'not_called',
+      finalEffect: null,
+      clampApplied: false
+    };
 
     let transcription = '';
     let transcriptionTime = 0;
@@ -1412,6 +2011,96 @@ const transcribeAndRespond = async (req, res) => {
     const ambiguousFlag = session.referenceAmbiguity?.isAmbiguous === true;
     const clarificationActive = session.clarificationBoundaryActive === true;
     console.log(`[REF] sid=${shortSid} input=${inputTypeForLog} lang=${session.clientProfile?.language || 'null'} raw="${rawSnippet}" norm="${normalizedForTrace}" intent=${refDetectResult?.type || 'null'} rule=${refDetectResult?.matchRuleId || 'null'} amb=${ambiguousFlag} clar=${clarificationActive} focus=${focusCardId}`);
+
+    // 🆕 Sprint 2 / Task 2: fallback LLM классификатор referenceIntent (server-first merge)
+    // Fallback вызывается только если:
+    // - детектор не сработал (session.referenceIntent === null)
+    // - gate shouldUseReferenceFallback(session, transcription) === true
+    let fallbackAppliedForPipeline = false;
+    let fallbackAppliedReferenceType = null;
+    if (session.referenceIntent == null) {
+      // gate is checked only when referenceIntent is null (same condition as before)
+      refFallbackSummary.gateChecked = true;
+      refFallbackSummary.gateBlockedByBoundary =
+        session?.referenceAmbiguity?.isAmbiguous === true ||
+        session?.clarificationRequired?.isRequired === true ||
+        session?.clarificationBoundaryActive === true;
+
+      const gateEligible = shouldUseReferenceFallback(session, transcription) === true;
+      refFallbackSummary.gateEligible = gateEligible;
+
+      if (gateEligible === true) {
+        const lang = session.clientProfile?.language || null;
+        refFallbackSummary.called = true;
+
+        const out = await classifyReferenceIntentFallbackLLM({
+          openai,
+          text: transcription,
+          language: lang
+        });
+
+        const thr = REF_FALLBACK_CONFIDENCE_THRESHOLD;
+        const referenceType = out?.referenceType ?? null;
+        const confidence = (typeof out?.confidence === 'number' && Number.isFinite(out.confidence) && out.confidence >= 0 && out.confidence <= 1)
+          ? out.confidence
+          : 0;
+        const reasonTag = out?.reasonTag ?? null;
+        const isValidType = referenceType === 'single' || referenceType === 'multi' || referenceType === 'unknown';
+        const isConfident = isValidType && confidence >= thr;
+        const decision = isValidType
+          ? (isConfident ? 'applied' : 'ignored_low_confidence')
+          : 'ignored_invalid_output';
+
+        // summary fields (observability only)
+        refFallbackSummary.outputType = referenceType;
+        refFallbackSummary.confidence = confidence;
+        refFallbackSummary.threshold = thr;
+        refFallbackSummary.decision = decision;
+
+        // server-first merge: применяем только при валидном типе и достаточной уверенности
+        if (decision === 'applied') {
+          session.referenceIntent = {
+            type: referenceType,
+            detectedAt: Date.now(),
+            source: 'fallback_llm'
+          };
+          fallbackAppliedForPipeline = true;
+          fallbackAppliedReferenceType = referenceType;
+        }
+
+        // diagnostics: debugTrace + server log (только когда fallback реально вызван)
+        if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+          session.debugTrace = { items: [] };
+        }
+        session.debugTrace.items.push({
+          type: 'reference_fallback',
+          at: Date.now(),
+          payload: {
+            rawTextSnippet: rawSnippet,
+            normalizedTextSnippet: normalizedForTrace,
+            language: lang,
+            gateEligible: true,
+            decision,
+            threshold: thr,
+            confidence,
+            referenceType,
+            reasonTag: reasonTag ?? null,
+            output: {
+              referenceType,
+              confidence,
+              reasonTag: reasonTag ?? null
+            }
+          }
+        });
+
+        const safeRaw = rawSnippet.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        const safeNorm = normalizedForTrace.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        console.log(`[REF_FALLBACK] sid=${shortSid} lang=${lang || 'null'} raw="${safeRaw}" norm="${safeNorm}" out=${referenceType || 'null'} conf=${confidence} thr=${thr} decision=${decision} reason=${reasonTag || 'null'}`);
+      } else {
+        // gate checked but not eligible -> no classifier call
+        refFallbackSummary.decision = 'not_called';
+      }
+    }
     
     // 🆕 Sprint V: детекция ambiguity для reference (детерминированное правило, без интерпретации)
     if (!session.referenceAmbiguity) {
@@ -1644,6 +2333,71 @@ const transcribeAndRespond = async (req, res) => {
         payload: { cardId: session.choiceConfirmationBoundary.chosenCardId || null }
       });
     }
+
+    // 🆕 Sprint 2 / Task 4: ensure fallback-applied intent enters the same reference pipeline
+    // Логируем только при decision=applied (fallbackAppliedForPipeline=true) и только после того,
+    // как server pipeline (ambiguity/clarification/binding/shortlist/choiceBoundary) уже отработал.
+    if (fallbackAppliedForPipeline === true) {
+      const amb = session.referenceAmbiguity?.isAmbiguous === true;
+      const clarReq = session.clarificationRequired?.isRequired === true;
+      const clarBoundary = session.clarificationBoundaryActive === true;
+      const hasProposalBeforeClamp = session.singleReferenceBinding?.hasProposal === true;
+      const finalEffect = (amb === true || clarReq === true || clarBoundary === true)
+        ? 'clarification'
+        : (hasProposalBeforeClamp === true ? 'binding' : 'clarification');
+
+      // Sprint 2 / Task 7 micro-fix: server-first clamp after fallback pipeline
+      // Если итоговый эффект — clarification, то не оставляем "эффекты выбора" (binding/choice).
+      const clampApplied = finalEffect === 'clarification';
+      if (clampApplied === true) {
+        // Снять proposal (не трогаем остальные поля singleReferenceBinding)
+        if (session.singleReferenceBinding) {
+          session.singleReferenceBinding.hasProposal = false;
+          session.singleReferenceBinding.proposedCardId = null;
+        }
+        // Снять "подтверждение выбора"
+        if (session.explicitChoiceEvent) {
+          session.explicitChoiceEvent.isConfirmed = false;
+          if ('cardId' in session.explicitChoiceEvent) {
+            session.explicitChoiceEvent.cardId = null;
+          }
+        }
+        // Снять boundary выбора
+        if (session.choiceConfirmationBoundary) {
+          session.choiceConfirmationBoundary.active = false;
+          if ('chosenCardId' in session.choiceConfirmationBoundary) {
+            session.choiceConfirmationBoundary.chosenCardId = null;
+          }
+        }
+      }
+
+      // Диагностика: после clamp (чтобы отражать финальное состояние)
+      const hasProposal = session.singleReferenceBinding?.hasProposal === true;
+      const proposedCardId = session.singleReferenceBinding?.proposedCardId || null;
+      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+        session.debugTrace = { items: [] };
+      }
+      session.debugTrace.items.push({
+        type: 'reference_pipeline_after_fallback',
+        at: Date.now(),
+        payload: {
+          decision: 'applied',
+          referenceType: fallbackAppliedReferenceType || null,
+          ambiguous: amb,
+          clarificationRequired: clarReq,
+          clarificationBoundaryActive: clarBoundary,
+          hasProposal,
+          proposedCardId,
+          finalEffect,
+          clampApplied
+        }
+      });
+      console.log(`[REF_FALLBACK_PIPELINE] sid=${shortSid} ref=${fallbackAppliedReferenceType || 'null'} amb=${amb ? 1 : 0} clarReq=${clarReq ? 1 : 0} clarBoundary=${clarBoundary ? 1 : 0} bind=${hasProposal ? 1 : 0} bindCard=${proposedCardId || 'null'} finalEffect=${finalEffect} clamp=${clampApplied ? 1 : 0}`);
+
+      // Sprint 2 / Task 11: summary final outcome after pipeline (observability only)
+      refFallbackSummary.finalEffect = finalEffect;
+      refFallbackSummary.clampApplied = clampApplied === true;
+    }
     
     // 🆕 Sprint III: переход role по событию user_message
     transitionRole(session, 'user_message');
@@ -1836,9 +2590,35 @@ ${factsList.join('\n')}
     const gptStart = Date.now();
     
     // 🔄 Используем retry для GPT API
+    // RMv3 / Sprint 1: transient LLM Context Pack + [CTX] log (infrastructure only)
+    const llmContextPack = buildLlmContextPack(session, sessionId, 'main');
+    logCtx(llmContextPack);
+    const factsMsg = buildLlmFactsSystemMessage(llmContextPack);
+    const guardMsg = buildRmv3GuardrailsSystemMessage();
+    // RMv3 / Sprint 2 / Task 5: expose clarificationMode + diagnostics (only if active)
+    const shapedForDiag = buildShapedFactsPackForLLM(llmContextPack);
+    if (shapedForDiag?.clarificationMode === true) {
+      const reasons = [];
+      if (shapedForDiag?.ref?.ambiguity === true) reasons.push('ambiguity');
+      if (shapedForDiag?.ref?.clarificationRequired === true) reasons.push('clarificationRequired');
+      if (shapedForDiag?.ref?.clarificationBoundaryActive === true) reasons.push('clarificationBoundary');
+      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+        session.debugTrace = { items: [] };
+      }
+      session.debugTrace.items.push({
+        type: 'clarification_mode_exposed',
+        at: Date.now(),
+        payload: {
+          active: true,
+          reasons
+        }
+      });
+      const sid = String(sessionId || '').slice(-8) || 'unknown';
+      console.log(`[CLARIFICATION_MODE] sid=${sid} reasons=${reasons.join(',')}`);
+    }
     const completion = await callOpenAIWithRetry(() => 
       openai.chat.completions.create({
-        messages,
+        messages: [factsMsg, guardMsg, ...messages],
         model: 'gpt-4o-mini',
         temperature: 0.5,
         stream: false
@@ -2039,6 +2819,42 @@ ${factsList.join('\n')}
     }).catch(err => {
       console.error('❌ Failed to append assistant message to session log:', err);
     });
+
+    // 🆕 Sprint 2 / Task 11: one summary per user turn (only if fallback was considered)
+    if (refFallbackSummary.gateChecked === true || refFallbackSummary.called === true) {
+      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
+        session.debugTrace = { items: [] };
+      }
+      session.debugTrace.items.push({
+        type: 'reference_fallback_summary',
+        at: Date.now(),
+        payload: {
+          gateChecked: refFallbackSummary.gateChecked === true,
+          gateEligible: refFallbackSummary.gateEligible === true,
+          gateBlockedByBoundary: refFallbackSummary.gateBlockedByBoundary === true,
+          called: refFallbackSummary.called === true,
+          outputType: refFallbackSummary.outputType ?? null,
+          confidence: typeof refFallbackSummary.confidence === 'number' ? refFallbackSummary.confidence : 0,
+          threshold: typeof refFallbackSummary.threshold === 'number' ? refFallbackSummary.threshold : REF_FALLBACK_CONFIDENCE_THRESHOLD,
+          decision: refFallbackSummary.decision,
+          finalEffect: refFallbackSummary.finalEffect ?? null,
+          clampApplied: refFallbackSummary.clampApplied === true
+        }
+      });
+      console.log(
+        `[REF_FALLBACK_SUMMARY] sid=${shortSid}` +
+        ` gateChecked=${refFallbackSummary.gateChecked ? 1 : 0}` +
+        ` eligible=${refFallbackSummary.gateEligible ? 1 : 0}` +
+        ` blockedByBoundary=${refFallbackSummary.gateBlockedByBoundary ? 1 : 0}` +
+        ` called=${refFallbackSummary.called ? 1 : 0}` +
+        ` out=${refFallbackSummary.outputType || 'null'}` +
+        ` conf=${typeof refFallbackSummary.confidence === 'number' ? refFallbackSummary.confidence : 0}` +
+        ` thr=${typeof refFallbackSummary.threshold === 'number' ? refFallbackSummary.threshold : REF_FALLBACK_CONFIDENCE_THRESHOLD}` +
+        ` decision=${refFallbackSummary.decision}` +
+        ` finalEffect=${refFallbackSummary.finalEffect || 'null'}` +
+        ` clamp=${refFallbackSummary.clampApplied ? 1 : 0}`
+      );
+    }
 
     res.json({
       response: botResponse,
@@ -2272,7 +3088,8 @@ export {
   getStats,
   handleInteraction,
   triggerHandoff,
-  triggerCompletion
+  triggerCompletion,
+  shouldUseReferenceFallback
 };
 
 // ---------- Взаимодействия (like / next) ----------
