@@ -20,11 +20,58 @@ const DEPLOY_TAG_SHORT = (() => {
   if (t.length <= 8) return t;
   return t.slice(-8);
 })();
+const getDeployShortOrNull = () => (DEPLOY_TAG_FULL && DEPLOY_TAG_FULL !== 'unknown' ? DEPLOY_TAG_SHORT : null);
 let BUILD_LOGGED = false;
 const logBuildOnce = () => {
   if (BUILD_LOGGED) return;
   BUILD_LOGGED = true;
   console.log(`[BUILD] deploy=${DEPLOY_TAG_FULL}`);
+};
+
+// ====== Client-visible debug gate (Safari-friendly) ======
+const isClientDebugEnabled = (req) => {
+  const envOn = String(process.env.VW_DEBUG_CLIENT || '').trim() === '1';
+  const headerOn = String(req?.headers?.['x-vw-debug'] || '').trim() === '1';
+  return envOn && headerOn;
+};
+
+const clip = (str, n = 80) => {
+  if (str === null || str === undefined) return '';
+  const s = String(str);
+  if (s.length <= n) return s;
+  return s.slice(0, n);
+};
+
+const normalizeForClientDebug = (text) => {
+  if (!text || typeof text !== 'string') return '';
+  return String(text)
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const extractSpokeCardId = (text) => {
+  if (!text || typeof text !== 'string') return { cardId: null, confidence: 'none' };
+  const matches = String(text).match(/\bA\d{3}\b/g) || [];
+  const uniq = Array.from(new Set(matches));
+  if (uniq.length === 1) return { cardId: uniq[0], confidence: 'exact' };
+  return { cardId: null, confidence: 'none' };
+};
+
+const getLatestMatchRuleId = (session) => {
+  const items = session?.debugTrace?.items;
+  if (!Array.isArray(items) || items.length === 0) return null;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it && it.type === 'reference_detected') {
+      return it?.payload?.matchRuleId || null;
+    }
+  }
+  return null;
 };
 
 // 🆕 Sprint II / Block A: Allowed Facts Schema — явный список разрешённых фактов для AI
@@ -1931,6 +1978,7 @@ const transcribeAndRespond = async (req, res) => {
     sessionId = req.body.sessionId || generateSessionId();
     const session = getOrCreateSession(sessionId);
     const inputTypeForLog = req.file ? 'audio' : 'text'; // для логирования (английский)
+    const clientDebugEnabled = isClientDebugEnabled(req);
     // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — defensive guard
     if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
       session.debugTrace = { items: [] };
@@ -2023,6 +2071,8 @@ const transcribeAndRespond = async (req, res) => {
     // - gate shouldUseReferenceFallback(session, transcription) === true
     let fallbackAppliedForPipeline = false;
     let fallbackAppliedReferenceType = null;
+    // Cache LLM context pack used for [CTX] (so client debug facts match that turn)
+    let llmContextPackForMainCall = null;
     if (session.referenceIntent == null) {
       // gate is checked only when referenceIntent is null (same condition as before)
       refFallbackSummary.gateChecked = true;
@@ -2596,12 +2646,12 @@ ${factsList.join('\n')}
     
     // 🔄 Используем retry для GPT API
     // RMv3 / Sprint 1: transient LLM Context Pack + [CTX] log (infrastructure only)
-    const llmContextPack = buildLlmContextPack(session, sessionId, 'main');
-    logCtx(llmContextPack);
-    const factsMsg = buildLlmFactsSystemMessage(llmContextPack);
+    llmContextPackForMainCall = buildLlmContextPack(session, sessionId, 'main');
+    logCtx(llmContextPackForMainCall);
+    const factsMsg = buildLlmFactsSystemMessage(llmContextPackForMainCall);
     const guardMsg = buildRmv3GuardrailsSystemMessage();
     // RMv3 / Sprint 2 / Task 5: expose clarificationMode + diagnostics (only if active)
-    const shapedForDiag = buildShapedFactsPackForLLM(llmContextPack);
+    const shapedForDiag = buildShapedFactsPackForLLM(llmContextPackForMainCall);
     if (shapedForDiag?.clarificationMode === true) {
       const reasons = [];
       if (shapedForDiag?.ref?.ambiguity === true) reasons.push('ambiguity');
@@ -2635,6 +2685,16 @@ ${factsList.join('\n')}
     const fullModelText = completion.choices[0].message.content.trim();
     const { assistantText, meta } = extractAssistantAndMeta(fullModelText);
     let botResponse = assistantText || fullModelText;
+
+    // Patch (outside roadmap): client-visible bind vs spoke measurement (Safari DevTools)
+    const spoke = extractSpokeCardId(botResponse);
+    const bindHas = session.singleReferenceBinding?.hasProposal === true;
+    const bindCardId = session.singleReferenceBinding?.proposedCardId || null;
+    const mismatchBindVsSpoke = (bindHas && spoke.cardId && spoke.cardId !== bindCardId) ? 1 : 0;
+    if (mismatchBindVsSpoke === 1) {
+      const rule = getLatestMatchRuleId(session);
+      console.log(`[MISMATCH] sid=${String(sessionId || '').slice(-8) || 'unknown'} bind=${bindCardId || 'null'} spoke=${spoke.cardId || 'null'} focus=${session.currentFocusCard?.cardId || 'null'} lastShown=${session.lastShown?.cardId || 'null'} rule=${rule || 'null'}`);
+    }
 
     // META обработка: clientProfileDelta + stage
     try {
@@ -2861,7 +2921,7 @@ ${factsList.join('\n')}
       );
     }
 
-    res.json({
+    const responsePayload = {
       response: botResponse,
       transcription,
       sessionId,
@@ -2884,7 +2944,56 @@ ${factsList.join('\n')}
         gpt: gptTime,
         total: totalTime
       }
-    });
+    };
+
+    // Patch (outside roadmap): Browser-visible compact debug (only under exact gate)
+    if (clientDebugEnabled === true) {
+      const matchRuleId = getLatestMatchRuleId(session);
+      const pack = llmContextPackForMainCall || buildLlmContextPack(session, sessionId, 'main');
+      const factsIds = Array.isArray(pack?.facts?.factsCardIds) ? pack.facts.factsCardIds.filter(Boolean) : [];
+      const allowedFactsSnapshot = pack?.facts?.allowedFactsSnapshot ?? null;
+      const allowedFacts = (allowedFactsSnapshot && typeof allowedFactsSnapshot === 'object' && Object.keys(allowedFactsSnapshot).length > 0) ? 1 : 0;
+
+      responsePayload.debug = {
+        deploy: getDeployShortOrNull(),
+        sid: String(sessionId || '').slice(-8) || 'unknown',
+        ts: Date.now(),
+        input: {
+          type: inputTypeForLog,
+          raw: clip(transcription, 80),
+          norm: clip(normalizeForClientDebug(transcription), 80)
+        },
+        ref: {
+          type: session.referenceIntent?.type ?? null,
+          rule: matchRuleId
+        },
+        ui: {
+          focus: session.currentFocusCard?.cardId || null,
+          lastShown: session.lastShown?.cardId || null,
+          lastFocus: session.lastFocusSnapshot?.cardId || null,
+          slider: session.sliderContext?.active === true ? 1 : 0
+        },
+        bind: {
+          has: bindHas ? 1 : 0,
+          cardId: bindCardId,
+          basis: session.singleReferenceBinding?.basis ?? null
+        },
+        facts: {
+          ids: factsIds,
+          allowed: allowedFacts,
+          count: factsIds.length
+        },
+        spoke: {
+          cardId: spoke.cardId,
+          confidence: spoke.confidence
+        },
+        mismatch: {
+          bindVsSpoke: mismatchBindVsSpoke
+        }
+      };
+    }
+
+    res.json(responsePayload);
 
   } catch (error) {
     console.error(`❌ Ошибка [${sessionId?.slice(-8) || 'unknown'}]:`, error.message);
@@ -3104,6 +3213,24 @@ async function handleInteraction(req, res) {
     if (!action || !sessionId) return res.status(400).json({ error: 'action и sessionId обязательны' });
     const session = sessions.get(sessionId);
     if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
+    const clientDebugEnabled = isClientDebugEnabled(req);
+    const withDebug = (payload) => {
+      if (clientDebugEnabled !== true) return payload;
+      return {
+        ...payload,
+        debug: {
+          deploy: getDeployShortOrNull(),
+          sid: String(sessionId || '').slice(-8) || 'unknown',
+          ts: Date.now(),
+          action: String(action),
+          ui: {
+            focus: session.currentFocusCard?.cardId || null,
+            lastShown: session.lastShown?.cardId || null,
+            slider: session.sliderContext?.active === true ? 1 : 0
+          }
+        }
+      };
+    };
     // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
     if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
       session.debugTrace = { items: [] };
@@ -3150,7 +3277,7 @@ async function handleInteraction(req, res) {
       const card = formatCardForClient(req, p);
       const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
       const assistantMessage = generateCardComment(lang, p);
-      return res.json({ ok: true, assistantMessage, card, role: session.role }); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'next') {
@@ -3164,7 +3291,7 @@ async function handleInteraction(req, res) {
         const card = formatCardForClient(req, p);
         const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
         const assistantMessage = generateCardComment(lang, p);
-        return res.json({ ok: true, assistantMessage, card, role: session.role }); // 🆕 Sprint I: server-side role
+        return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
       }
       // Если фронт прислал текущий variantId, делаем шаг относительно него
       let idx = list.indexOf(variantId);
@@ -3201,7 +3328,7 @@ async function handleInteraction(req, res) {
       const card = formatCardForClient(req, p);
       const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
       const assistantMessage = generateCardComment(lang, p);
-      return res.json({ ok: true, assistantMessage, card, role: session.role }); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'like') {
@@ -3210,7 +3337,7 @@ async function handleInteraction(req, res) {
       if (variantId) session.liked.push(variantId);
       const count = session.liked.length;
       const msg = `Супер, сохранил! Могу предложить записаться на просмотр или показать ещё варианты. Что выберем? (понравилось: ${count})`;
-      return res.json({ ok: true, assistantMessage: msg, role: session.role }); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage: msg, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // 🆕 Sprint I: подтверждение факта рендера карточки в UI
@@ -3264,7 +3391,7 @@ async function handleInteraction(req, res) {
       }
       
       console.log(`✅ [Sprint I] Карточка ${variantId} зафиксирована как показанная в UI (сессия ${sessionId.slice(-8)})`);
-      return res.json({ ok: true, role: session.role }); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // 🆕 Sprint IV: обработка события ui_slider_started для фиксации активности slider
@@ -3275,7 +3402,7 @@ async function handleInteraction(req, res) {
       session.sliderContext.active = true;
       session.sliderContext.updatedAt = Date.now();
       console.log(`📱 [Sprint IV] Slider стал активным (сессия ${sessionId.slice(-8)})`);
-      return res.json({ ok: true, role: session.role });
+      return res.json(withDebug({ ok: true, role: session.role }));
     }
 
     // 🆕 Sprint III: обработка события ui_slider_ended для перехода role
@@ -3292,7 +3419,7 @@ async function handleInteraction(req, res) {
       session.sliderContext.updatedAt = Date.now();
       console.log(`📱 [Sprint IV] Slider стал неактивным (сессия ${sessionId.slice(-8)})`);
       
-      return res.json({ ok: true, role: session.role }); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // 🆕 Sprint IV: обработка события ui_focus_changed для фиксации текущей карточки в фокусе
@@ -3319,7 +3446,7 @@ async function handleInteraction(req, res) {
       };
       
       console.log(`🎯 [Sprint IV] Focus изменён на карточку ${trimmedCardId} (сессия ${sessionId.slice(-8)})`);
-      return res.json({ ok: true, role: session.role });
+      return res.json(withDebug({ ok: true, role: session.role }));
     }
 
     // 🆕 Sprint VII / Task #1: Unknown UI Action Capture (diagnostics only)
@@ -3333,7 +3460,7 @@ async function handleInteraction(req, res) {
       payload: req.body ? { ...req.body } : null,
       detectedAt: Date.now()
     });
-    return res.json({ ok: true, role: session.role });
+    return res.json(withDebug({ ok: true, role: session.role }));
   } catch (e) {
     console.error('interaction error:', e);
     res.status(500).json({ error: 'internal' });
