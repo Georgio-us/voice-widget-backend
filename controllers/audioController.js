@@ -1647,12 +1647,17 @@ const detectReferenceIntent = (text) => {
   const singleRuChecks = [
     { id: 'single_ru_vot_eta', phrase: ' вот эта ' },
     { id: 'single_ru_vot_eto', phrase: ' вот это ' },
+    // 🆕 Patch (outside Roadmap): RU accusative pointer forms ("эту / про эту / вот эту")
+    // ВАЖНО: порядок важен — более специфичные формы должны матчиться раньше, чем "эту"
+    { id: 'single_ru_vot_etu', phrase: ' вот эту ' },
+    { id: 'single_ru_pro_etu', phrase: ' про эту ' },
     { id: 'single_ru_i_eta', phrase: ' и эта ' },
     { id: 'single_ru_eta_tozhe', phrase: ' эта тоже ' },
     { id: 'single_ru_eta_norm', phrase: ' эта норм ' },
     { id: 'single_ru_eta_kvartira', phrase: ' эта квартира ' },
     { id: 'single_ru_etot_variant', phrase: ' этот вариант ' },
     { id: 'single_ru_eto', phrase: ' это ' },
+    { id: 'single_ru_etu', phrase: ' эту ' },
     { id: 'single_ru_eta', phrase: ' эта ' }
   ];
   for (const r of singleRuChecks) {
