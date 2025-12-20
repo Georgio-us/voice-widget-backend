@@ -1244,7 +1244,8 @@ const buildLlmContextPack = (session, sessionId, call) => {
     clarificationBoundaryActive: session?.clarificationBoundaryActive === true,
     singleReferenceBinding: {
       hasProposal: session?.singleReferenceBinding?.hasProposal === true,
-      proposedCardId: session?.singleReferenceBinding?.proposedCardId ?? null
+      proposedCardId: session?.singleReferenceBinding?.proposedCardId ?? null,
+      basis: session?.singleReferenceBinding?.basis ?? null
     }
   };
 
@@ -1423,7 +1424,8 @@ const buildShapedFactsPackForLLM = (pack) => {
     clarificationBoundaryActive: pack?.referencePipeline?.clarificationBoundaryActive === true,
     binding: {
       hasProposal: pack?.referencePipeline?.singleReferenceBinding?.hasProposal === true,
-      proposedCardId: pack?.referencePipeline?.singleReferenceBinding?.proposedCardId ?? null
+      proposedCardId: pack?.referencePipeline?.singleReferenceBinding?.proposedCardId ?? null,
+      basis: pack?.referencePipeline?.singleReferenceBinding?.basis ?? null
     }
   };
 
@@ -1496,6 +1498,49 @@ const buildShapedFactsPackForLLM = (pack) => {
       cardFactsById
     }
   };
+
+  // ---------- Fixed Sprint: deterministic clamp (uiIndex binding) ----------
+  // When binding is deterministically resolved by UI anchor, LLM facts must contain ONLY the bound card.
+  // Clamp conditions (strict):
+  // - hasProposal === true
+  // - proposedCardId is non-empty
+  // - basis === 'uiIndex'
+  // - clarificationMode is NOT active
+  const shouldClampUiIndexFacts =
+    shaped?.ref?.binding?.hasProposal === true &&
+    typeof shaped?.ref?.binding?.proposedCardId === 'string' &&
+    shaped.ref.binding.proposedCardId.trim().length > 0 &&
+    shaped?.ref?.binding?.basis === 'uiIndex' &&
+    shaped?.clarificationMode !== true;
+
+  if (shouldClampUiIndexFacts) {
+    const finalCardId = shaped.ref.binding.proposedCardId;
+    const onlyId = finalCardId.trim();
+
+    // binding marker (debug visibility)
+    shaped.facts.binding = { strategy: 'uiIndex', finalCardId: onlyId };
+
+    // factsCardIds -> ONLY [proposedCardId]
+    shaped.facts.factsCardIds = onlyId ? [onlyId] : [];
+
+    // cardFactsById -> ONLY bound card
+    const onlyFacts = {};
+    if (onlyId) {
+      const existing = shaped?.facts?.cardFactsById && typeof shaped.facts.cardFactsById === 'object'
+        ? shaped.facts.cardFactsById[String(onlyId)]
+        : null;
+      onlyFacts[String(onlyId)] = existing ?? null;
+    }
+    shaped.facts.cardFactsById = onlyFacts;
+
+    // allowedFactsSnapshot -> ONLY bound card (or null)
+    const allowed = (rawAllowed && typeof rawAllowed === 'object') ? rawAllowed : null;
+    const allowedCardId = (allowed && typeof allowed.cardId === 'string' && allowed.cardId.trim().length > 0) ? allowed.cardId.trim() : null;
+    const clampedAllowed = (onlyId && allowedCardId === onlyId) ? allowed : null;
+    shaped.facts.allowedFactsSnapshot = clampedAllowed;
+    shaped.facts.allowedFactsKeys = clampedAllowed ? Object.keys(clampedAllowed).slice(0, 20) : [];
+    shaped.facts.allowedFactsCount = clampedAllowed ? Object.keys(clampedAllowed).length : 0;
+  }
 
   shaped.facts.cardSummaryLines = buildCardSummaryLines(shaped);
 
@@ -2215,6 +2260,39 @@ const transcribeAndRespond = async (req, res) => {
       session.clarificationRequired.detectedAt = null;
     }
     
+    // ---------- Fixed Sprint: deterministic UI-index binding helper ----------
+    // (sliderSetId, focusedUiIndex) -> cardId
+    const resolveCardIdByUiIndex = (s) => {
+      const sliderSetId = (typeof s?.sliderSet?.sliderSetId === 'string' && s.sliderSet.sliderSetId.trim().length > 0)
+        ? s.sliderSet.sliderSetId.trim()
+        : null;
+      const focusSliderSetId = (typeof s?.uiFocus?.sliderSetId === 'string' && s.uiFocus.sliderSetId.trim().length > 0)
+        ? s.uiFocus.sliderSetId.trim()
+        : null;
+      const focusedUiIndex = Number.isInteger(s?.uiFocus?.focusedUiIndex) ? s.uiFocus.focusedUiIndex : null;
+
+      if (!sliderSetId || !focusSliderSetId) {
+        return { ok: false, cardId: null, sliderSetId: sliderSetId || focusSliderSetId || null, focusedUiIndex: focusedUiIndex ?? null };
+      }
+      if (sliderSetId !== focusSliderSetId) {
+        return { ok: false, cardId: null, sliderSetId, focusedUiIndex: focusedUiIndex ?? null };
+      }
+      if (!Number.isInteger(focusedUiIndex) || focusedUiIndex < 1 || focusedUiIndex > 12) {
+        return { ok: false, cardId: null, sliderSetId, focusedUiIndex: focusedUiIndex ?? null };
+      }
+
+      const items = Array.isArray(s?.sliderSet?.items) ? s.sliderSet.items : [];
+      const found = items.find(it =>
+        it &&
+        Number.isInteger(it.uiIndex) &&
+        it.uiIndex === focusedUiIndex &&
+        typeof it.cardId === 'string' &&
+        it.cardId.trim().length > 0
+      );
+      const cardId = found ? found.cardId.trim() : null;
+      return { ok: Boolean(cardId), cardId, sliderSetId, focusedUiIndex };
+    };
+
     // 🆕 Sprint V: single-reference binding proposal (предложение cardId из currentFocusCard, только если условия выполнены)
     if (!session.singleReferenceBinding) {
       session.singleReferenceBinding = {
@@ -2222,23 +2300,97 @@ const transcribeAndRespond = async (req, res) => {
         proposedCardId: null,
         source: 'server_contract',
         detectedAt: null,
-        basis: null
+        basis: null,
+        legacyPathUsed: null
       };
     }
     
-    // Правило: proposal только если single reference, не требуется clarification, и есть currentFocusCard
-    if (session.referenceIntent?.type === 'single' && 
-        session.clarificationRequired.isRequired === false &&
-        session.currentFocusCard?.cardId) {
-      session.singleReferenceBinding.hasProposal = true;
-      session.singleReferenceBinding.proposedCardId = session.currentFocusCard.cardId;
-      session.singleReferenceBinding.basis = 'currentFocusCard';
-      session.singleReferenceBinding.detectedAt = Date.now();
+    // Fixed Sprint priority:
+    // If referenceIntent=single and no clarification/boundary mode → bind by (sliderSetId, focusedUiIndex) when available.
+    // Else fallback to legacy focus (currentFocusCard). lastShown НЕ участвует в выборе.
+    const amb = session?.referenceAmbiguity?.isAmbiguous === true;
+    const clarReq = session?.clarificationRequired?.isRequired === true;
+    const clarBoundary = session?.clarificationBoundaryActive === true;
+    const clarificationMode = amb || clarReq || clarBoundary;
+
+    if (session.referenceIntent?.type === 'single' && clarificationMode === false) {
+      const legacyFocus = session.currentFocusCard?.cardId ?? null;
+      const legacyLastShown = session.lastShown?.cardId ?? null;
+      const ui = resolveCardIdByUiIndex(session);
+
+      if (ui.ok === true && ui.cardId) {
+        session.singleReferenceBinding.hasProposal = true;
+        session.singleReferenceBinding.proposedCardId = ui.cardId;
+        session.singleReferenceBinding.basis = 'uiIndex';
+        session.singleReferenceBinding.legacyPathUsed = false;
+        session.singleReferenceBinding.detectedAt = Date.now();
+
+        console.log(
+          `[BIND_UI] sid=${shortSid}` +
+          ` strategy=uiIndex` +
+          ` sliderSetId=${ui.sliderSetId || 'null'}` +
+          ` uiIndex=${ui.focusedUiIndex ?? 'null'}` +
+          ` cardId=${ui.cardId}` +
+          ` legacyFocus=${legacyFocus || 'null'}` +
+          ` legacyLastShown=${legacyLastShown || 'null'}`
+        );
+        // optional debugTrace event
+        if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) session.debugTrace = { items: [] };
+        session.debugTrace.items.push({
+          type: 'binding_strategy',
+          at: Date.now(),
+          payload: {
+            strategy: 'uiIndex',
+            sliderSetId: ui.sliderSetId,
+            focusedUiIndex: ui.focusedUiIndex,
+            cardIdByUiIndex: ui.cardId,
+            legacyFocus,
+            legacyLastShown,
+            legacyPathUsed: false
+          }
+        });
+      } else if (session.currentFocusCard?.cardId) {
+        session.singleReferenceBinding.hasProposal = true;
+        session.singleReferenceBinding.proposedCardId = session.currentFocusCard.cardId;
+        session.singleReferenceBinding.basis = 'currentFocusCard';
+        session.singleReferenceBinding.legacyPathUsed = true;
+        session.singleReferenceBinding.detectedAt = Date.now();
+
+        console.log(
+          `[BIND_UI] sid=${shortSid}` +
+          ` strategy=legacy` +
+          ` legacyPathUsed=1` +
+          ` legacyFocus=${legacyFocus || 'null'}` +
+          ` legacyLastShown=${legacyLastShown || 'null'}`
+        );
+        if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) session.debugTrace = { items: [] };
+        session.debugTrace.items.push({
+          type: 'binding_strategy',
+          at: Date.now(),
+          payload: {
+            strategy: 'legacy',
+            sliderSetId: ui.sliderSetId ?? null,
+            focusedUiIndex: ui.focusedUiIndex ?? null,
+            cardIdByUiIndex: ui.cardId ?? null,
+            legacyFocus,
+            legacyLastShown,
+            legacyPathUsed: true
+          }
+        });
+      } else {
+        // single reference but no usable binding source -> proposal отсутствует
+        session.singleReferenceBinding.hasProposal = false;
+        session.singleReferenceBinding.proposedCardId = null;
+        session.singleReferenceBinding.basis = null;
+        session.singleReferenceBinding.legacyPathUsed = null;
+        session.singleReferenceBinding.detectedAt = null;
+      }
     } else {
-      // Условия не выполнены → proposal отсутствует
+      // Not single reference or clarification required → proposal отсутствует
       session.singleReferenceBinding.hasProposal = false;
       session.singleReferenceBinding.proposedCardId = null;
       session.singleReferenceBinding.basis = null;
+      session.singleReferenceBinding.legacyPathUsed = null;
       session.singleReferenceBinding.detectedAt = null;
     }
     
@@ -3109,6 +3261,9 @@ const getSessionInfo = (req, res) => {
     currentFocusCard: session.currentFocusCard || { cardId: null, updatedAt: null },
     lastShown: session.lastShown || { cardId: null, updatedAt: null },
     lastFocusSnapshot: session.lastFocusSnapshot || null,
+    // 🆕 Fixed Sprint: UI Anchors (deterministic binding inputs)
+    sliderSet: session.sliderSet || null,
+    uiFocus: session.uiFocus || null,
     // 🆕 Sprint V: reference and ambiguity states (для валидации/debug)
     referenceIntent: session.referenceIntent || null,
     referenceAmbiguity: session.referenceAmbiguity || { isAmbiguous: false, reason: null, detectedAt: null, source: 'server_contract' },
@@ -3210,6 +3365,23 @@ async function handleInteraction(req, res) {
     if (!action || !sessionId) return res.status(400).json({ error: 'action и sessionId обязательны' });
     const session = sessions.get(sessionId);
     if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
+    const shortSid = String(sessionId || '').slice(-8) || 'unknown';
+    const logUiAnchor = (payload = {}) => {
+      const a = payload.action || action;
+      if (a !== 'ui_slider_set_started' && a !== 'ui_slider_item_upsert' && a !== 'ui_slider_focus_changed') return;
+      const sliderSetId = payload.sliderSetId ?? req.body?.sliderSetId ?? null;
+      const uiIndex = Number.isInteger(payload.uiIndex) ? payload.uiIndex : (Number.isInteger(req.body?.uiIndex) ? req.body.uiIndex : null);
+      const focusedUiIndex = Number.isInteger(payload.focusedUiIndex) ? payload.focusedUiIndex : (Number.isInteger(req.body?.focusedUiIndex) ? req.body.focusedUiIndex : null);
+      const cardId = payload.cardId ?? req.body?.cardId ?? null;
+      console.log(
+        `[UI_ANCHOR] sid=${shortSid}` +
+        ` action=${a}` +
+        ` sliderSetId=${sliderSetId || 'null'}` +
+        ` uiIndex=${uiIndex ?? 'null'}` +
+        ` focusedUiIndex=${focusedUiIndex ?? 'null'}` +
+        ` cardId=${cardId || 'null'}`
+      );
+    };
     const withDebug = (payload) => {
       return {
         ...payload,
@@ -3273,6 +3445,78 @@ async function handleInteraction(req, res) {
       const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
       const assistantMessage = generateCardComment(lang, p);
       return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
+    }
+
+    // ---------- Fixed Sprint: UI Anchors (store sliderSet + uiFocus) ----------
+    if (action === 'ui_slider_set_started') {
+      const sliderSetIdRaw = req.body?.sliderSetId;
+      const sliderSetId = (typeof sliderSetIdRaw === 'string' && sliderSetIdRaw.trim().length > 0) ? sliderSetIdRaw.trim() : null;
+      logUiAnchor({ action, sliderSetId });
+      if (!sliderSetId) {
+        return res.json(withDebug({ ok: true, role: session.role }));
+      }
+      session.sliderSet = {
+        sliderSetId,
+        items: [],
+        createdAt: Date.now()
+      };
+      // сбрасываем uiFocus при старте нового набора (чтобы не было кросс-набора)
+      session.uiFocus = null;
+      return res.json(withDebug({ ok: true, role: session.role }));
+    }
+
+    if (action === 'ui_slider_item_upsert') {
+      const sliderSetIdRaw = req.body?.sliderSetId;
+      const sliderSetId = (typeof sliderSetIdRaw === 'string' && sliderSetIdRaw.trim().length > 0) ? sliderSetIdRaw.trim() : null;
+      const uiIndexRaw = req.body?.uiIndex;
+      const uiIndex = Number.isInteger(uiIndexRaw) ? uiIndexRaw : (Number.isFinite(Number(uiIndexRaw)) ? Number(uiIndexRaw) : null);
+      const cardIdRaw = req.body?.cardId;
+      const cardId = (typeof cardIdRaw === 'string' && cardIdRaw.trim().length > 0) ? cardIdRaw.trim() : null;
+      logUiAnchor({ action, sliderSetId, uiIndex: Number.isInteger(uiIndex) ? uiIndex : null, cardId });
+
+      if (!sliderSetId || !Number.isInteger(uiIndex) || uiIndex < 1 || uiIndex > 12 || !cardId) {
+        return res.json(withDebug({ ok: true, role: session.role }));
+      }
+
+      // tolerant: если sliderSet отсутствует/не совпадает — создаём новый на лету
+      if (!session.sliderSet || session.sliderSet.sliderSetId !== sliderSetId) {
+        session.sliderSet = { sliderSetId, items: [], createdAt: Date.now() };
+        // uiFocus не сбрасываем здесь принудительно: focus может прийти раньше/позже (tolerant режим)
+      }
+
+      if (!Array.isArray(session.sliderSet.items)) session.sliderSet.items = [];
+      const items = session.sliderSet.items;
+      const existingIdx = items.findIndex(x => x && x.uiIndex === uiIndex);
+      if (existingIdx >= 0) {
+        items[existingIdx] = { uiIndex, cardId };
+      } else {
+        if (items.length >= 12) {
+          // max 12 items — игнорируем новый индекс
+          return res.json(withDebug({ ok: true, role: session.role }));
+        }
+        items.push({ uiIndex, cardId });
+      }
+      return res.json(withDebug({ ok: true, role: session.role }));
+    }
+
+    if (action === 'ui_slider_focus_changed') {
+      const sliderSetIdRaw = req.body?.sliderSetId;
+      const sliderSetId = (typeof sliderSetIdRaw === 'string' && sliderSetIdRaw.trim().length > 0) ? sliderSetIdRaw.trim() : null;
+      const focusedRaw = req.body?.focusedUiIndex;
+      const focusedUiIndex = Number.isInteger(focusedRaw) ? focusedRaw : (Number.isFinite(Number(focusedRaw)) ? Number(focusedRaw) : null);
+      logUiAnchor({ action, sliderSetId, focusedUiIndex: Number.isInteger(focusedUiIndex) ? focusedUiIndex : null });
+
+      if (!sliderSetId || !Number.isInteger(focusedUiIndex) || focusedUiIndex < 1 || focusedUiIndex > 12) {
+        return res.json(withDebug({ ok: true, role: session.role }));
+      }
+
+      // tolerant: сохраняем focus даже если sliderSet ещё не пришёл
+      session.uiFocus = {
+        sliderSetId,
+        focusedUiIndex,
+        updatedAt: Date.now()
+      };
+      return res.json(withDebug({ ok: true, role: session.role }));
     }
 
     if (action === 'next') {
