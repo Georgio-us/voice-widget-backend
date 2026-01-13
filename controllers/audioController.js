@@ -191,6 +191,18 @@ const getOrCreateSession = (sessionId) => {
       // 🆕 Sprint III: handoff как системный механизм (boundary), не роль
       handoffDone: false,
       handoffAt: null,
+      // RMv3 / Sprint 2 / Task 2.1: handoff как server-fact "активирован/показан" (UI state driven, server-first)
+      // ВАЖНО:
+      // - не роль/стадия
+      // - не влияет на LLM напрямую в этой задаче
+      // - не трогает lead-flow
+      handoff: {
+        active: false,
+        shownAt: null,
+        cardId: null,
+        canceled: false,
+        canceledAt: null
+      },
       // 🆕 Sprint III: lead snapshot (read-only после создания при handoff)
       leadSnapshot: null,
       leadSnapshotAt: null,
@@ -214,6 +226,11 @@ const getOrCreateSession = (sessionId) => {
       lastShown: {
         cardId: null,
         updatedAt: null
+      },
+      // RMv3 / Sprint 1 / Task 1: факт выбора карточки пользователем (UI "Выбрать") — server-first
+      selectedCard: {
+        cardId: null,
+        selectedAt: null
       },
       // 🆕 Sprint IV: last focus snapshot (последний подтверждённый фокус, фиксируется только при ui_focus_changed)
       lastFocusSnapshot: null,
@@ -322,6 +339,23 @@ const detectCardIntent = (text = '') => {
     || /подбери(те)?|подобрать|вариант(ы)?|есть\s+вариант/i.test(t)
     || /квартир(а|ы|у)\s+(есть|бывают)/i.test(t);
   return { show: isShow, variants: isVariants };
+};
+
+// RMv3 / Sprint 4 / Task 4.4: demo-only "словесный выбор объекта"
+// ВАЖНО:
+// - максимально простой regex/keyword match (без NLP)
+// - НЕ "покажи" (это отдельный show-intent)
+// - триггер работает только если есть lastShown/currentFocusCard (никаких догадок)
+const detectVerbalSelectIntent = (text = '') => {
+  const t = String(text || '').toLowerCase().trim();
+  if (!t) return false;
+  // Предохранитель: "покажи" — это show-intent, не выбор
+  if (/(покажи(те)?|показать|посмотреть)/i.test(t)) return false;
+  // Сигнал "выбор/подходит/нравится" + указание на "этот/эта/последний вариант"
+  const hasChoiceCue = /(понрав|нравит|подход|устраива|бер(у|ем|ём)|давай|выбираю|остановимс|ок\b)/i.test(t);
+  const hasTargetCue = /(эт(от|а|у)\s+(вариант|квартир)|эт(от|а|у)\b|последн(ий|яя|ю)\b|последн(ий|яя|ю)\s+(вариант|квартир))/i.test(t);
+  // "мне нравится этот вариант" → true; "подходит" без указания → false
+  return hasChoiceCue && hasTargetCue;
 };
 
 // Намерение: запись на просмотр / передать менеджеру
@@ -2623,9 +2657,13 @@ ${factsList.join('\n')}
 Продолжай диалог естественно, но соблюдай эти ограничения.`;
     })();
 
-    // 🆕 Sprint II / Block A: исключаем assistant-сообщения из истории, чтобы предотвратить утечку фактов
-    // Модель получает только user messages, system prompts и allowedFactsSnapshot
-    const userMessages = session.messages.filter(msg => msg.role === 'user');
+    // RMv3 / Sprint 4 / Task 4.1: полный контекст диалога для LLM (user + assistant)
+    // ВАЖНО:
+    // - порядок сообщений сохраняем хронологический (как в session.messages)
+    // - system сообщения и любые служебные/неизвестные роли не включаем
+    const dialogMessages = session.messages.filter(
+      (msg) => msg && (msg.role === 'user' || msg.role === 'assistant')
+    );
     
     const messages = [
       {
@@ -2639,7 +2677,7 @@ ${factsList.join('\n')}
       ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
       ...(allowedFactsInstruction ? [{ role: 'system', content: allowedFactsInstruction }] : []),
       ...(postHandoffInstruction ? [{ role: 'system', content: postHandoffInstruction }] : []),
-      ...userMessages
+      ...dialogMessages
     ];
 
     const gptStart = Date.now();
@@ -2800,6 +2838,26 @@ ${factsList.join('\n')}
         botResponse = botResponse ? `${botResponse}\n\n${phrase}` : phrase;
       }
     }
+
+    // RMv3 / Sprint 4 / Task 4.4: demo-only словесный выбор объекта → тот же button-flow (через /interaction select)
+    // ВАЖНО:
+    // - используем lastShown (приоритет) или currentFocusCard
+    // - если нет cardId → ничего не делаем (no-guessing)
+    // - не меняем server-facts здесь: запускаем тот же путь, что и кнопка "Выбрать"
+    try {
+      if (show !== true && detectVerbalSelectIntent(transcription) === true) {
+        const chosenCardId =
+          (session?.lastShown && session.lastShown.cardId) ? String(session.lastShown.cardId) :
+          (session?.currentFocusCard && session.currentFocusCard.cardId) ? String(session.currentFocusCard.cardId) :
+          null;
+        if (chosenCardId) {
+          // Короткое подтверждение (без вопросов/объяснений)
+          botResponse = 'Отлично, зафиксировал выбор.';
+          // UI-совместимость: фронт вызывает sendCardInteraction('select', id) → включится тот же handoff UX
+          ui = { ...(ui || {}), autoSelectCardId: chosenCardId };
+        }
+      }
+    } catch {}
 
     // Если пользователь просит запись/встречу — (удалено) лид-форма не используется
 
@@ -3338,6 +3396,58 @@ async function handleInteraction(req, res) {
       const count = session.liked.length;
       const msg = `Супер, сохранил! Могу предложить записаться на просмотр или показать ещё варианты. Что выберем? (понравилось: ${count})`;
       return res.json(withDebug({ ok: true, assistantMessage: msg, role: session.role })); // 🆕 Sprint I: server-side role
+    }
+
+    // RMv3 / Sprint 1 / Task 1: факт выбора карточки пользователем (UI "Выбрать") — server-first
+    // ВАЖНО:
+    // - не запускает handoff
+    // - не меняет role/stage
+    // - не трогает LLM
+    if (action === 'select') {
+      const cardId = typeof variantId === 'string' ? variantId.trim() : null;
+      if (!cardId) {
+        return res.status(400).json({ error: 'variantId обязателен для select' });
+      }
+      if (!session.selectedCard) {
+        session.selectedCard = { cardId: null, selectedAt: null };
+      }
+      const now = Date.now();
+      session.selectedCard.cardId = cardId;
+      session.selectedCard.selectedAt = now;
+      // RMv3 / Sprint 2 / Task 2.1: фиксируем факт "handoff активирован/показан" на сервере
+      if (!session.handoff) {
+        session.handoff = { active: false, shownAt: null, cardId: null, canceled: false, canceledAt: null };
+      }
+      session.handoff.active = true;
+      session.handoff.shownAt = now;
+      session.handoff.cardId = session.selectedCard.cardId;
+      // при новом handoff сбрасываем cancel-факт (если был)
+      session.handoff.canceled = false;
+      session.handoff.canceledAt = null;
+      return res.json(withDebug({ ok: true, role: session.role }));
+    }
+
+    // RMv3 / Sprint 2 / Task 2.4: server-fact cancel из in-dialog lead block
+    // ВАЖНО:
+    // - не трогает role/stage
+    // - не вызывает LLM
+    // - не трогает lead-flow
+    if (action === 'handoff_cancel') {
+      const now = Date.now();
+      if (!session.handoff) {
+        session.handoff = { active: false, shownAt: null, cardId: null, canceled: false, canceledAt: null };
+      }
+      session.handoff.active = false;
+      session.handoff.canceled = true;
+      session.handoff.canceledAt = now;
+      // Полная отмена выбора: сбрасываем выбранную карточку и cardId в handoff
+      if (!session.selectedCard) {
+        session.selectedCard = { cardId: null, selectedAt: null };
+      }
+      session.selectedCard.cardId = null;
+      session.selectedCard.selectedAt = null;
+      session.handoff.cardId = null;
+      return res.json(withDebug({ ok: true, role: session.role }));
     }
 
     // 🆕 Sprint I: подтверждение факта рендера карточки в UI
