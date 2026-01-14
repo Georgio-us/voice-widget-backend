@@ -18,10 +18,24 @@ const normalizePhone = (cc, num) => {
   return joined || '';
 };
 
+const safeToIso = (v) => {
+  // Accept Date | number | ISO string; fallback to now.
+  try {
+    if (!v) return new Date().toISOString();
+    if (v instanceof Date) {
+      const t = v.getTime();
+      return Number.isFinite(t) ? v.toISOString() : new Date().toISOString();
+    }
+    const d = new Date(v);
+    const t = d.getTime();
+    return Number.isFinite(t) ? d.toISOString() : new Date().toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+};
+
 export function buildLeadTelegramMessage(lead) {
-  const createdAt = lead?.createdAt
-    ? new Date(lead.createdAt).toISOString()
-    : new Date().toISOString();
+  const createdAt = safeToIso(lead?.createdAt);
 
   const lines = [];
   lines.push('🆕 New lead');
