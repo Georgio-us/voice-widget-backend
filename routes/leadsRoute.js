@@ -3,6 +3,7 @@
 import express from 'express';
 import { createLead } from '../services/leadsRepository.js';
 import { logEvent, EventTypes } from '../services/eventLogger.js';
+import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
 
 const router = express.Router();
 
@@ -113,6 +114,28 @@ router.post('/', async (req, res) => {
       consent,
       extra: null // пока не используем
     });
+
+    // Best-effort Telegram notify (не ломает создание лида)
+    try {
+      await notifyLeadToTelegram({
+        leadId: result.id,
+        createdAt: result.created_at,
+        sessionId: sessionId || null,
+        source,
+        name,
+        phoneCountryCode,
+        phoneNumber,
+        email,
+        preferredContactMethod,
+        language: language || 'ru',
+        propertyId: propertyId || null,
+        consent,
+        comment
+      });
+    } catch (tgErr) {
+      // Токен НЕ логируем; ошибка не должна ломать ответ
+      console.warn('[telegram] lead notify failed', tgErr?.message || tgErr);
+    }
 
     // Логируем событие в телеметрию (если есть EventTypes.LEAD_FORM_SUBMIT)
     try {

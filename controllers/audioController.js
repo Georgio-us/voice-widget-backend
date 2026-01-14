@@ -504,20 +504,6 @@ const getPrimaryLanguage = (session) => {
   return detectLangFromSession(session);
 };
 
-// Вариативные короткие фразы при показе карточки (в ответ модели)
-const generateShowIntro = (lang) => {
-  const ru = [
-    'Сейчас покажу.',
-    'Давайте посмотрим этот вариант.',
-    'Окей, открою карточку.',
-    'Покажу подходящий вариант.',
-    'Хорошо, посмотрим подробнее.'
-  ];
-  // Временно фиксируем язык на русский; поддержку языков добавим позже
-  const bank = ru;
-  return bank[Math.floor(Math.random() * bank.length)];
-};
-
 // Вариативный динамический комментарий под карточкой (для /interaction)
 const generateCardComment = (lang, p) => {
   // Временно фиксируем язык на русский; поддержку языков добавим позже
@@ -2832,10 +2818,6 @@ ${factsList.join('\n')}
         session.shownSet.add(candidate.id);
         cards = [formatCardForClient(req, candidate)];
         ui = { suggestShowCard: true };
-        // Естественная короткая фраза без технических оговорок
-        const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
-        const phrase = generateShowIntro(lang);
-        botResponse = botResponse ? `${botResponse}\n\n${phrase}` : phrase;
       }
     }
 
