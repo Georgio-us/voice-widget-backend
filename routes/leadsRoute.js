@@ -4,6 +4,7 @@ import express from 'express';
 import { createLead } from '../services/leadsRepository.js';
 import { logEvent, EventTypes } from '../services/eventLogger.js';
 import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
+import { pool } from '../services/db.js';
 
 const router = express.Router();
 
@@ -115,6 +116,40 @@ router.post('/', async (req, res) => {
       extra: null // пока не используем
     });
 
+    // Read-only enrichment for Telegram notification (best-effort):
+    // pull latest insights + last shown cardId from session_logs (if available).
+    let insightsFromSessionLog = null;
+    let lastShownCardIdFromSessionLog = null;
+    try {
+      if (sessionId) {
+        const r = await pool.query(
+          'SELECT payload FROM session_logs WHERE session_id = $1',
+          [sessionId]
+        );
+        const payload = r?.rows?.[0]?.payload || null;
+        const messages = payload && Array.isArray(payload.messages) ? payload.messages : [];
+        // latest insights (meta.insights) from the end
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i];
+          const ins = m?.meta?.insights;
+          if (ins && typeof ins === 'object' && !Array.isArray(ins)) {
+            insightsFromSessionLog = ins;
+            break;
+          }
+        }
+        // last shown card id from logged assistant cards[] (from the end)
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i];
+          const cards = Array.isArray(m?.cards) ? m.cards : [];
+          const id = cards?.[0]?.id || null;
+          if (id) {
+            lastShownCardIdFromSessionLog = String(id);
+            break;
+          }
+        }
+      }
+    } catch {}
+
     // Best-effort Telegram notify (не ломает создание лида)
     try {
       await notifyLeadToTelegram({
@@ -130,7 +165,9 @@ router.post('/', async (req, res) => {
         language: language || 'ru',
         propertyId: propertyId || null,
         consent,
-        comment
+        comment,
+        insights: insightsFromSessionLog,
+        lastShownCardId: lastShownCardIdFromSessionLog
       });
     } catch (tgErr) {
       // Токен НЕ логируем; ошибка не должна ломать ответ
