@@ -210,3 +210,168 @@ export async function notifyLeadToTelegram(lead) {
   }
 }
 
+// ------------------------------------------------------------
+// RMv3: Telegram "session activity" messages (best-effort).
+// Telegram is UI only; server remains source of truth.
+// ------------------------------------------------------------
+
+const formatDurationHumanRu = (ms) => {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return '0 мин';
+  const totalSec = Math.floor(n / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  if (h <= 0) return `${Math.max(1, m)} мин`;
+  const mm = String(m).padStart(2, '0');
+  return `${h} ч ${mm} мин`;
+};
+
+const buildGeoLine = (geo) => {
+  const country = geo?.country ? String(geo.country).trim() : '';
+  const city = geo?.city ? String(geo.city).trim() : '';
+  if (!country && !city) return '';
+  if (country && city) return `${country}, ${city}`;
+  return country || city;
+};
+
+const buildSessionActivityStartMessage = (p = {}) => {
+  const lines = [];
+  lines.push('🟢 Кто-то пользуется виджетом прямо сейчас');
+  lines.push('');
+  if (p.sessionId) {
+    lines.push(`🧾 Сессия: ${clip(p.sessionId, 120)}`);
+  }
+  if (p.startedAt != null) {
+    lines.push(`🕒 Начало: ${formatDateRu(p.startedAt)}`);
+  }
+  const geoLine = buildGeoLine(p.geo);
+  if (geoLine) {
+    lines.push(`🌍 Гео: ${clip(geoLine, 120)}`);
+  }
+  if (typeof p.messageCount === 'number') {
+    lines.push(`💬 Сообщений: ${p.messageCount}`);
+  }
+  return lines.join('\n').trim();
+};
+
+const buildSessionActivityFinalMessage = (p = {}) => {
+  const lines = [];
+  lines.push('✅ Была зафиксирована активность пользователя');
+  lines.push('');
+  if (p.sessionId) {
+    lines.push(`🧾 Сессия: ${clip(p.sessionId, 120)}`);
+  }
+  if (p.startedAt != null) {
+    lines.push(`🕒 Начало: ${formatDateRu(p.startedAt)}`);
+  }
+  if (p.lastActivityAt != null) {
+    lines.push(`⏱️ Последняя активность: ${formatDateRu(p.lastActivityAt)}`);
+  }
+  const geoLine = buildGeoLine(p.geo);
+  if (geoLine) {
+    lines.push(`🌍 Гео: ${clip(geoLine, 120)}`);
+  }
+  if (typeof p.durationMs === 'number') {
+    lines.push(`⌛ Длительность: ${formatDurationHumanRu(p.durationMs)}`);
+  }
+  if (typeof p.messageCount === 'number') {
+    lines.push(`💬 Сообщений: ${p.messageCount}`);
+  }
+  if (p.sliderReached === true) {
+    lines.push('🧩 Дошёл до слайдера: да');
+  } else if (p.sliderReached === false) {
+    lines.push('🧩 Дошёл до слайдера: нет');
+  }
+  const insightLines = pickInsightLines(p.insights);
+  if (insightLines.length) {
+    lines.push('');
+    lines.push('🧠 Инсайты:');
+    lines.push(...insightLines);
+  }
+  // Cards (best-effort, business-useful)
+  if (typeof p.cardsShownCount === 'number' || typeof p.likesCount === 'number' || p.selectedCardId) {
+    lines.push('');
+    lines.push('🏠 Карточки:');
+    if (typeof p.cardsShownCount === 'number') lines.push(`• Показано: ${p.cardsShownCount}`);
+    if (typeof p.likesCount === 'number') lines.push(`• Лайков: ${p.likesCount}`);
+    if (p.selectedCardId) lines.push(`• Выбран объект: ${clip(p.selectedCardId, 80)}`);
+  }
+  // Handoff facts (best-effort)
+  if (p.handoffActive === true || p.handoffCanceled === true) {
+    lines.push('');
+    lines.push('🤝 Handoff:');
+    if (p.handoffActive === true) lines.push('• Активирован: да');
+    if (p.handoffCanceled === true) lines.push('• Отменён: да');
+  }
+
+  return lines.join('\n').trim();
+};
+
+const telegramCall = async ({ token, method, payload, timeoutMs = 5000 }) => {
+  if (typeof fetch !== 'function') {
+    throw new Error('global fetch is not available (requires Node 18+)');
+  }
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const url = `https://api.telegram.org/bot${token}/${method}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      let hint = '';
+      try {
+        const body = await res.text();
+        hint = body ? ` body=${clip(body, 300)}` : '';
+      } catch {}
+      throw new Error(`Telegram ${method} failed: ${res.status}${hint}`);
+    }
+    const data = await res.json().catch(() => null);
+    return { ok: true, data };
+  } finally {
+    clearTimeout(t);
+  }
+};
+
+export async function sendSessionActivityStartToTelegram(params = {}) {
+  const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
+  const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
+  if (!token || !chatId) return { ok: false, skipped: true, messageId: null };
+
+  const text = buildSessionActivityStartMessage(params);
+  const { data } = await telegramCall({
+    token,
+    method: 'sendMessage',
+    payload: {
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true
+    }
+  });
+  const messageId = data?.result?.message_id || null;
+  return { ok: true, skipped: false, messageId };
+}
+
+export async function updateSessionActivityFinalToTelegram(params = {}) {
+  const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
+  const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
+  const messageId = params?.messageId || null;
+  if (!token || !chatId || !messageId) return { ok: false, skipped: true };
+
+  const text = buildSessionActivityFinalMessage(params);
+  await telegramCall({
+    token,
+    method: 'editMessageText',
+    payload: {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      disable_web_page_preview: true
+    }
+  });
+  return { ok: true, skipped: false };
+}
+

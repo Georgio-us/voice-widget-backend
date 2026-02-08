@@ -7,6 +7,7 @@ import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
 import { appendMessage } from '../services/sessionLogger.js';
+import { sendSessionActivityStartToTelegram, updateSessionActivityFinalToTelegram } from '../services/telegramNotifier.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || '').trim() === '1';
 
@@ -135,6 +136,30 @@ const cleanupOldSessions = () => {
   const oneHourAgo = Date.now() - 60 * 60 * 1000;
   for (const [sessionId, session] of sessions.entries()) {
     if (session.lastActivity < oneHourAgo) {
+      // RMv3: best-effort Telegram final update on session expiry (TTL-based finalization)
+      try {
+        const messageId = session?.telegram?.activityMessageId || null;
+        if (messageId) {
+          updateSessionActivityFinalToTelegram({
+            messageId,
+            sessionId: session?.sessionId || sessionId,
+            startedAt: session?.createdAt ?? null,
+            lastActivityAt: session?.lastActivity ?? null,
+            durationMs: (typeof session?.createdAt === 'number' && typeof session?.lastActivity === 'number')
+              ? Math.max(0, session.lastActivity - session.createdAt)
+              : null,
+            geo: session?.geo || null,
+            messageCount: Array.isArray(session?.messages) ? session.messages.length : null,
+            sliderReached: !!(session?.sliderContext && session.sliderContext.updatedAt),
+            insights: session?.insights || null,
+            cardsShownCount: session?.shownSet ? (session.shownSet.size || 0) : null,
+            likesCount: Array.isArray(session?.liked) ? session.liked.length : null,
+            selectedCardId: session?.selectedCard?.cardId || null,
+            handoffActive: session?.handoff?.shownAt ? true : (session?.handoff?.active === true),
+            handoffCanceled: session?.handoff?.canceled === true
+          }).catch(() => {});
+        }
+      } catch {}
       sessions.delete(sessionId);
     }
   }
@@ -1996,7 +2021,45 @@ const transcribeAndRespond = async (req, res) => {
     }
 
     sessionId = req.body.sessionId || generateSessionId();
+    const isNewSession = !sessions.has(sessionId);
     const session = getOrCreateSession(sessionId);
+    // RMv3: Telegram "someone is using the widget right now" (on first real user request = first /upload)
+    // ВАЖНО:
+    // - НЕ по клику "открыть виджет", а по факту обращения (/upload)
+    // - best-effort: не ломает основной поток
+    // - храним message_id в session, чтобы потом обновить тем же сообщением при финализации (TTL/clear)
+    try {
+      if (isNewSession === true) {
+        // best-effort geo from headers (no external dependencies)
+        const h = (k) => {
+          try { return req?.headers?.[k] || req?.headers?.[String(k || '').toLowerCase()] || null; } catch { return null; }
+        };
+        const country =
+          (h('cf-ipcountry') || h('x-vercel-ip-country') || h('x-country') || h('x-geo-country') || null);
+        const city =
+          (h('x-vercel-ip-city') || h('x-city') || h('x-geo-city') || h('cf-ipcity') || null);
+        const geo = {
+          ...(country ? { country: String(country).trim() } : {}),
+          ...(city ? { city: String(city).trim() } : {})
+        };
+        // store on session (server is source of truth)
+        session.geo = geo && (geo.country || geo.city) ? geo : null;
+        session.telegram = session.telegram || {};
+        sendSessionActivityStartToTelegram({
+          sessionId: session.sessionId || sessionId,
+          startedAt: session.createdAt,
+          geo: session.geo,
+          messageCount: Array.isArray(session.messages) ? session.messages.length : 0
+        })
+          .then((r) => {
+            if (r?.ok === true && r?.messageId) {
+              session.telegram.activityMessageId = r.messageId;
+              session.telegram.activityMessageAt = Date.now();
+            }
+          })
+          .catch(() => {});
+      }
+    } catch {}
     const inputTypeForLog = req.file ? 'audio' : 'text'; // для логирования (английский)
     const clientDebugEnabled = isClientDebugEnabled(req);
     // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — defensive guard
@@ -3109,6 +3172,31 @@ ${factsList.join('\n')}
 };
 
 const clearSession = (sessionId) => {
+  // RMv3: best-effort Telegram final update on explicit clear
+  try {
+    const session = sessions.get(sessionId);
+    const messageId = session?.telegram?.activityMessageId || null;
+    if (session && messageId) {
+      updateSessionActivityFinalToTelegram({
+        messageId,
+        sessionId: session?.sessionId || sessionId,
+        startedAt: session?.createdAt ?? null,
+        lastActivityAt: session?.lastActivity ?? null,
+        durationMs: (typeof session?.createdAt === 'number' && typeof session?.lastActivity === 'number')
+          ? Math.max(0, session.lastActivity - session.createdAt)
+          : null,
+        geo: session?.geo || null,
+        messageCount: Array.isArray(session?.messages) ? session.messages.length : null,
+        sliderReached: !!(session?.sliderContext && session.sliderContext.updatedAt),
+        insights: session?.insights || null,
+        cardsShownCount: session?.shownSet ? (session.shownSet.size || 0) : null,
+        likesCount: Array.isArray(session?.liked) ? session.liked.length : null,
+        selectedCardId: session?.selectedCard?.cardId || null,
+        handoffActive: session?.handoff?.shownAt ? true : (session?.handoff?.active === true),
+        handoffCanceled: session?.handoff?.canceled === true
+      }).catch(() => {});
+    }
+  } catch {}
   sessions.delete(sessionId);
 };
 
