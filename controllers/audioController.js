@@ -357,7 +357,10 @@ const parseBudgetEUR = (s) => {
 };
 
 const detectCardIntent = (text = '', lang = '') => {
-  const t = String(text).toLowerCase();
+  // Временная скрытая команда: ввод "//show" в чате запускает показ слайдера (для тестов)
+  const trimmed = String(text).trim();
+  if (trimmed === '//show') return { show: true, variants: false };
+  const t = trimmed.toLowerCase();
   const langCode = String(lang || '').toLowerCase().slice(0, 2);
   // RU: "покажи", "показать", "посмотреть", "карточк", "давай карточку" и т.д.
   const ruShow = /(покажи(те)?\s*(ее|её)?\s*(подробнее)?|показать\s*(ее|её)?|посмотреть\s*(ее|её)?|карточк|сюда\s*отправь|давай\s*карточку|подробн)/i;
