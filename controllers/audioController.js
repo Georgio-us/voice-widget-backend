@@ -463,8 +463,12 @@ const mapRowToProperty = (row) => {
     district: row.location_district || null,
     neighborhood: row.location_neighborhood || null,
     priceEUR: row.price_amount != null ? Number(row.price_amount) : null,
+    price_per_m2: row.price_per_m2 != null ? Number(row.price_per_m2) : null,
     rooms: row.specs_rooms != null ? Number(row.specs_rooms) : null,
+    bathrooms: row.specs_bathrooms != null ? Number(row.specs_bathrooms) : null,
+    area_m2: row.specs_area_m2 != null ? Number(row.specs_area_m2) : null,
     floor: row.specs_floor != null ? Number(row.specs_floor) : null,
+    description: row.description || null,
     images,
   };
 };
@@ -505,6 +509,11 @@ const formatCardForClient = (req, p) => {
     priceEUR: p.priceEUR ?? p?.price?.amount ?? null,
     rooms: p.rooms ?? p?.specs?.rooms ?? null,
     floor: p.floor ?? p?.specs?.floor ?? null,
+    // Дополнительные поля для back-стороны карточки
+    description: p.description ?? null,
+    area_m2: p.area_m2 ?? p?.specs?.area_m2 ?? null,
+    price_per_m2: p.price_per_m2 ?? null,
+    bathrooms: p.bathrooms ?? p?.specs?.bathrooms ?? null,
     // Изображение
     image,
     imageUrl: image

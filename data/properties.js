@@ -263,7 +263,7 @@ const rawProperties = [
     "price_per_m2": 4538,
     "location": { "country": "ES", "city": "Valencia", "district": "Quatre Carreres", "neighborhood": "Monteolivete", "address": null },
     "building": { "year": 2021, "floors": 15, "infrastructure": ["pool", "gym"] },
-    "specs": { "rooms": 2, "bathrooms": null, "area_m2": 65, "floor": 9, "balcony": true, "terrace": false },
+    "specs": { "rooms": 2, "bathrooms": 1, "area_m2": 65, "floor": 9, "balcony": true, "terrace": false },
     "title": null,
     "description": "2 спальни, 65 м², 9/15, меблирована полностью, лоджия ~7 м². Вид на Город наук.",
     "images": ["https://<backend-host>/static/properties/A019_image.jpg"]
