@@ -356,10 +356,19 @@ const parseBudgetEUR = (s) => {
   return m ? parseInt(m, 10) : null;
 };
 
+// Show-intent: RU + EN + ES. Used only for computing isShow in detectCardIntent.
+const SHOW_INTENT_PATTERNS = [
+  // RU: "покажи", "покажи карточку", "посмотреть" и т.д.
+  /(покажи(те)?\s*(ее|её)?\s*(подробнее)?|показать\s*(ее|её)?|посмотреть\s*(ее|её)?|карточк|сюда\s*отправь|давай\s*карточку|подробн)/i,
+  // EN: show, show me, show please/pls/plz, can you show, show (this) card/listing/listings/options/properties/variants
+  /\b(show|show\s+me|show\s+please|show\s+pls|show\s+plz|can\s+you\s+show|show\s+(this\s+)?(card|listing|listings|options|properties|variants))\b/i,
+  // ES: muestra, muéstrame, mostrar, enséñame, ver (la) ficha/opciones/propiedades
+  /\b(muestra|muéstrame|mostrar|enséñame|ver\s+(la\s+)?(ficha|opciones|propiedades))\b/i
+];
+
 const detectCardIntent = (text = '') => {
   const t = String(text).toLowerCase();
-  // учитываем формулировки: "покажи её/ее подробнее", "давай карточку", "сюда отправь"
-  const isShow = /(покажи(те)?\s*(ее|её)?\s*(подробнее)?|показать\s*(ее|её)?|посмотреть\s*(ее|её)?|карточк|сюда\s*отправь|давай\s*карточку|подробн)/i.test(t);
+  const isShow = SHOW_INTENT_PATTERNS.some(re => re.test(t));
   const isVariants = /(какие|что)\s+(есть|можно)\s+(вариант|квартир)/i.test(t)
     || /подбери(те)?|подобрать|вариант(ы)?|есть\s+вариант/i.test(t)
     || /квартир(а|ы|у)\s+(есть|бывают)/i.test(t);
@@ -374,8 +383,9 @@ const detectCardIntent = (text = '') => {
 const detectVerbalSelectIntent = (text = '') => {
   const t = String(text || '').toLowerCase().trim();
   if (!t) return false;
-  // Предохранитель: "покажи" — это show-intent, не выбор
+  // Предохранитель: "покажи"/"show" — это show-intent, не выбор
   if (/(покажи(те)?|показать|посмотреть)/i.test(t)) return false;
+  if (/\b(show|show\s+me|can\s+you\s+show)\b/i.test(t)) return false;
   // Сигнал "выбор/подходит/нравится" + указание на "этот/эта/последний вариант"
   const hasChoiceCue = /(понрав|нравит|подход|устраива|бер(у|ем|ём)|давай|выбираю|остановимс|ок\b)/i.test(t);
   const hasTargetCue = /(эт(от|а|у)\s+(вариант|квартир)|эт(от|а|у)\b|последн(ий|яя|ю)\b|последн(ий|яя|ю)\s+(вариант|квартир))/i.test(t);
