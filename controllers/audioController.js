@@ -647,101 +647,134 @@ const updateInsights = (sessionId, newMessage) => {
   
   console.log(`🧠 Анализирую сообщение для insights: "${newMessage}"`);
 
-  // 1. 👤 Извлечение имени (более гибкие паттерны)
-  if (!insights.name) {
-    const namePatterns = [
-      /меня зовут\s+([а-яё]+)/i,           // "меня зовут Георгий"
-      /я\s+([а-яё]+)/i,                     // "я Георгий" 
-      /имя\s+([а-яё]+)/i,                   // "имя Георгий"
-      /зовите\s+меня\s+([а-яё]+)/i,         // "зовите меня Георгий"
-      /это\s+([а-яё]+)/i,                   // "это Георгий"
-      /меня\s+(\w+)/i                       // "меня Георгий"
-    ];
-
-    for (const pattern of namePatterns) {
-      const match = text.match(pattern);
-      if (match && match[1].length > 2) { // имя должно быть больше 2 символов
-        insights.name = match[1].charAt(0).toUpperCase() + match[1].slice(1);
-        console.log(`✅ Найдено имя: ${insights.name}`);
-        break;
-      }
+  // 1. 👤 Имя — только 3 строгие фразы (RU / EN / ES)
+  const nameMatch = newMessage.match(/меня зовут\s+(.+?)(?=[.,!?\n]|$)/i) ||
+    newMessage.match(/my name is\s+(.+?)(?=[.,!?\n]|$)/i) ||
+    newMessage.match(/me llamo\s+(.+?)(?=[.,!?\n]|$)/i);
+  if (nameMatch && nameMatch[1]) {
+    let name = nameMatch[1].trim();
+    const stopDelim = /[.,!?\n]/.exec(name);
+    if (stopDelim) name = name.slice(0, stopDelim.index).trim();
+    if (name.length > 0) {
+      insights.name = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+      console.log(`✅ Найдено имя: ${insights.name}`);
     }
   }
 
-  // 2. 🏠 Тип недвижимости (учитываем склонения)
+  // 2. 🏠 Тип недвижимости (RU + EN + ES)
   if (!insights.type) {
     const propertyPatterns = [
-      /(квартир[уыаеой]|квартир)/i,        // квартиру, квартиры, квартира, квартире
-      /(дом[аеыой]?|дом)/i,                // дом, дома, доме
-      /(апартамент[ыаеойв]*)/i,            // апартаменты, апартамент
-      /(комнат[уыаеой]|комнат)/i,          // комнату, комнаты, комната
-      /(студи[юяеий]*)/i,                  // студия, студию
-      /(пентхаус[аеы]*)/i,                 // пентхаус, пентхауса
-      /(таунхаус[аеы]*)/i                  // таунхаус, таунхауса
+      // RU
+      /(квартир[уыаеой]|квартир)/i,
+      /(дом[аеыой]?|дом)/i,
+      /(апартамент[ыаеойв]*)/i,
+      /(комнат[уыаеой]|комнат)/i,
+      /(студи[юяеий]*)/i,
+      /(пентхаус[аеы]*)/i,
+      /(таунхаус[аеы]*)/i,
+      // EN
+      /\b(apartment|flat|apartments)\b/i,
+      /\b(house|houses)\b/i,
+      /\b(studio|studios)\b/i,
+      /\b(penthouse|penthouses)\b/i,
+      /\b(townhouse|townhouses)\b/i,
+      /\b(room|rooms|bedroom|bedrooms)\b/i,
+      // ES
+      /\b(piso|pisos|apartamento|apartamentos)\b/i,
+      /\b(casa|casas)\b/i,
+      /\b(estudio|estudios)\b/i,
+      /\b(ático|áticos|atico|aticos)\b/i,
+      /\b(habitaci[oó]n|habitaciones)\b/i
     ];
 
     for (const pattern of propertyPatterns) {
       const match = text.match(pattern);
       if (match) {
-        if (match[1].startsWith('квартир')) insights.type = 'квартира';
-        else if (match[1].startsWith('дом')) insights.type = 'дом'; 
-        else if (match[1].startsWith('апартамент')) insights.type = 'апартаменты';
-        else if (match[1].startsWith('комнат')) insights.type = 'комната';
-        else if (match[1].startsWith('студи')) insights.type = 'студия';
-        else if (match[1].startsWith('пентхаус')) insights.type = 'пентхаус';
-        else if (match[1].startsWith('таунхаус')) insights.type = 'таунхаус';
-        
-        console.log(`✅ Найден тип недвижимости: ${insights.type}`);
-        break;
+        const m = (match[1] || match[0]).toLowerCase();
+        if (/квартир/.test(m)) insights.type = 'квартира';
+        else if (/дом/.test(m)) insights.type = 'дом';
+        else if (/апартамент/.test(m)) insights.type = 'апартаменты';
+        else if (/комнат/.test(m)) insights.type = 'комната';
+        else if (/студи/.test(m)) insights.type = 'студия';
+        else if (/пентхаус/.test(m)) insights.type = 'пентхаус';
+        else if (/таунхаус/.test(m)) insights.type = 'таунхаус';
+        else if (/apartment|flat/.test(m)) insights.type = 'apartment';
+        else if (/house/.test(m)) insights.type = 'house';
+        else if (/studio/.test(m)) insights.type = 'studio';
+        else if (/penthouse/.test(m)) insights.type = 'penthouse';
+        else if (/townhouse/.test(m)) insights.type = 'townhouse';
+        else if (/room|bedroom/.test(m)) insights.type = 'room';
+        else if (/piso|apartamento/.test(m)) insights.type = 'piso';
+        else if (/casa/.test(m)) insights.type = 'casa';
+        else if (/estudio/.test(m)) insights.type = 'estudio';
+        else if (/ático|atico/.test(m)) insights.type = 'ático';
+        else if (/habitaci/.test(m)) insights.type = 'habitación';
+        if (insights.type) {
+          console.log(`✅ Найден тип недвижимости: ${insights.type}`);
+          break;
+        }
       }
     }
   }
 
-  // 3. 💰 Тип операции (покупка/аренда)
+  // 3. 💰 Тип операции (покупка/аренда) — RU + EN + ES
   if (!insights.operation) {
     const operationPatterns = [
-      // Покупка
+      // RU покупка
       /(купить|покуп[каеи]|куплю|приобрести|приобретение)/i,
       /(покупк[аеуи]|в\s*покупку)/i,
       /(купил|хочу\s+купить|планирую\s+купить)/i,
       /(инвестиц|инвестировать)/i,
-      
-      // Аренда  
+      // RU аренда
       /(снять|аренд[аеуио]*|арендовать|сдать)/i,
       /(в\s*аренду|на\s*аренду|под\s*аренду)/i,
-      /(съем|снимать|найм)/i
+      /(съем|снимать|найм)/i,
+      // EN
+      /\b(buy|buying|purchase|purchasing|invest|investment)\b/i,
+      /\b(rent|renting|lease|leasing|rental)\b/i,
+      // ES
+      /\b(comprar|compra|invertir|inversi[oó]n)\b/i,
+      /\b(alquilar|alquiler|arrendar|arriendo)\b/i
     ];
 
     for (const pattern of operationPatterns) {
       const match = text.match(pattern);
       if (match) {
-        const matched = match[1].toLowerCase();
-        if (matched.includes('купи') || matched.includes('покуп') || matched.includes('приобр') || matched.includes('инвест')) {
-          insights.operation = 'покупка';
-        } else if (matched.includes('снять') || matched.includes('аренд') || matched.includes('съем') || matched.includes('найм')) {
-          insights.operation = 'аренда';
+        const matched = (match[1] || match[0]).toLowerCase();
+        if (/купи|покуп|приобр|инвест|buy|purchase|invest|comprar|compra|invertir/.test(matched)) {
+          if (/купи|покуп|приобр|инвест/.test(matched)) insights.operation = 'покупка';
+          else if (/buy|purchase|invest/.test(matched)) insights.operation = 'buy';
+          else insights.operation = 'compra';
+        } else if (/снять|аренд|съем|найм|rent|lease|alquilar|alquiler|arrendar/.test(matched)) {
+          if (/снять|аренд|съем|найм/.test(matched)) insights.operation = 'аренда';
+          else if (/rent|lease/.test(matched)) insights.operation = 'rent';
+          else insights.operation = 'alquiler';
         }
-        console.log(`✅ Найдена операция: ${insights.operation}`);
-        break;
+        if (insights.operation) {
+          console.log(`✅ Найдена операция: ${insights.operation}`);
+          break;
+        }
       }
     }
   }
 
-  // 4. 💵 Бюджет (более гибкие паттерны для чисел)
+  // 4. 💵 Бюджет — RU + EN + ES
   if (!insights.budget) {
     const budgetPatterns = [
-      // Точные числа: "300000 евро", "300 тысяч евро"
+      // RU
       /(\d+[\d\s]*)\s*(тысяч?|тыс\.?)\s*(евро|€|euro)/i,
       /(\d+[\d\s]*)\s*(евро|€|euro)/i,
-      
-      // Диапазоны: "от 200 до 400 тысяч", "200-400к"
       /(от\s*)?(\d+)[\s-]*(\d+)?\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i,
-      
-      // Около/примерно: "около 300к", "примерно 250 тысяч"
       /(около|примерно|где-?то|приблизительно)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)?\s*(евро|€|euro)?/i,
-      
-      // До: "до 500 тысяч"
-      /(до|максимум|не\s*больше)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i
+      /(до|максимум|не\s*больше)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i,
+      // EN
+      /(\d+[\d\s,]*)\s*(thousand|k)\s*(euro|€|eur)?/i,
+      /(\d+[\d\s,]*)\s*(euro|€|eur)/i,
+      /(up\s*to|max|around|about)\s*(\d+[\d\s,]*)\s*(k|thousand)?\s*(euro|€)?/i,
+      // ES
+      /(\d+[\d\s.]*)\s*(mil|miles|k)\s*(euro|€|eur)?/i,
+      /(\d+[\d\s.]*)\s*(euro|€|eur)/i,
+      /(hasta|m[aá]ximo|alrededor\s*de|unos?)\s*(\d+[\d\s.]*)\s*(mil|k)?\s*(euro|€)?/i
     ];
 
     for (const pattern of budgetPatterns) {
@@ -749,28 +782,19 @@ const updateInsights = (sessionId, newMessage) => {
       if (match) {
         let amount = '';
         let numberIndex = 1;
-        
-        // Находим индекс с числом
         for (let i = 1; i < match.length; i++) {
           if (match[i] && /\d/.test(match[i])) {
             numberIndex = i;
             break;
           }
         }
-        
         let number = match[numberIndex];
-        
-        // Убираем пробелы из числа
         if (number) {
-          number = number.replace(/\s/g, '');
-          
-          // Если есть "тысяч" - умножаем на 1000
-          if (match[0].includes('тысяч') || match[0].includes('тыс') || match[0].includes('к')) {
-            amount = `${number}000`;
-          } else {
-            amount = number;
-          }
-          
+          number = number.replace(/[\s,]/g, '');
+          const raw = match[0].toLowerCase();
+          if (/^\d+\.\d{3}$/.test(number)) number = number.replace('.', '');
+          const isThousands = /тысяч|тыс|\bk\b|thousand|mil|miles/.test(raw) && !/^\d+0{3,}$/.test(number);
+          amount = isThousands ? `${number}000` : number;
           insights.budget = `${amount} €`;
           console.log(`✅ Найден бюджет: ${insights.budget}`);
           break;
@@ -779,10 +803,10 @@ const updateInsights = (sessionId, newMessage) => {
     }
   }
 
-  // 5. 📍 Район/локация (расширенный список районов Валенсии)
+  // 5. 📍 Район/локация — RU + EN + ES (районы Валенсии и общие)
   if (!insights.location) {
     const locationPatterns = [
-      // Основные районы Валенсии
+      // RU
       /(центр[ае]?|исторический\s*центр|старый\s*город)/i,
       /(русаф[аеы]?|russafa)/i,
       /(алавес|alavés)/i,
@@ -795,92 +819,122 @@ const updateInsights = (sessionId, newMessage) => {
       /(пла\s*дель\s*реаль|pla\s*del\s*real)/i,
       /(ла\s*сайдиа|la\s*saïdia)/i,
       /(морской|побережье|у\s*моря|пляж)/i,
-      
-      // Общие указания
       /(район[еа]?\s*(\w+))/i,
       /(зон[аеу]\s*(\w+))/i,
-      /(недалеко\s*от\s*(\w+))/i
+      /(недалеко\s*от\s*(\w+))/i,
+      // EN
+      /\b(center|centre|downtown|city\s*center)\b/i,
+      /\b(ruzafa|russafa)\b/i,
+      /\b(cabanyal)\b/i,
+      /\b(benimaclet)\b/i,
+      /\b(patraix)\b/i,
+      /\b(extramurs)\b/i,
+      /\b(beach|sea|coast|by\s*the\s*sea)\b/i,
+      // ES
+      /\b(centro|centro\s*hist[oó]rico)\b/i,
+      /\b(ruzafa)\b/i,
+      /\b(cabanyal|el\s*cabanyal)\b/i,
+      /\b(benimaclet)\b/i,
+      /\b(patraix)\b/i,
+      /\b(extramurs)\b/i,
+      /\b(playa|mar|costas?)\b/i
     ];
 
     for (const pattern of locationPatterns) {
       const match = text.match(pattern);
       if (match) {
-        const location = match[1].toLowerCase();
-        
+        const location = (match[1] || match[0]).toLowerCase();
         if (location.includes('центр')) insights.location = 'Центр';
-        else if (location.includes('русаф')) insights.location = 'Русафа';
+        else if (location.includes('русаф') || location.includes('russafa') || location.includes('ruzafa')) insights.location = location.includes('русаф') ? 'Русафа' : 'Ruzafa';
         else if (location.includes('алавес')) insights.location = 'Алавес';
-        else if (location.includes('кабаньял') || location.includes('кабанал')) insights.location = 'Кабаньял';
-        else if (location.includes('бенимаклет')) insights.location = 'Бенимаклет';
-        else if (location.includes('патраикс')) insights.location = 'Патраикс';
+        else if (location.includes('кабаньял') || location.includes('кабанал') || location.includes('cabanyal')) insights.location = location.includes('cabanyal') ? 'Cabanyal' : 'Кабаньял';
+        else if (location.includes('бенимаклет') || location.includes('benimaclet')) insights.location = location.includes('benimaclet') ? 'Benimaclet' : 'Бенимаклет';
+        else if (location.includes('патраикс') || location.includes('patraix')) insights.location = location.includes('patraix') ? 'Patraix' : 'Патраикс';
         else if (location.includes('camins') || location.includes('каминс')) insights.location = 'Camins al Grau';
         else if (location.includes('побленоу')) insights.location = 'Побленоу';
-        else if (location.includes('экстрамурс')) insights.location = 'Экстрамурс';
-        else if (location.includes('морской') || location.includes('пляж')) insights.location = 'У моря';
-        else if (match[2]) insights.location = match[2]; // район + название
-        
-        console.log(`✅ Найдена локация: ${insights.location}`);
-        break;
+        else if (location.includes('экстрамурс') || location.includes('extramurs')) insights.location = location.includes('extramurs') ? 'Extramurs' : 'Экстрамурс';
+        else if (location.includes('морской') || location.includes('пляж') || location.includes('beach') || location.includes('sea') || location.includes('playa') || location.includes('mar')) insights.location = location.includes('playa') || location.includes('mar') ? 'Playa' : (location.includes('beach') || location.includes('sea') ? 'Beach' : 'У моря');
+        else if (location.includes('center') || location.includes('centre') || location.includes('downtown')) insights.location = 'Center';
+        else if (location.includes('centro')) insights.location = 'Centro';
+        else if (match[2]) insights.location = match[2];
+        if (insights.location) {
+          console.log(`✅ Найдена локация: ${insights.location}`);
+          break;
+        }
       }
     }
   }
 
-  // 🆕 6. 🏠 Количество комнат
+  // 🆕 6. 🏠 Количество комнат — RU + EN + ES
   if (!insights.rooms) {
     const roomPatterns = [
-      /(\d+)[\s-]*(комнат[ауыйе]*|спален|bedroom)/i,        // "3 комнаты", "2 спальни"
-      /(одн[ауо][\s-]*комнат|однушк|1[\s-]*комнат)/i,       // "однокомнатная", "однушка"
-      /(двух[\s-]*комнат|двушк|2[\s-]*комнат)/i,            // "двухкомнатная", "двушка"
-      /(трех[\s-]*комнат|трешк|3[\s-]*комнат)/i,            // "трехкомнатная", "трешка"
-      /(четырех[\s-]*комнат|4[\s-]*комнат)/i,               // "четырехкомнатная"
-      /(студи[юя]|studio)/i                                 // "студия"
+      /(студи[юя]|studio|estudio)/i,
+      /(\d+)[\s-]*(комнат[ауыйе]*|спален|bedroom|bedrooms|habitaci[oó]n|habitaciones)/i,
+      /(одн[ауо][\s-]*комнат|однушк|1[\s-]*комнат)/i,
+      /(двух[\s-]*комнат|двушк|2[\s-]*комнат)/i,
+      /(трех[\s-]*комнат|трешк|3[\s-]*комнат)/i,
+      /(четырех[\s-]*комнат|4[\s-]*комнат)/i,
+      /(one|two|three|four)\s*(bed|bedroom)/i,
+      /(una?|dos|tres|cuatro)\s*(habitaci[oó]n|habitaciones)/i
     ];
 
     for (const pattern of roomPatterns) {
       const match = text.match(pattern);
       if (match) {
-        if (match[0].includes('студи')) {
-          insights.rooms = 'студия';
-        } else if (match[0].includes('одн') || match[0].includes('1')) {
-          insights.rooms = '1 комната';
-        } else if (match[0].includes('двух') || match[0].includes('двушк') || match[0].includes('2')) {
-          insights.rooms = '2 комнаты';
-        } else if (match[0].includes('трех') || match[0].includes('трешк') || match[0].includes('3')) {
-          insights.rooms = '3 комнаты';
-        } else if (match[0].includes('четырех') || match[0].includes('4')) {
-          insights.rooms = '4 комнаты';
-        } else if (match[1] && /\d/.test(match[1])) {
-          const num = match[1];
-          insights.rooms = `${num} ${num == 1 ? 'комната' : 'комнаты'}`;
+        const m0 = (match[0] || '').toLowerCase();
+        const m1 = match[1];
+        if (/студи/.test(m0)) { insights.rooms = 'студия'; }
+        else if (/studio/.test(m0)) { insights.rooms = 'studio'; }
+        else if (/estudio/.test(m0)) { insights.rooms = 'estudio'; }
+        else if (/одн|однушк|^1\s/.test(m0)) { insights.rooms = '1 комната'; }
+        else if (/двух|двушк|^2\s/.test(m0)) { insights.rooms = '2 комнаты'; }
+        else if (/трех|трешк|^3\s/.test(m0)) { insights.rooms = '3 комнаты'; }
+        else if (/четырех|^4\s/.test(m0)) { insights.rooms = '4 комнаты'; }
+        else if (/one\s/.test(m0)) { insights.rooms = '1 bedroom'; }
+        else if (/two\s/.test(m0)) { insights.rooms = '2 bedrooms'; }
+        else if (/three\s/.test(m0)) { insights.rooms = '3 bedrooms'; }
+        else if (/four\s/.test(m0)) { insights.rooms = '4 bedrooms'; }
+        else if (/una?\s|dos\s|tres\s|cuatro\s/.test(m0)) {
+          if (/una?\s/.test(m0)) insights.rooms = '1 habitación';
+          else if (/dos\s/.test(m0)) insights.rooms = '2 habitaciones';
+          else if (/tres\s/.test(m0)) insights.rooms = '3 habitaciones';
+          else if (/cuatro\s/.test(m0)) insights.rooms = '4 habitaciones';
+        } else if (m1 && /\d/.test(m1)) {
+          const num = String(m1).replace(/\D/g, '') || m1;
+          if (/habitaci|dormitorio/.test(m0)) insights.rooms = num === '1' ? '1 habitación' : `${num} habitaciones`;
+          else if (/bed/.test(m0)) insights.rooms = num === '1' ? '1 bedroom' : `${num} bedrooms`;
+          else insights.rooms = `${num} ${num == 1 ? 'комната' : 'комнаты'}`;
         }
-        
-        console.log(`✅ Найдено количество комнат: ${insights.rooms}`);
-        break;
+        if (insights.rooms) {
+          console.log(`✅ Найдено количество комнат: ${insights.rooms}`);
+          break;
+        }
       }
     }
   }
 
-  // 🆕 7. 📐 Площадь
+  // 🆕 7. 📐 Площадь — RU + EN + ES
   if (!insights.area) {
     const areaPatterns = [
-      /(\d+)[\s-]*(кв\.?\s*м\.?|м2|квадрат|метр)/i,           // "100 кв.м", "80м2"
-      /площад[ьи]?\s*(\d+)/i,                                // "площадь 120"
-      /(\d+)[\s-]*квадрат/i,                                 // "90 квадратов"
-      /(от|около|примерно)\s*(\d+)[\s-]*(кв\.?\s*м\.?|м2)/i  // "от 80 кв.м"
+      /(\d+)[\s-]*(кв\.?\s*м\.?|м2|квадрат|метр)/i,
+      /площад[ьи]?\s*(\d+)/i,
+      /(\d+)[\s-]*квадрат/i,
+      /(от|около|примерно)\s*(\d+)[\s-]*(кв\.?\s*м\.?|м2)/i,
+      /(\d+)[\s-]*(sq\.?\s*m\.?|m2|square\s*meter|sqm)/i,
+      /(\d+)\s*(m2|metros?\s*cuadrados?|m²)/i,
+      /(around|about|at\s*least)\s*(\d+)\s*(sq|m2|square)/i
     ];
 
     for (const pattern of areaPatterns) {
       const match = text.match(pattern);
       if (match) {
         let area = '';
-        // Находим число в любой позиции
         for (let i = 1; i < match.length; i++) {
           if (match[i] && /\d/.test(match[i])) {
             area = match[i];
             break;
           }
         }
-        
         if (area) {
           insights.area = `${area} м²`;
           console.log(`✅ Найдена площадь: ${insights.area}`);
@@ -890,94 +944,100 @@ const updateInsights = (sessionId, newMessage) => {
     }
   }
 
-  // 🆕 8. 📍 Детали локации
+  // 🆕 8. 📍 Детали локации — RU + EN + ES
   if (!insights.details) {
     const detailPatterns = [
-      /(возле|рядом\s*с|около|недалеко\s*от)\s*(парк[аеуи]*|сквер[аеуи]*|зелен[иоы]*)/i,    // "возле парка"
-      /(возле|рядом\s*с|около|недалеко\s*от)\s*(метро|станци[иеяй]*)/i,                      // "рядом с метро"
-      /(возле|рядом\s*с|около|недалеко\s*от)\s*(школ[ыаеий]*|детск[аеойи]*)/i,               // "около школы"
-      /(возле|рядом\s*с|около|недалеко\s*от)\s*(магазин[аеовы]*|торгов[аеоый]*)/i,           // "рядом с магазинами"
-      /(центральн[аяое]*|тихий|спокойн[ыйое]*|шумн[ыйое]*)/i,                               // "тихий", "центральная"
-      /(пешком\s*до|5\s*минут|10\s*минут)/i,                                                // "пешком до центра"
-      /(перекрест[окек]*|пересечени[ея]*|угол[у]*)\s*улиц/i                                  // "пересечение улиц"
+      /(возле|рядом\s*с|около|недалеко\s*от)\s*(парк[аеуи]*|сквер[аеуи]*|зелен[иоы]*)/i,
+      /(возле|рядом\s*с|около|недалеко\s*от)\s*(метро|станци[иеяй]*)/i,
+      /(возле|рядом\s*с|около|недалеко\s*от)\s*(школ[ыаеий]*|детск[аеойи]*)/i,
+      /(возле|рядом\s*с|около|недалеко\s*от)\s*(магазин[аеовы]*|торгов[аеоый]*)/i,
+      /(центральн[аяое]*|тихий|спокойн[ыйое]*|шумн[ыйое]*)/i,
+      /(пешком\s*до|5\s*минут|10\s*минут)/i,
+      /(перекрест[окек]*|пересечени[ея]*|угол[у]*)\s*улиц/i,
+      // EN
+      /(near|close\s*to|next\s*to)\s*(the\s*)?(park|green)/i,
+      /(near|close\s*to|by)\s*(the\s*)?(metro|station)/i,
+      /(near|close\s*to)\s*(the\s*)?(school|shops|shopping)/i,
+      /(quiet|peaceful|central|downtown)/i,
+      /(walking\s*distance|minutes\s*walk)/i,
+      // ES
+      /(cerca\s*del?\s*|junto\s*al?\s*)(parque|verde)/i,
+      /(cerca\s*del?\s*|junto\s*al?\s*)(metro|estaci[oó]n)/i,
+      /(cerca\s*del?\s*|junto\s*al?\s*)(colegio|escuela|tiendas)/i,
+      /(tranquilo|tranquila|centro|céntrico)/i,
+      /(a\s*pie|minutos\s*a\s*pie)/i
     ];
 
     for (const pattern of detailPatterns) {
       const match = text.match(pattern);
       if (match) {
-        let detail = match[0];
-        
-        // Нормализуем детали
-        if (detail.includes('парк') || detail.includes('зелен')) {
-          insights.details = 'возле парка';
-        } else if (detail.includes('метро') || detail.includes('станци')) {
-          insights.details = 'рядом с метро';
-        } else if (detail.includes('школ') || detail.includes('детск')) {
-          insights.details = 'около школы';
-        } else if (detail.includes('магазин') || detail.includes('торгов')) {
-          insights.details = 'рядом с магазинами';
-        } else if (detail.includes('тихий') || detail.includes('спокойн')) {
-          insights.details = 'тихий район';
-        } else if (detail.includes('центральн')) {
-          insights.details = 'центральное расположение';
-        } else if (detail.includes('пешком') || detail.includes('минут')) {
-          insights.details = 'удобная транспортная доступность';
-        } else if (detail.includes('перекрест') || detail.includes('пересечени') || detail.includes('угол')) {
-          insights.details = 'пересечение улиц';
-        } else {
-          insights.details = match[0];
+        const d = (match[0] || '').toLowerCase();
+        if (/парк|зелен|park|green|parque|verde/.test(d)) insights.details = /парк|зелен/.test(d) ? 'возле парка' : (/parque|verde/.test(d) ? 'cerca del parque' : 'near park');
+        else if (/метро|станци|metro|station|estaci/.test(d)) insights.details = /метро|станци/.test(d) ? 'рядом с метро' : (/estaci/.test(d) ? 'cerca del metro' : 'near metro');
+        else if (/школ|детск|school|colegio|escuela/.test(d)) insights.details = /школ|детск/.test(d) ? 'около школы' : (/colegio|escuela/.test(d) ? 'cerca del colegio' : 'near school');
+        else if (/магазин|торгов|shops|shopping|tiendas/.test(d)) insights.details = /магазин|торгов/.test(d) ? 'рядом с магазинами' : 'near shops';
+        else if (/тихий|спокойн|quiet|peaceful|tranquilo/.test(d)) insights.details = /тихий|спокойн/.test(d) ? 'тихий район' : (/tranquilo/.test(d) ? 'zona tranquila' : 'quiet area');
+        else if (/центральн|central|centro|céntrico/.test(d)) insights.details = /центральн/.test(d) ? 'центральное расположение' : (/centro|céntrico/.test(d) ? 'ubicación céntrica' : 'central location');
+        else if (/пешком|минут|walking|minutes\s*walk|a\s*pie/.test(d)) insights.details = /пешком|минут/.test(d) ? 'удобная транспортная доступность' : (/a\s*pie/.test(d) ? 'a pie' : 'walking distance');
+        else if (/перекрест|пересечени|угол/.test(d)) insights.details = 'пересечение улиц';
+        else insights.details = match[0];
+        if (insights.details) {
+          console.log(`✅ Найдены детали локации: ${insights.details}`);
+          break;
         }
-        
-        console.log(`✅ Найдены детали локации: ${insights.details}`);
-        break;
       }
     }
   }
 
-  // 🆕 9. ⭐ Предпочтения
+  // 🆕 9. ⭐ Предпочтения — RU + EN + ES
   if (!insights.preferences) {
     const preferencePatterns = [
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(балкон|лоджи[яй]*)/i,    // "важен балкон"
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(лифт|подъемник)/i,        // "нужен лифт"
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(паркинг|гараж|парковк)/i, // "желательно парковка"
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(ремонт|обновлен)/i,        // "хочу с ремонтом"
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(мебел[ьи]*)/i,             // "предпочитаю с мебелью"
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(кондиционер|климат)/i,     // "нужен кондиционер"
-      /(без\s*посредник|напряму[ую]*|от\s*собственник)/i,                                      // "без посредников"
-      /(срочн[оы]*|быстр[оы]*|как\s*можно\s*скорее)/i,                                         // "срочно"
-      /(в\s*рассрочку|ипотек[аеуи]*|кредит)/i                                                  // "в ипотеку"
+      // RU
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(балкон|лоджи[яй]*)/i,
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(лифт|подъемник)/i,
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(паркинг|гараж|парковк)/i,
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(ремонт|обновлен)/i,
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(мебел[ьи]*)/i,
+      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(кондиционер|климат)/i,
+      /(без\s*посредник|напряму[ую]*|от\s*собственник)/i,
+      /(срочн[оы]*|быстр[оы]*|как\s*можно\s*скорее)/i,
+      /(в\s*рассрочку|ипотек[аеуи]*|кредит)/i,
+      // EN
+      /\b(balcony|terrace)\b/i,
+      /\b(elevator|lift)\b/i,
+      /\b(parking|garage)\b/i,
+      /\b(renovated|renovation|refurbished)\b/i,
+      /\b(furnished)\b/i,
+      /\b(air\s*conditioning|ac)\b/i,
+      /\b(urgent|asap)\b/i,
+      // ES
+      /\b(balc[oó]n|terraza)\b/i,
+      /\b(ascensor)\b/i,
+      /\b(parking|garaje|plaza\s*de\s*garaje)\b/i,
+      /\b(reformado|reformada|renovado)\b/i,
+      /\b(amueblado|amueblada)\b/i,
+      /\b(aire\s*acondicionado|climatizaci[oó]n)\b/i,
+      /\b(urgente)\b/i
     ];
 
     for (const pattern of preferencePatterns) {
       const match = text.match(pattern);
       if (match) {
-        let preference = match[0].toLowerCase();
-        
-        // Нормализуем предпочтения
-        if (preference.includes('балкон') || preference.includes('лоджи')) {
-          insights.preferences = 'с балконом';
-        } else if (preference.includes('лифт')) {
-          insights.preferences = 'с лифтом';
-        } else if (preference.includes('паркинг') || preference.includes('гараж') || preference.includes('парковк')) {
-          insights.preferences = 'с парковкой';
-        } else if (preference.includes('ремонт') || preference.includes('обновлен')) {
-          insights.preferences = 'с ремонтом';
-        } else if (preference.includes('мебел')) {
-          insights.preferences = 'с мебелью';
-        } else if (preference.includes('кондиционер') || preference.includes('климат')) {
-          insights.preferences = 'с кондиционером';
-        } else if (preference.includes('без') && preference.includes('посредник')) {
-          insights.preferences = 'без посредников';
-        } else if (preference.includes('срочн') || preference.includes('быстр') || preference.includes('скорее')) {
-          insights.preferences = 'срочный поиск';
-        } else if (preference.includes('рассрочку') || preference.includes('ипотек') || preference.includes('кредит')) {
-          insights.preferences = 'ипотека/рассрочка';
-        } else {
-          insights.preferences = match[0];
+        const p = (match[0] || '').toLowerCase();
+        if (/балкон|лоджи|balcony|terrace|balcón|terraza/.test(p)) insights.preferences = /балкон|лоджи/.test(p) ? 'с балконом' : (/balcón|terraza/.test(p) ? 'con balcón' : 'with balcony');
+        else if (/лифт|подъемник|elevator|lift|ascensor/.test(p)) insights.preferences = /лифт|подъемник/.test(p) ? 'с лифтом' : (/ascensor/.test(p) ? 'con ascensor' : 'with elevator');
+        else if (/паркинг|гараж|парковк|parking|garage|garaje/.test(p)) insights.preferences = /паркинг|гараж|парковк/.test(p) ? 'с парковкой' : (/garaje|plaza/.test(p) ? 'con parking' : 'with parking');
+        else if (/ремонт|обновлен|renovated|refurbished|reformado/.test(p)) insights.preferences = /ремонт|обновлен/.test(p) ? 'с ремонтом' : (/reformado/.test(p) ? 'reformado' : 'renovated');
+        else if (/мебел|furnished|amueblado/.test(p)) insights.preferences = /мебел/.test(p) ? 'с мебелью' : (/amueblado/.test(p) ? 'amueblado' : 'furnished');
+        else if (/кондиционер|климат|air\s*conditioning|ac|aire\s*acondicionado/.test(p)) insights.preferences = /кондиционер|климат/.test(p) ? 'с кондиционером' : (/aire|climatizaci/.test(p) ? 'con aire acondicionado' : 'with air conditioning');
+        else if (/без\s*посредник/.test(p)) insights.preferences = 'без посредников';
+        else if (/срочн|быстр|скорее|urgent|asap|urgente/.test(p)) insights.preferences = /срочн|быстр|скорее/.test(p) ? 'срочный поиск' : (/urgente/.test(p) ? 'urgente' : 'urgent');
+        else if (/рассрочку|ипотек|кредит/.test(p)) insights.preferences = 'ипотека/рассрочка';
+        else insights.preferences = match[0];
+        if (insights.preferences) {
+          console.log(`✅ Найдены предпочтения: ${insights.preferences}`);
+          break;
         }
-        
-        console.log(`✅ Найдены предпочтения: ${insights.preferences}`);
-        break;
       }
     }
   }
