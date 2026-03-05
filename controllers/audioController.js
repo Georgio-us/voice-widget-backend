@@ -646,20 +646,46 @@ const updateInsights = (sessionId, newMessage) => {
   const text = newMessage.toLowerCase();
   
   console.log(`🧠 Анализирую сообщение для insights: "${newMessage}"`);
+  
+  // 1. 👤 Имя — строго одно слово после фразы (RU / EN / ES)
+  (() => {
+    if (!newMessage || typeof newMessage !== 'string') return;
 
-  // 1. 👤 Имя — только 3 строгие фразы (RU / EN / ES)
-  const nameMatch = newMessage.match(/меня зовут\s+(.+?)(?=[.,!?\n]|$)/i) ||
-    newMessage.match(/my name is\s+(.+?)(?=[.,!?\n]|$)/i) ||
-    newMessage.match(/me llamo\s+(.+?)(?=[.,!?\n]|$)/i);
-  if (nameMatch && nameMatch[1]) {
-    let name = nameMatch[1].trim();
-    const stopDelim = /[.,!?\n]/.exec(name);
-    if (stopDelim) name = name.slice(0, stopDelim.index).trim();
-    if (name.length > 0) {
-      insights.name = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
-      console.log(`✅ Найдено имя: ${insights.name}`);
+    const lowered = newMessage.toLowerCase();
+    const patterns = ['my name is', 'меня зовут', 'me llamo'];
+
+    let foundIndex = -1;
+    let phrase = '';
+    for (const p of patterns) {
+      const idx = lowered.indexOf(p);
+      if (idx !== -1 && (foundIndex === -1 || idx < foundIndex)) {
+        foundIndex = idx;
+        phrase = p;
+      }
     }
-  }
+
+    if (foundIndex === -1) return;
+
+    const start = foundIndex + phrase.length;
+    if (start >= newMessage.length) return;
+
+    let tail = newMessage.slice(start).trim();
+    if (!tail) return;
+
+    // Удаляем пунктуацию перед split: . , ! ?
+    tail = tail.replace(/[.,!?]/g, ' ').trim();
+    if (!tail) return;
+
+    const parts = tail.split(/\s+/);
+    const rawName = parts[0];
+    if (!rawName) return;
+
+    const name = rawName.trim();
+    if (!name) return;
+
+    insights.name = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+    console.log(`✅ Найдено имя: ${insights.name}`);
+  })();
 
   // 2. 🏠 Тип недвижимости (RU + EN + ES)
   if (!insights.type) {
@@ -760,6 +786,17 @@ const updateInsights = (sessionId, newMessage) => {
 
   // 4. 💵 Бюджет — RU + EN + ES
   if (!insights.budget) {
+    // Если площадь уже известна, извлекаем её числовое значение,
+    // чтобы не дублировать одно и то же число как budget и area.
+    let areaNumber = null;
+    if (insights.area && typeof insights.area === 'string') {
+      const m = insights.area.match(/(\d+)/);
+      if (m) {
+        const n = Number(m[1]);
+        if (!Number.isNaN(n)) areaNumber = n;
+      }
+    }
+
     const budgetPatterns = [
       // RU
       /(\d+[\d\s]*)\s*(тысяч?|тыс\.?)\s*(евро|€|euro)/i,
@@ -795,6 +832,15 @@ const updateInsights = (sessionId, newMessage) => {
           if (/^\d+\.\d{3}$/.test(number)) number = number.replace('.', '');
           const isThousands = /тысяч|тыс|\bk\b|thousand|mil|miles/.test(raw) && !/^\d+0{3,}$/.test(number);
           amount = isThousands ? `${number}000` : number;
+
+          // Если найденный бюджет по числу совпадает с уже известной площадью — пропускаем,
+          // чтобы одно и то же число (например, 45) не стало и area, и budget.
+          const amountNumber = Number(amount);
+          if (!Number.isNaN(amountNumber) && areaNumber != null && amountNumber === areaNumber) {
+            console.log(`⚠️ Пропускаем бюджет ${amountNumber} €, так как совпадает с площадью ${insights.area}`);
+            break;
+          }
+
           insights.budget = `${amount} €`;
           console.log(`✅ Найден бюджет: ${insights.budget}`);
           break;
