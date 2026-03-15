@@ -2217,14 +2217,12 @@ const transcribeAndRespond = async (req, res) => {
       const transcriptionStart = Date.now();
       
       // 🔄 Используем retry для Whisper API
-      // Язык транскрипции строго из запроса (как запрошено): req.body.lang || undefined
-      const whisperLang = (req.body && req.body.lang) ? String(req.body.lang).toLowerCase() : undefined;
+      // Важно: language НЕ передаем — Whisper сам автоопределяет язык речи.
       const whisperPayload = {
         file: audioFile,
         model: 'whisper-1',
         response_format: 'text'
       };
-      if (whisperLang) whisperPayload.language = whisperLang;
       const whisperResponse = await callOpenAIWithRetry(() => 
         openai.audio.transcriptions.create(whisperPayload), 2, 'Whisper'
       );
@@ -2727,19 +2725,27 @@ const transcribeAndRespond = async (req, res) => {
     }
 
     // const totalProps = properties.length; // устарело – переезд на БД
-    const targetLang = (() => {
-      const fromReq = (req.body && req.body.lang) ? String(req.body.lang).toLowerCase() : null;
-      if (fromReq) return fromReq;
+    const detectedLangFromText = (() => {
       const sample = (transcription || req.body.text || '').toString();
       if (/^[\s\S]*[А-Яа-яЁё]/.test(sample)) return 'ru';
       if (/^[\s\S]*[a-zA-Z]/.test(sample)) return 'en';
-      return 'ru';
+      return null;
+    })();
+    const targetLang = (() => {
+      // Для аудио приоритет — язык фактически распознанной речи
+      if (req.file && detectedLangFromText) return detectedLangFromText;
+      const fromReq = (req.body && req.body.lang) ? String(req.body.lang).toLowerCase() : null;
+      if (fromReq) return fromReq;
+      return detectedLangFromText || 'ru';
     })();
 
     // Обновляем стадию и язык перед GPT
     session.stage = determineStage(session.clientProfile, session.stage, session.messages);
-    // Установим язык профиля, если ещё не задан: используем эвристику targetLang
-    if (!session.clientProfile.language) {
+    // Для аудио синхронизируем язык профиля с фактически распознанной речью.
+    // Для текста сохраняем прежнее поведение (устанавливаем только если ещё не задан).
+    if (req.file && detectedLangFromText) {
+      session.clientProfile.language = detectedLangFromText;
+    } else if (!session.clientProfile.language) {
       session.clientProfile.language = targetLang;
     }
 
@@ -2903,6 +2909,10 @@ ${factsList.join('\n')}
     const fullModelText = completion.choices[0].message.content.trim();
     const { assistantText, meta } = extractAssistantAndMeta(fullModelText);
     let botResponse = assistantText || fullModelText;
+    // Bonus: после ответа GPT подтверждаем язык сессии по распознанному языку пользовательского текста.
+    if (detectedLangFromText) {
+      session.clientProfile.language = detectedLangFromText;
+    }
 
     // Patch (outside roadmap): client-visible bind vs spoke measurement (Safari DevTools)
     const spoke = extractSpokeCardId(botResponse);
