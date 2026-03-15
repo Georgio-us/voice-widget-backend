@@ -548,10 +548,20 @@ const getPrimaryLanguage = (session) => {
   return detectLangFromSession(session);
 };
 
+const getUiLanguage = (session) => {
+  const lang = String(getPrimaryLanguage(session) || '').toLowerCase();
+  if (lang === 'en') return 'en';
+  if (lang === 'es') return 'es';
+  return 'ru';
+};
+
 // Вариативный динамический комментарий под карточкой (для /interaction)
 const generateCardComment = (lang, p) => {
-  // Временно фиксируем язык на русский; поддержку языков добавим позже
-  const fallback = 'Как вам?';
+  const fallbackByLang = {
+    ru: 'Как вам?',
+    en: 'How do you like it?',
+    es: 'Que te parece?'
+  };
   const ru = [
     (p) => `Как вам район: ${p.city}, ${p.district}?`,
     (p) => `Комнат: ${p.rooms} — ${p.priceEUR} €. Что думаете?`,
@@ -559,7 +569,22 @@ const generateCardComment = (lang, p) => {
     (p) => `В этом бюджете выглядит здраво. Оцените, пожалуйста.`,
     (p) => `Посмотрите вариант и скажите впечатления.`
   ];
-  const bank = ru;
+  const en = [
+    (p) => `How do you like the area: ${p.city}, ${p.district}?`,
+    (p) => `${p.rooms} rooms for ${p.priceEUR} EUR. What do you think?`,
+    (p) => `Great balance of area and price. How does it feel to you?`,
+    (p) => `Looks solid for this budget. What is your impression?`,
+    (p) => `Take a look and share your thoughts.`
+  ];
+  const es = [
+    (p) => `Que te parece la zona: ${p.city}, ${p.district}?`,
+    (p) => `${p.rooms} habitaciones por ${p.priceEUR} EUR. Que opinas?`,
+    (p) => `Buena combinacion de zona y precio. Como lo ves?`,
+    (p) => `Se ve bien para este presupuesto. Cual es tu impresion?`,
+    (p) => `Revisa la opcion y cuentame que te parece.`
+  ];
+  const bank = lang === 'en' ? en : (lang === 'es' ? es : ru);
+  const fallback = fallbackByLang[lang] || fallbackByLang.ru;
   try {
     const pick = bank[Math.floor(Math.random() * bank.length)];
     return (typeof pick === 'function') ? (p ? pick(p) : fallback) : (pick || fallback);
@@ -3544,7 +3569,7 @@ async function handleInteraction(req, res) {
       if (!session.shownSet) session.shownSet = new Set();
       session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
-      const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
+      const lang = getUiLanguage(session);
       const assistantMessage = generateCardComment(lang, p);
       return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
     }
@@ -3558,7 +3583,7 @@ async function handleInteraction(req, res) {
         const all = await getAllNormalizedProperties();
         const p = all[0];
         const card = formatCardForClient(req, p);
-        const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
+        const lang = getUiLanguage(session);
         const assistantMessage = generateCardComment(lang, p);
         return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
       }
@@ -3595,7 +3620,7 @@ async function handleInteraction(req, res) {
       const p = all2.find(x => x.id === id) || all2[0];
       session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
-      const lang = getPrimaryLanguage(session) === 'en' ? 'en' : 'ru';
+      const lang = getUiLanguage(session);
       const assistantMessage = generateCardComment(lang, p);
       return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
     }
