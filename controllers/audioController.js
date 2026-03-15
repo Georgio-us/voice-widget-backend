@@ -2217,13 +2217,17 @@ const transcribeAndRespond = async (req, res) => {
       const transcriptionStart = Date.now();
       
       // 🔄 Используем retry для Whisper API
+      // Язык транскрипции: speechLang -> lang -> auto-detect (если не задан/auto/некорректен)
+      const speechLangRaw = String(req.body?.speechLang || req.body?.lang || '').trim().toLowerCase();
+      const speechLang = speechLangRaw !== 'auto' && /^[a-z]{2}$/.test(speechLangRaw) ? speechLangRaw : null;
+      const whisperPayload = {
+        file: audioFile,
+        model: 'whisper-1',
+        response_format: 'text'
+      };
+      if (speechLang) whisperPayload.language = speechLang;
       const whisperResponse = await callOpenAIWithRetry(() => 
-        openai.audio.transcriptions.create({
-          file: audioFile,
-          model: 'whisper-1',
-          language: 'ru',
-          response_format: 'text'
-        }), 2, 'Whisper'
+        openai.audio.transcriptions.create(whisperPayload), 2, 'Whisper'
       );
       
       transcriptionTime = Date.now() - transcriptionStart;
