@@ -20,17 +20,38 @@ export async function startTelegramBot() {
 
   const bot = new Telegraf(token);
   const miniAppUrl = String(process.env.FRONTEND_URL || '').trim();
+  const webAppButtonText = 'Talk to AI / Catalog 🏗️';
+
+  const setMenuButton = async (chatId = null) => {
+    if (!miniAppUrl) return;
+    try {
+      await bot.telegram.callApi('setChatMenuButton', {
+        ...(chatId ? { chat_id: chatId } : {}),
+        menu_button: {
+          type: 'web_app',
+          text: webAppButtonText,
+          web_app: { url: miniAppUrl }
+        }
+      });
+    } catch (error) {
+      console.warn('⚠️ Не удалось установить Telegram Menu Button:', error?.message || error);
+    }
+  };
+
+  await setMenuButton();
 
   bot.start(async (ctx) => {
-    const inlineKeyboard = miniAppUrl
+    await setMenuButton(ctx.chat?.id);
+
+    const inlineKeyboardMarkup = miniAppUrl
       ? {
-          reply_markup: {
-            inline_keyboard: [[{ text: 'Open Catalog 🏗️', url: miniAppUrl }]]
-          }
+          inline_keyboard: [
+            [{ text: webAppButtonText, web_app: { url: miniAppUrl } }]
+          ]
         }
       : undefined;
 
-    await ctx.reply(startMessage, inlineKeyboard);
+    await ctx.reply(startMessage, inlineKeyboardMarkup ? { reply_markup: inlineKeyboardMarkup } : undefined);
   });
 
   bot.on('text', async (ctx) => {
