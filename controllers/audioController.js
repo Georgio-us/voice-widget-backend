@@ -504,6 +504,13 @@ const getBaseUrl = (req) => {
   return host ? `${proto}://${host}` : '';
 };
 
+const formatNumberUS = (value) => {
+  if (value === null || value === undefined) return null;
+  const numeric = Number(String(value).replace(/[^\d.-]/g, ''));
+  if (!Number.isFinite(numeric)) return null;
+  return Math.round(numeric).toLocaleString('en-US');
+};
+
 const formatCardForClient = (req, p) => {
   const baseUrl = getBaseUrl(req);
   const images = (Array.isArray(p.images) ? p.images : [])
@@ -511,6 +518,7 @@ const formatCardForClient = (req, p) => {
     .filter(Boolean)
     .map((src) => src.replace('https://<backend-host>', baseUrl));
   const image = images.length ? images[0] : null;
+  const formattedPrice = formatNumberUS(p.priceEUR ?? p?.price?.amount);
   return {
     id: p.id,
     // Левые поля (география)
@@ -518,7 +526,7 @@ const formatCardForClient = (req, p) => {
     district: p.district ?? p?.location?.district ?? null,
     neighborhood: p.neighborhood ?? p?.location?.neighborhood ?? null,
     // Правые поля (основные цифры)
-    price: (p.priceEUR != null ? `${p.priceEUR} €` : (p?.price?.amount != null ? `${p.price.amount} €` : null)),
+    price: formattedPrice ? `${formattedPrice} AED` : null,
     priceEUR: p.priceEUR ?? p?.price?.amount ?? null,
     rooms: p.rooms ?? p?.specs?.rooms ?? null,
     floor: p.floor ?? p?.specs?.floor ?? null,
@@ -566,23 +574,24 @@ const generateCardComment = (lang, p) => {
     en: 'How do you like it?',
     es: 'Que te parece?'
   };
+  const formattedPrice = formatNumberUS(p?.priceEUR) || p?.priceEUR || '';
   const ru = [
     (p) => `Как вам район: ${p.city}, ${p.district}?`,
-    (p) => `Комнат: ${p.rooms} — ${p.priceEUR} €. Что думаете?`,
+    (p) => `Комнат: ${p.rooms} — ${formattedPrice} AED. Что думаете?`,
     (p) => `По району и цене — удачное сочетание. Как вам?`,
     (p) => `В этом бюджете выглядит здраво. Оцените, пожалуйста.`,
     (p) => `Посмотрите вариант и скажите впечатления.`
   ];
   const en = [
     (p) => `How do you like the area: ${p.city}, ${p.district}?`,
-    (p) => `${p.rooms} rooms for ${p.priceEUR} EUR. What do you think?`,
+    (p) => `${p.rooms} rooms for ${formattedPrice} AED. What do you think?`,
     (p) => `Great balance of area and price. How does it feel to you?`,
     (p) => `Looks solid for this budget. What is your impression?`,
     (p) => `Take a look and share your thoughts.`
   ];
   const es = [
     (p) => `Que te parece la zona: ${p.city}, ${p.district}?`,
-    (p) => `${p.rooms} habitaciones por ${p.priceEUR} EUR. Que opinas?`,
+    (p) => `${p.rooms} habitaciones por ${formattedPrice} AED. Que opinas?`,
     (p) => `Buena combinacion de zona y precio. Como lo ves?`,
     (p) => `Se ve bien para este presupuesto. Cual es tu impresion?`,
     (p) => `Revisa la opcion y cuentame que te parece.`
@@ -1778,9 +1787,11 @@ const normalizeNumber = (v) => {
 const formatBudgetFromRange = (min, max) => {
   const minNum = normalizeNumber(min);
   const maxNum = normalizeNumber(max);
-  if (minNum && maxNum) return `${minNum}–${maxNum} €`;
-  if (!minNum && maxNum) return `до ${maxNum} €`;
-  if (minNum && !maxNum) return `от ${minNum} €`;
+  const minFormatted = formatNumberUS(minNum);
+  const maxFormatted = formatNumberUS(maxNum);
+  if (minFormatted && maxFormatted) return `${minFormatted}–${maxFormatted} AED`;
+  if (!minFormatted && maxFormatted) return `до ${maxFormatted} AED`;
+  if (minFormatted && !maxFormatted) return `от ${minFormatted} AED`;
   return null;
 };
 
@@ -2765,7 +2776,7 @@ const transcribeAndRespond = async (req, res) => {
       if (req.file && detectedLangFromText) return detectedLangFromText;
       const fromReq = (req.body && req.body.lang) ? String(req.body.lang).toLowerCase() : null;
       if (fromReq) return fromReq;
-      return detectedLangFromText || 'ru';
+      return detectedLangFromText || 'en';
     })();
 
     // Обновляем стадию и язык перед GPT
@@ -2784,33 +2795,33 @@ const transcribeAndRespond = async (req, res) => {
     // Инструкции по стадии и формат ответа
     const stageInstruction = (() => {
       if (session.stage === 'intro') {
-        return `Режим: INTRO.
-Задача: коротко поприветствовать и понять, с какой задачей по недвижимости обращается клиент.
-Ограничения UX:
-- Не задавай более одного явного вопроса в одном ответе.
-- Не задавай подряд несколько узких анкетных вопросов — приоритет живой диалог.`;
+        return `Mode: INTRO.
+Task: Greet the client briefly and identify their real estate needs.
+UX constraints:
+- Do not ask more than one explicit question in a single response.
+- Do not ask several narrow questionnaire-style questions in a row; prioritize natural dialogue.`;
       }
       if (session.stage === 'qualification') {
-        return `Режим: QUALIFICATION.
-Задача: естественно собрать недостающие параметры профиля (location, budget, purpose и т.п.).
-Ограничения UX:
-- Не задавай более одного явного вопроса в одном ответе.
-- Не задавай подряд несколько узких анкетных вопросов — приоритет живой диалог.`;
+        return `Mode: QUALIFICATION.
+Task: Naturally gather profile parameters (location, budget, purpose).
+UX constraints:
+- Do not ask more than one explicit question in a single response.
+- Do not ask several narrow questionnaire-style questions in a row; prioritize natural dialogue.`;
       }
-      return `Режим: MATCHING_CLOSING.
-Задача: опираться на уже известный профиль, предлагать направления/варианты и мягко предлагать следующий шаг.
-Ограничения UX:
-- Не задавай более одного явного вопроса в одном ответе.
-- Не задавай подряд несколько узких анкетных вопросов — приоритет живой диалог.
-- CTA допустим только если заполнены хотя бы location и бюджет и уже был обмен несколькими репликами.`;
+      return `Mode: MATCHING_CLOSING.
+Task: Suggest locations/options based on profile and offer the next step (consultation/viewing).
+UX constraints:
+- Do not ask more than one explicit question in a single response.
+- Do not ask several narrow questionnaire-style questions in a row; prioritize natural dialogue.
+- CTA is allowed only when at least location and budget are known and there has already been a multi-turn exchange.`;
     })();
 
     // Инструкция по языку ответа (если определён)
     const languageInstruction = (() => {
       const lang = String(session.clientProfile.language || '').toLowerCase();
-      if (lang === 'en') return 'Answer primarily in English.';
-      if (lang === 'ru' || !lang) return 'Отвечай преимущественно на русском.';
-      return ''; // неизвестный язык — без инструкции
+      if (!lang || lang === 'en') return 'Answer in English.';
+      if (lang === 'ru') return 'Answer in Russian.';
+      return 'Answer in English.';
     })();
 
     const outputFormatInstruction = `Формат ответа строго двухчастный:
@@ -2839,7 +2850,7 @@ const transcribeAndRespond = async (req, res) => {
       if (snapshot.city) factsList.push(`Город: ${snapshot.city}`);
       if (snapshot.district) factsList.push(`Район: ${snapshot.district}`);
       if (snapshot.neighborhood) factsList.push(`Район/квартал: ${snapshot.neighborhood}`);
-      if (snapshot.priceEUR) factsList.push(`Цена: ${snapshot.priceEUR} €`);
+      if (snapshot.priceEUR) factsList.push(`Цена: ${formatNumberUS(snapshot.priceEUR) || snapshot.priceEUR} AED`);
       if (snapshot.rooms) factsList.push(`Количество комнат: ${snapshot.rooms}`);
       if (snapshot.floor) factsList.push(`Этаж: ${snapshot.floor}`);
       if (snapshot.hasImage) factsList.push(`Есть изображения: да`);
