@@ -19,9 +19,25 @@ export async function startTelegramBot() {
   }
 
   const bot = new Telegraf(token);
+  const miniAppUrl = String(process.env.FRONTEND_URL || '').trim();
 
   bot.start(async (ctx) => {
-    await ctx.reply(startMessage);
+    const inlineKeyboard = miniAppUrl
+      ? {
+          reply_markup: {
+            inline_keyboard: [[{ text: 'Open Catalog 🏗️', url: miniAppUrl }]]
+          }
+        }
+      : undefined;
+
+    await ctx.reply(startMessage, inlineKeyboard);
+  });
+
+  bot.on('text', async (ctx) => {
+    const incomingText = String(ctx.message?.text || '').trim();
+    await ctx.reply(
+      `I heard you: ${incomingText}. Soon I will be able to answer as an AI expert.`
+    );
   });
 
   await bot.launch();
