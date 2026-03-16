@@ -511,6 +511,36 @@ const formatNumberUS = (value) => {
   return Math.round(numeric).toLocaleString('en-US');
 };
 
+const detectBudgetCurrency = (text = '') => {
+  const s = String(text || '').toLowerCase();
+  if (/\b(aed|dirham|dirhams|дирхам|дирхама|дирхамов)\b/.test(s)) return 'AED';
+  if (/(\$|\busd\b|\bdollar\b|\bdollars\b|доллар|доллара|долларов)/.test(s)) return 'USD';
+  // Dubai demo default
+  return 'USD';
+};
+
+const buildInventoryContextMessage = async () => {
+  try {
+    const inventory = await getAllNormalizedProperties();
+    if (!Array.isArray(inventory) || inventory.length === 0) return null;
+    const lines = inventory.map((p) => {
+      const id = p?.id || 'N/A';
+      const district = p?.district || p?.city || 'Unknown area';
+      const type = p?.property_type || 'property';
+      const price = formatNumberUS(p?.priceEUR);
+      const priceLabel = price ? `${price} AED` : 'price on request';
+      return `- ${id}: ${type}, ${district}, ${priceLabel}`;
+    });
+    return `This is the current available inventory. You know these properties exist. When a user asks what's available, mention that we have an extensive database and highlight 2-3 matching options.
+Use only real properties from this list. Present options in a consultative style, not as a raw table dump.
+
+${lines.join('\n')}`;
+  } catch (err) {
+    console.warn('⚠️ Failed to build inventory context:', err?.message || err);
+    return null;
+  }
+};
+
 const formatCardForClient = (req, p) => {
   const baseUrl = getBaseUrl(req);
   const images = (Array.isArray(p.images) ? p.images : [])
@@ -822,7 +852,7 @@ const updateInsights = (sessionId, newMessage) => {
     }
   }
 
-  // 4. 💵 Бюджет — RU + EN + ES
+  // 4. 💵 Бюджет — RU + EN + ES (USD/AED defaulting to USD)
   if (!insights.budget) {
     // Если площадь уже известна, извлекаем её числовое значение,
     // чтобы не дублировать одно и то же число как budget и area.
@@ -837,19 +867,19 @@ const updateInsights = (sessionId, newMessage) => {
 
     const budgetPatterns = [
       // RU
-      /(\d+[\d\s]*)\s*(тысяч?|тыс\.?)\s*(евро|€|euro)/i,
-      /(\d+[\d\s]*)\s*(евро|€|euro)/i,
-      /(от\s*)?(\d+)[\s-]*(\d+)?\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i,
-      /(около|примерно|где-?то|приблизительно)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)?\s*(евро|€|euro)?/i,
-      /(до|максимум|не\s*больше)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i,
+      /(\d+[\d\s]*)\s*(тысяч?|тыс\.?)\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)/i,
+      /(\d+[\d\s]*)\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)/i,
+      /(от\s*)?(\d+)[\s-]*(\d+)?\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)?/i,
+      /(около|примерно|где-?то|приблизительно)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)?\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)?/i,
+      /(до|максимум|не\s*больше)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)?/i,
       // EN
-      /(\d+[\d\s,]*)\s*(thousand|k)\s*(euro|€|eur)?/i,
-      /(\d+[\d\s,]*)\s*(euro|€|eur)/i,
-      /(up\s*to|max|around|about)\s*(\d+[\d\s,]*)\s*(k|thousand)?\s*(euro|€)?/i,
+      /(\d+[\d\s,]*)\s*(thousand|k)\s*(euro|€|eur|usd|\$|dollars?|aed|dirhams?)?/i,
+      /(\d+[\d\s,]*)\s*(euro|€|eur|usd|\$|dollars?|aed|dirhams?)/i,
+      /(up\s*to|max|around|about)\s*(\d+[\d\s,]*)\s*(k|thousand)?\s*(euro|€|eur|usd|\$|dollars?|aed|dirhams?)?/i,
       // ES
-      /(\d+[\d\s.]*)\s*(mil|miles|k)\s*(euro|€|eur)?/i,
-      /(\d+[\d\s.]*)\s*(euro|€|eur)/i,
-      /(hasta|m[aá]ximo|alrededor\s*de|unos?)\s*(\d+[\d\s.]*)\s*(mil|k)?\s*(euro|€)?/i
+      /(\d+[\d\s.]*)\s*(mil|miles|k)\s*(euro|€|eur|usd|\$|d[oó]lares?|aed|dirhams?)?/i,
+      /(\d+[\d\s.]*)\s*(euro|€|eur|usd|\$|d[oó]lares?|aed|dirhams?)/i,
+      /(hasta|m[aá]ximo|alrededor\s*de|unos?)\s*(\d+[\d\s.]*)\s*(mil|k)?\s*(euro|€|eur|usd|\$|d[oó]lares?|aed|dirhams?)?/i
     ];
 
     for (const pattern of budgetPatterns) {
@@ -875,11 +905,13 @@ const updateInsights = (sessionId, newMessage) => {
           // чтобы одно и то же число (например, 45) не стало и area, и budget.
           const amountNumber = Number(amount);
           if (!Number.isNaN(amountNumber) && areaNumber != null && amountNumber === areaNumber) {
-            console.log(`⚠️ Пропускаем бюджет ${amountNumber} €, так как совпадает с площадью ${insights.area}`);
-            break;
+            console.log(`⚠️ Пропускаем бюджет ${amountNumber}, так как совпадает с площадью ${insights.area}`);
+            continue;
           }
 
-          insights.budget = `${amount} €`;
+          const currency = detectBudgetCurrency(text);
+          const formattedAmount = formatNumberUS(amount) || amount;
+          insights.budget = `${formattedAmount} ${currency}`;
           console.log(`✅ Найден бюджет: ${insights.budget}`);
           break;
         }
@@ -1185,7 +1217,7 @@ ${conversationHistory}
 БЛОК 1 - ОСНОВНАЯ ИНФОРМАЦИЯ:
 1. ИМЯ КЛИЕНТА - как его зовут (учти возможные ошибки транскрипции)
 2. ТИП ОПЕРАЦИИ - покупка или аренда  
-3. БЮДЖЕТ - сколько готов потратить (в евро, приведи к числу)
+3. БЮДЖЕТ - сколько готов потратить (извлеки сумму и валюту)
 
 БЛОК 2 - ПАРАМЕТРЫ НЕДВИЖИМОСТИ:
 4. ТИП НЕДВИЖИМОСТИ - что ищет (квартира, дом, студия, апартаменты, комната, пентхаус)
@@ -1201,7 +1233,8 @@ ${conversationHistory}
 - Исправляй ошибки транскрипции (Аленсия → Валенсия, Русфа → Русафа)
 - Учитывай контекст и подтекст
 - Если информации нет - укажи null
-- Бюджет приводи к формату "число €" (например: "300000 €")
+- Для бюджета указывай валюту явно: "число USD" или "число AED" (например: "300000 USD")
+- Если валюта не указана явно, используй USD по умолчанию (Dubai demo)
 - Комнаты в формате "число комнаты" или "студия"
 - Площадь в формате "число м²"
 
@@ -1209,7 +1242,7 @@ ${conversationHistory}
 {
   "name": "имя или null",
   "operation": "покупка/аренда или null",
-  "budget": "сумма € или null",
+  "budget": "сумма с валютой (USD/AED) или null",
   "type": "тип недвижимости или null", 
   "location": "локация или null",
   "rooms": "количество комнат или null",
@@ -2824,6 +2857,8 @@ UX constraints:
       return 'Answer in English.';
     })();
 
+    const inventoryInstruction = await buildInventoryContextMessage();
+
     const outputFormatInstruction = `Формат ответа строго двухчастный:
 1) Текст для пользователя.
 2) Строка ---META---
@@ -2900,6 +2935,7 @@ ${factsList.join('\n')}
         role: 'system',
         content: `${stageInstruction}\n\n${outputFormatInstruction}`
       },
+      ...(inventoryInstruction ? [{ role: 'system', content: inventoryInstruction }] : []),
       ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
       ...(allowedFactsInstruction ? [{ role: 'system', content: allowedFactsInstruction }] : []),
       ...(postHandoffInstruction ? [{ role: 'system', content: postHandoffInstruction }] : []),
