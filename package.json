@@ -27,6 +27,7 @@
     "multer": "^2.0.2",
     "openai": "^5.10.2",
     "pg": "^8.16.3",
+    "telegraf": "^4.16.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

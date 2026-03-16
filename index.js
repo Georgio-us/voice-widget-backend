@@ -19,6 +19,7 @@ import cardRouter from './routes/cardRoute.js';
 import telemetryRouter from './routes/telemetryRoute.js';
 import leadsRouter from './routes/leadsRoute.js';
 import supportRouter from './routes/supportRoute.js';
+import { startTelegramBot, stopTelegramBot } from './services/telegramBot.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -174,11 +175,13 @@ app.use((err, req, res, next) => {
 // 🚀 Graceful shutdown обработчики
 process.on('SIGTERM', () => {
   console.log('👋 Получен сигнал SIGTERM, завершаем сервер...');
+  stopTelegramBot('SIGTERM');
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('👋 Получен сигнал SIGINT (Ctrl+C), завершаем сервер...');
+  stopTelegramBot('SIGINT');
   process.exit(0);
 });
 
@@ -207,4 +210,9 @@ app.listen(PORT, '0.0.0.0', () => {
 
   // ✅ проверяем подключение к Postgres
   testDbConnection();
+
+  // ✅ запускаем Telegram interactive bot (если задан токен)
+  startTelegramBot().catch((error) => {
+    console.error('🚨 Не удалось запустить Telegram interactive bot:', error.message);
+  });
 });
