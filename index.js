@@ -25,6 +25,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
+const DEFAULT_FRONTEND_URL = 'https://voice-widget-frontend-tgdubai-split.up.railway.app/';
 
 // ТУТ ИНФОРМАЦИЯ О ДОМЕНАХ СЕРВЕРАХ И КОРС:
 app.use(cors({
@@ -41,7 +42,8 @@ app.use(cors({
     const allowedOrigins = [
       'https://georgio-us.github.io/Voice-Widget-Frontend/',  // ← Полный путь!
       'https://georgio-us.github.io',  // ← На всякий случай и основной домен
-      process.env.FRONTEND_URL
+      process.env.FRONTEND_URL,
+      DEFAULT_FRONTEND_URL
     ].filter(Boolean);
     
     if (allowedOrigins.includes(origin)) {

@@ -2,6 +2,7 @@ import { Telegraf } from 'telegraf';
 
 const startMessage =
   'Welcome to Dubai Real Estate! I am your AI assistant. How can I help you today?';
+const DEFAULT_FRONTEND_URL = 'https://voice-widget-frontend-tgdubai-split.up.railway.app/';
 
 let botInstance = null;
 
@@ -19,7 +20,7 @@ export async function startTelegramBot() {
   }
 
   const bot = new Telegraf(token);
-  const miniAppUrl = String(process.env.FRONTEND_URL || '').trim();
+  const miniAppUrl = String(process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL).trim();
   const webAppButtonText = 'Talk to AI / Catalog 🏗️';
 
   const setMenuButton = async (chatId = null) => {
