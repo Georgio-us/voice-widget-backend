@@ -1343,31 +1343,10 @@ const formatBudgetFromRange = (min, max) => {
   return null;
 };
 
-const mapPurposeToOperationRu = (purpose) => {
-  if (!purpose) return null;
-  const s = String(purpose).toLowerCase();
-  if (/(buy|покуп|купить|purchase|invest|инвест)/i.test(s)) return 'покупка';
-  if (/(rent|аренд|снять|lease)/i.test(s)) return 'аренда';
-  return null;
-};
+const INSIGHT_FIELDS = ['name', 'operation', 'budget', 'type', 'location', 'rooms', 'area', 'details', 'preferences'];
 
-const mapClientProfileToInsights = (clientProfile, insights) => {
-  if (!clientProfile || !insights) return;
-  // Бюджет
-  const budgetStr = formatBudgetFromRange(clientProfile.budgetMin, clientProfile.budgetMax);
-  if (budgetStr) insights.budget = budgetStr;
-  // Локация
-  if (clientProfile.location) insights.location = clientProfile.location;
-  // Тип
-  if (clientProfile.propertyType) insights.type = clientProfile.propertyType;
-  // Операция
-  const op = mapPurposeToOperationRu(clientProfile.purpose);
-  if (op) insights.operation = op;
-  // Срочность → предпочтения
-  if (clientProfile.urgency && /сроч/i.test(String(clientProfile.urgency))) {
-    insights.preferences = 'срочный поиск';
-  }
-  // Пересчёт прогресса
+const recalcInsightsProgress = (insights) => {
+  if (!insights || typeof insights !== 'object') return;
   const weights = {
     name: 11,
     operation: 11,
@@ -1380,15 +1359,98 @@ const mapClientProfileToInsights = (clientProfile, insights) => {
     preferences: 11
   };
   let totalProgress = 0;
-  let filledFields = 0;
   for (const [field, weight] of Object.entries(weights)) {
     const val = insights[field];
-    if (val != null && String(val).trim()) {
-      totalProgress += weight;
-      filledFields++;
-    }
+    if (val != null && String(val).trim()) totalProgress += weight;
   }
   insights.progress = Math.min(totalProgress, 99);
+};
+
+const sanitizeInsightValue = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : null;
+  }
+  if (Array.isArray(value)) {
+    const cleaned = value.map((item) => String(item ?? '').trim()).filter(Boolean);
+    return cleaned.length ? cleaned.join(', ') : null;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    if ('value' in value) return sanitizeInsightValue(value.value);
+    try {
+      const packed = JSON.stringify(value);
+      return packed && packed !== '{}' ? packed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const mapPurposeToOperationRu = (purpose) => {
+  if (!purpose) return null;
+  const s = String(purpose).toLowerCase();
+  if (/(buy|покуп|купить|purchase|invest|инвест)/i.test(s)) return 'покупка';
+  if (/(rent|аренд|снять|lease)/i.test(s)) return 'аренда';
+  return null;
+};
+
+const mapClientProfileToInsights = (clientProfile, insights) => {
+  if (!clientProfile || !insights) return;
+  // Бюджет
+  const explicitBudget = sanitizeInsightValue(clientProfile.budget);
+  const budgetStr = explicitBudget || formatBudgetFromRange(clientProfile.budgetMin, clientProfile.budgetMax);
+  if (budgetStr) insights.budget = budgetStr;
+  // Локация
+  const location = sanitizeInsightValue(clientProfile.location);
+  if (location) insights.location = location;
+  // Тип
+  const propertyType = sanitizeInsightValue(clientProfile.propertyType);
+  if (propertyType) insights.type = propertyType;
+  // Операция
+  const op = mapPurposeToOperationRu(clientProfile.purpose);
+  if (op) insights.operation = op;
+  const operation = sanitizeInsightValue(clientProfile.operation);
+  if (operation) insights.operation = operation;
+  // Срочность → предпочтения
+  if (clientProfile.urgency && /сроч/i.test(String(clientProfile.urgency))) {
+    insights.preferences = 'срочный поиск';
+  }
+  // Поля clientProfile, полезные для debug/подбора
+  for (const [profileKey, insightKey] of [
+    ['name', 'name'],
+    ['rooms', 'rooms'],
+    ['area', 'area'],
+    ['details', 'details'],
+    ['preferences', 'preferences']
+  ]) {
+    const val = sanitizeInsightValue(clientProfile[profileKey]);
+    if (val) insights[insightKey] = val;
+  }
+  recalcInsightsProgress(insights);
+};
+
+const applyMetaInsightsToSession = (session, meta) => {
+  if (!session || !meta || typeof meta !== 'object') return;
+  if (!session.insights || typeof session.insights !== 'object') {
+    session.insights = {};
+  }
+  const buckets = [];
+  if (meta.insights && typeof meta.insights === 'object') buckets.push(meta.insights);
+  if (meta.clientProfile && typeof meta.clientProfile === 'object') buckets.push(meta.clientProfile);
+  if (meta.clientProfileDelta && typeof meta.clientProfileDelta === 'object') buckets.push(meta.clientProfileDelta);
+  if (meta.clientProfile?.insights && typeof meta.clientProfile.insights === 'object') buckets.push(meta.clientProfile.insights);
+  for (const bucket of buckets) {
+    for (const field of INSIGHT_FIELDS) {
+      const normalized = sanitizeInsightValue(bucket[field]);
+      if (normalized) {
+        session.insights[field] = normalized;
+      }
+    }
+  }
+  recalcInsightsProgress(session.insights);
 };
 
 // 🆕 Sprint V: детекция reference в тексте пользователя (без интерпретации)
@@ -2391,9 +2453,17 @@ UX constraints:
   "clientProfileDelta": {
     // только обновляемые поля профиля, без null и undefined
   },
-  "stage": "intro" | "qualification" | "matching_closing"
+  "clientProfile": {
+    // новые/уточнённые данные клиента (name, operation, budget, type, location, rooms, area, details, preferences)
+  },
+  "insights": {
+    // новые/уточнённые insights по тем же полям
+  },
+  "stage": "matching_closing"
 }
-Если нечего обновлять, пришли "clientProfileDelta": {}.`;
+Если нечего обновлять, пришли пустые объекты:
+{ "clientProfileDelta": {}, "clientProfile": {}, "insights": {}, "stage": "matching_closing" }.
+КРИТИЧЕСКИ ВАЖНО: как только в диалоге появляются новые данные клиента, добавь их в clientProfile и/или insights в этом же ответе (без отдельного запроса).`;
 
     // 🆕 Sprint II / Block A: добавляем allowedFactsSnapshot в контекст модели (если есть факты)
     const allowedFactsInstruction = (() => {
@@ -2547,6 +2617,8 @@ ${factsList.join('\n')}
         session.stage = 'matching_closing';
         // Синхронизация с insights и пересчёт прогресса
         mapClientProfileToInsights(session.clientProfile, session.insights);
+        // Прямой мост: если LLM вернул insights/clientProfile в META, переносим их в session.insights
+        applyMetaInsightsToSession(session, meta);
         // Компактный лог обновления профиля и стадии
         const profileLog = {
           language: session.clientProfile.language,
