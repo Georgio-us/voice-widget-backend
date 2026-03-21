@@ -3,8 +3,44 @@ import { Telegraf } from 'telegraf';
 const startMessage =
   'Welcome to Dubai Real Estate! I am your AI assistant. How can I help you today?';
 const DEFAULT_FRONTEND_URL = 'https://voice-widget-frontend-tgdubai-split.up.railway.app/';
+const START_PREFIX = 'prop_';
 
 let botInstance = null;
+
+function normalizePropId(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .toUpperCase();
+}
+
+function parseStartPayload(rawPayload) {
+  const payload = String(rawPayload || '').trim();
+  if (!payload || !payload.startsWith(START_PREFIX)) return null;
+  const propId = normalizePropId(payload.slice(START_PREFIX.length));
+  return propId || null;
+}
+
+function parseStartPayloadFromMessage(messageText) {
+  const text = String(messageText || '').trim();
+  const match = text.match(/^\/start(?:@\w+)?(?:\s+(.+))?$/i);
+  const payload = match?.[1] ? String(match[1]).trim() : '';
+  return parseStartPayload(payload);
+}
+
+function buildMiniAppUrl(baseUrl, propId) {
+  const base = String(baseUrl || '').trim();
+  if (!base) return '';
+  if (!propId) return base;
+  try {
+    const url = new URL(base);
+    url.searchParams.set('propId', propId);
+    return url.toString();
+  } catch {
+    const normalizedBase = base.replace(/\/+$/, '');
+    return `${normalizedBase}/?propId=${encodeURIComponent(propId)}`;
+  }
+}
 
 export async function startTelegramBot() {
   if (botInstance) {
@@ -42,17 +78,23 @@ export async function startTelegramBot() {
   await setMenuButton();
 
   bot.start(async (ctx) => {
+    const propIdFromPayload = parseStartPayload(ctx.startPayload);
+    const propIdFromText = parseStartPayloadFromMessage(ctx.message?.text);
+    const propId = propIdFromPayload || propIdFromText || null;
+    const launchUrl = buildMiniAppUrl(miniAppUrl, propId);
+
     await setMenuButton(ctx.chat?.id);
 
-    const inlineKeyboardMarkup = miniAppUrl
+    const inlineKeyboardMarkup = launchUrl
       ? {
           inline_keyboard: [
-            [{ text: webAppButtonText, web_app: { url: miniAppUrl } }]
+            [{ text: webAppButtonText, web_app: { url: launchUrl } }]
           ]
         }
       : undefined;
 
-    await ctx.reply(startMessage, inlineKeyboardMarkup ? { reply_markup: inlineKeyboardMarkup } : undefined);
+    const replyText = propId ? `Opening property ${propId}` : startMessage;
+    await ctx.reply(replyText, inlineKeyboardMarkup ? { reply_markup: inlineKeyboardMarkup } : undefined);
   });
 
   bot.on('text', async (ctx) => {
