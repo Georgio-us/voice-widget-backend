@@ -1,9 +1,12 @@
 import { Telegraf } from 'telegraf';
+import { getPropertyByExternalId } from './propertiesRepository.js';
 
 const startMessage =
   'Welcome to Dubai Real Estate! I am your AI assistant. How can I help you today?';
 const DEFAULT_FRONTEND_URL = 'https://voice-widget-frontend-tgdubai-split.up.railway.app/';
 const START_PREFIX = 'prop_';
+const INLINE_SHARE_PREFIX = 'share_prop_';
+const TELEGRAM_BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || 'viaproperties_bot').replace(/^@/, '');
 
 let botInstance = null;
 
@@ -40,6 +43,51 @@ function buildMiniAppUrl(baseUrl, propId) {
     const normalizedBase = base.replace(/\/+$/, '');
     return `${normalizedBase}/?propId=${encodeURIComponent(propId)}`;
   }
+}
+
+function parseInlineSharePropId(inlineQuery) {
+  const query = String(inlineQuery || '').trim();
+  if (!query.toLowerCase().startsWith(INLINE_SHARE_PREFIX)) return null;
+  const raw = query.slice(INLINE_SHARE_PREFIX.length);
+  const propId = normalizePropId(raw);
+  return propId || null;
+}
+
+function parseImages(rawImages) {
+  if (Array.isArray(rawImages)) return rawImages.filter(Boolean).map((v) => String(v).trim()).filter(Boolean);
+  if (typeof rawImages === 'string') {
+    const text = rawImages.trim();
+    if (!text) return [];
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed.filter(Boolean).map((v) => String(v).trim()).filter(Boolean);
+    } catch {}
+    return text.split(',').map((v) => String(v).trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function formatPriceLabel(raw) {
+  const num = Number(raw);
+  if (Number.isFinite(num) && num > 0) return `${Math.round(num).toLocaleString('en-US')} AED`;
+  const text = String(raw || '').trim();
+  return text || 'Price on request';
+}
+
+async function getPropertyForInlineShare(propId) {
+  const raw = await getPropertyByExternalId(propId);
+  if (!raw) return null;
+  const images = parseImages(raw.images);
+  return {
+    id: normalizePropId(raw.external_id || raw.id),
+    title: String(raw.title || '').trim(),
+    propertyType: String(raw.property_type || 'property').trim(),
+    city: String(raw.location_city || '').trim(),
+    district: String(raw.location_district || raw.location_neighborhood || '').trim(),
+    neighborhood: String(raw.location_neighborhood || '').trim(),
+    priceLabel: formatPriceLabel(raw.price_amount),
+    image: images[0] || ''
+  };
 }
 
 export async function startTelegramBot() {
@@ -95,6 +143,55 @@ export async function startTelegramBot() {
 
     const replyText = propId ? `Opening property ${propId}` : startMessage;
     await ctx.reply(replyText, inlineKeyboardMarkup ? { reply_markup: inlineKeyboardMarkup } : undefined);
+  });
+
+  bot.on('inline_query', async (ctx) => {
+    try {
+      const query = String(ctx.inlineQuery?.query || '').trim();
+      const propId = parseInlineSharePropId(query);
+      if (!propId) {
+        await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
+        return;
+      }
+
+      const property = await getPropertyForInlineShare(propId);
+      if (!property) {
+        await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
+        return;
+      }
+
+      const district = property.district || property.neighborhood || 'Dubai';
+      const heading = `${property.propertyType} in ${district}`;
+      const messageText = [
+        `🏙 ${heading}`,
+        `💰 ${property.priceLabel}`,
+        `📍 ${district}`
+      ].join('\n');
+
+      const miniAppDeepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}/app?startapp=${encodeURIComponent(`${START_PREFIX}${property.id}`)}`;
+      const result = {
+        type: 'article',
+        id: `share_${property.id}`,
+        title: `🏙 ${heading}`,
+        description: `${property.priceLabel} • ${district}`,
+        input_message_content: {
+          message_text: messageText
+        },
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Смотреть объект', url: miniAppDeepLink }]
+          ]
+        }
+      };
+      if (property.image) {
+        result.thumb_url = property.image;
+      }
+
+      await ctx.answerInlineQuery([result], { cache_time: 0, is_personal: true });
+    } catch (error) {
+      console.warn('inline_query handling failed:', error?.message || error);
+      try { await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true }); } catch {}
+    }
   });
 
   bot.on('text', async (ctx) => {
