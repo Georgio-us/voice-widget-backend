@@ -21,6 +21,7 @@ const DEFAULT_CLIENT_ID = 'demo';
  * @param {string|null} params.phoneCountryCode - код страны телефона (например +34)
  * @param {string|null} params.phoneNumber - номер телефона
  * @param {string|null} params.email - email адрес
+ * @param {string|null} params.telegramUsername - Telegram username (опционально)
  * @param {string|null} params.preferredContactMethod - предпочитаемый способ связи (whatsapp, phone, email)
  * @param {string|null} params.comment - комментарий (может быть null)
  * @param {string} params.language - язык диалога/интерфейса (ru, en, es...)
@@ -38,6 +39,7 @@ export async function createLead({
   phoneCountryCode = null,
   phoneNumber = null,
   email = null,
+  telegramUsername = null,
   preferredContactMethod = null,
   comment = null,
   language,
@@ -55,12 +57,10 @@ export async function createLead({
     throw new Error('consent must be true to create a lead');
   }
 
-  // Валидация: хотя бы один из phoneNumber или email должен быть заполнен
+  // Валидация: хотя бы один контакт (phone/email/telegram) должен быть заполнен
   const phoneNumberTrimmed = phoneNumber ? String(phoneNumber).trim() : '';
   const emailTrimmed = email ? String(email).trim() : '';
-  if (phoneNumberTrimmed.length === 0 && emailTrimmed.length === 0) {
-    throw new Error('at least one of phoneNumber or email must be provided');
-  }
+  const telegramUsernameTrimmed = telegramUsername ? String(telegramUsername).trim() : '';
 
   // Валидация: source обязателен
   if (!source || typeof source !== 'string' || source.trim().length === 0) {
@@ -68,21 +68,36 @@ export async function createLead({
   }
 
   // Нормализация значений для БД (null вместо пустых строк)
+  const normalizedPreferredContactMethod = preferredContactMethod && String(preferredContactMethod).trim().length > 0
+    ? String(preferredContactMethod).trim()
+    : null;
+  const telegramContactOk =
+    (String(source || '').trim() === 'tg_mini_app' || String(normalizedPreferredContactMethod || '').toLowerCase() === 'telegram') &&
+    telegramUsernameTrimmed.length > 0;
+  if (phoneNumberTrimmed.length === 0 && emailTrimmed.length === 0 && !telegramContactOk) {
+    throw new Error('at least one contact (phone, email or telegram) must be provided');
+  }
+
   const normalizedPhoneCountryCode = phoneCountryCode && String(phoneCountryCode).trim().length > 0
     ? String(phoneCountryCode).trim()
     : null;
   const normalizedPhoneNumber = phoneNumberTrimmed.length > 0 ? phoneNumberTrimmed : null;
-  const normalizedEmail = emailTrimmed.length > 0 ? emailTrimmed : null;
-  const normalizedPreferredContactMethod = preferredContactMethod && String(preferredContactMethod).trim().length > 0
-    ? String(preferredContactMethod).trim()
-    : null;
+  const normalizedEmail = emailTrimmed.length > 0
+    ? emailTrimmed
+    : (telegramContactOk ? `${telegramUsernameTrimmed.replace(/^@/, '').toLowerCase()}@telegram.local` : null);
   const normalizedComment = comment && String(comment).trim().length > 0
     ? String(comment).trim()
     : null;
   const normalizedPropertyId = propertyId && String(propertyId).trim().length > 0
     ? String(propertyId).trim()
     : null;
-  const normalizedExtra = extra && typeof extra === 'object' ? JSON.stringify(extra) : null;
+  const extraPayload = (extra && typeof extra === 'object' && !Array.isArray(extra)) ? { ...extra } : {};
+  if (telegramContactOk) {
+    extraPayload.telegramUsername = telegramUsernameTrimmed.startsWith('@')
+      ? telegramUsernameTrimmed
+      : `@${telegramUsernameTrimmed}`;
+  }
+  const normalizedExtra = Object.keys(extraPayload).length > 0 ? JSON.stringify(extraPayload) : null;
 
   try {
     const result = await pool.query(
@@ -145,4 +160,3 @@ export async function createLead({
     throw new Error(`Database error: ${err.message}`);
   }
 }
-

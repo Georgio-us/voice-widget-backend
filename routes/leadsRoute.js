@@ -53,6 +53,7 @@ router.post('/', async (req, res) => {
       phoneCountryCode,
       phoneNumber,
       email,
+      telegramUsername,
       preferredContactMethod,
       comment,
       language,
@@ -78,13 +79,17 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Валидация: хотя бы один из phoneNumber или email должен быть заполнен
+    // Валидация: хотя бы один контакт (phone/email/telegram) должен быть заполнен
     const phoneNumberTrimmed = phoneNumber ? String(phoneNumber).trim() : '';
     const emailTrimmed = email ? String(email).trim() : '';
-    if (phoneNumberTrimmed.length === 0 && emailTrimmed.length === 0) {
+    const telegramUsernameTrimmed = telegramUsername ? String(telegramUsername).trim() : '';
+    const telegramContactOk =
+      (source === 'tg_mini_app' || String(preferredContactMethod || '').toLowerCase() === 'telegram') &&
+      telegramUsernameTrimmed.length > 0;
+    if (phoneNumberTrimmed.length === 0 && emailTrimmed.length === 0 && !telegramContactOk) {
       return res.status(400).json({
         ok: false,
-        error: 'at least one of phoneNumber or email must be provided',
+        error: 'at least one contact (phone, email or telegram) must be provided',
         code: 'VALIDATION_ERROR'
       });
     }
@@ -113,7 +118,8 @@ router.post('/', async (req, res) => {
       language: language || 'ru',
       propertyId,
       consent,
-      extra: null // пока не используем
+      telegramUsername: telegramUsernameTrimmed || null,
+      extra: telegramContactOk ? { telegramUsername: telegramUsernameTrimmed } : null
     });
 
     // Read-only enrichment for Telegram notification (best-effort):
@@ -195,6 +201,7 @@ router.post('/', async (req, res) => {
           propertyId: propertyId || null,
           hasPhone: !!phoneNumberTrimmed,
           hasEmail: !!emailTrimmed,
+          hasTelegram: !!telegramContactOk,
           preferredContactMethod: preferredContactMethod || null
         }
       });
@@ -237,4 +244,3 @@ router.post('/', async (req, res) => {
 });
 
 export default router;
-
