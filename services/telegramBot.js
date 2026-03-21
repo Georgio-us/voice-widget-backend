@@ -74,6 +74,13 @@ function formatPriceLabel(raw) {
   return text || 'Price on request';
 }
 
+function isValidPublicImageUrl(url) {
+  const value = String(url || '').trim();
+  if (!/^https:\/\//i.test(value)) return false;
+  if (value.includes('<backend-host>')) return false;
+  return true;
+}
+
 async function getPropertyForInlineShare(propId) {
   const raw = await getPropertyByExternalId(propId);
   if (!raw) return null;
@@ -148,6 +155,7 @@ export async function startTelegramBot() {
   bot.on('inline_query', async (ctx) => {
     try {
       const query = String(ctx.inlineQuery?.query || '').trim();
+      console.log('Received inline query:', query);
       const propId = parseInlineSharePropId(query);
       if (!propId) {
         await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
@@ -183,10 +191,16 @@ export async function startTelegramBot() {
           ]
         }
       };
-      if (property.image) {
+      if (isValidPublicImageUrl(property.image)) {
         result.thumb_url = property.image;
       }
 
+      console.log('Inline query result prepared:', {
+        id: result.id,
+        title: result.title,
+        hasThumb: Boolean(result.thumb_url),
+        miniAppDeepLink
+      });
       await ctx.answerInlineQuery([result], { cache_time: 0, is_personal: true });
     } catch (error) {
       console.warn('inline_query handling failed:', error?.message || error);
