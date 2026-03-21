@@ -88,48 +88,22 @@ const ALLOWED_FACTS_SCHEMA = [
   'hasImage'     // Наличие изображений (boolean)
 ];
 
-// 🆕 Sprint III: Role State Machine — детерминированное управление состояниями role
-// Таблица допустимых переходов: fromRole -> event -> toRole
-const ROLE_TRANSITIONS = [
-  // Начальные переходы
-  { from: 'initial_request', event: 'user_message', to: 'request_calibration' },
-  { from: 'request_calibration', event: 'user_message', to: 'expectation_calibration' },
-  { from: 'expectation_calibration', event: 'ui_card_rendered', to: 'show' },
-  { from: 'show', event: 'user_message', to: 'post_show_calibration' },
-  { from: 'post_show_calibration', event: 'ui_slider_ended', to: 'post_show_slider' },
-  // Возможность вернуться к показу после калибровки
-  { from: 'post_show_calibration', event: 'ui_card_rendered', to: 'show' },
-  { from: 'post_show_slider', event: 'ui_card_rendered', to: 'show' }
-];
+const ROLE_SEARCH_READY = 'search_ready';
 
 // 🆕 Sprint III: централизованная функция смены role через state machine
 const transitionRole = (session, event) => {
-  const currentRole = session.role || 'initial_request';
-  // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — defensive guard
+  const currentRole = session?.role || ROLE_SEARCH_READY;
+  if (!session) return false;
   if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
     session.debugTrace = { items: [] };
   }
-  
-  // Ищем разрешённый переход
-  const transition = ROLE_TRANSITIONS.find(
-    t => t.from === currentRole && t.event === event
-  );
-  
-  if (transition) {
-    const oldRole = session.role;
-    session.role = transition.to;
-    console.log(`🔄 [Sprint III] Role transition: ${oldRole} --[${event}]--> ${session.role} (сессия ${session.sessionId?.slice(-8) || 'unknown'})`);
-    session.debugTrace.items.push({
-      type: 'role_transition',
-      at: Date.now(),
-      payload: { from: oldRole, to: session.role, event }
-    });
-    return true;
-  }
-  
-  // Переход не разрешён — role не меняется
-  console.log(`⚠️ [Sprint III] Role transition blocked: ${currentRole} --[${event}]--> (не разрешено)`);
-  return false;
+  session.role = ROLE_SEARCH_READY;
+  session.debugTrace.items.push({
+    type: 'role_transition',
+    at: Date.now(),
+    payload: { from: currentRole, to: session.role, event }
+  });
+  return true;
 };
 
 const cleanupOldSessions = () => {
@@ -187,9 +161,9 @@ const getOrCreateSession = (sessionId) => {
         urgency: null
       },
       // 🆕 Текущая стадия диалога
-      stage: 'intro',
+      stage: 'matching_closing',
       // 🆕 Sprint III: server-side role (детерминированное состояние через state machine)
-      role: 'initial_request',
+      role: ROLE_SEARCH_READY,
       // 🆕 РАСШИРЕННАЯ СТРУКТУРА INSIGHTS (9 параметров)
       insights: {
         // Блок 1: Основная информация (33.3%)
@@ -696,12 +670,12 @@ const addPostHandoffEnrichment = (session, source, content, meta = {}) => {
   console.log(`📝 [Sprint III] Post-handoff enrichment добавлен (source: ${source}, сессия ${session.sessionId?.slice(-8) || 'unknown'})`);
 };
 
-// 🧠 Улучшенная функция извлечения insights (9 параметров)
+// Insights больше не извлекаются regex-логикой.
+// Смыслы обновляются только через LLM META и mapClientProfileToInsights.
 const updateInsights = (sessionId, newMessage) => {
   const session = sessions.get(sessionId);
   if (!session) return;
-  
-  // 🆕 Sprint III: после handoff не обновляем insights, только логируем в enrichment
+
   if (session.handoffDone) {
     addPostHandoffEnrichment(session, 'user_message', newMessage, {
       role: session.role,
@@ -710,486 +684,40 @@ const updateInsights = (sessionId, newMessage) => {
     return;
   }
 
-  const { insights } = session;
-  const text = newMessage.toLowerCase();
-  
-  console.log(`🧠 Анализирую сообщение для insights: "${newMessage}"`);
-  
-  // 1. 👤 Имя — строго одно слово после фразы (RU / EN / ES)
-  (() => {
-    if (!newMessage || typeof newMessage !== 'string') return;
+  const current = session.insights || {};
+  const normalized = {
+    name: current.name ?? null,
+    operation: current.operation ?? null,
+    budget: current.budget ?? null,
+    type: current.type ?? null,
+    location: current.location ?? null,
+    rooms: current.rooms ?? null,
+    area: current.area ?? null,
+    details: current.details ?? null,
+    preferences: current.preferences ?? null,
+    progress: 0
+  };
 
-    const lowered = newMessage.toLowerCase();
-    const patterns = ['my name is', 'меня зовут', 'me llamo'];
-
-    let foundIndex = -1;
-    let phrase = '';
-    for (const p of patterns) {
-      const idx = lowered.indexOf(p);
-      if (idx !== -1 && (foundIndex === -1 || idx < foundIndex)) {
-        foundIndex = idx;
-        phrase = p;
-      }
-    }
-
-    if (foundIndex === -1) return;
-
-    const start = foundIndex + phrase.length;
-    if (start >= newMessage.length) return;
-
-    let tail = newMessage.slice(start).trim();
-    if (!tail) return;
-
-    // Удаляем пунктуацию перед split: . , ! ?
-    tail = tail.replace(/[.,!?]/g, ' ').trim();
-    if (!tail) return;
-
-    const parts = tail.split(/\s+/);
-    const rawName = parts[0];
-    if (!rawName) return;
-
-    const name = rawName.trim();
-    if (!name) return;
-
-    insights.name = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
-    console.log(`✅ Найдено имя: ${insights.name}`);
-  })();
-
-  // 2. 🏠 Тип недвижимости (RU + EN + ES)
-  if (!insights.type) {
-    const propertyPatterns = [
-      // RU
-      /(квартир[уыаеой]|квартир)/i,
-      /(дом[аеыой]?|дом)/i,
-      /(апартамент[ыаеойв]*)/i,
-      /(комнат[уыаеой]|комнат)/i,
-      /(студи[юяеий]*)/i,
-      /(пентхаус[аеы]*)/i,
-      /(таунхаус[аеы]*)/i,
-      // EN
-      /\b(apartment|flat|apartments)\b/i,
-      /\b(house|houses)\b/i,
-      /\b(studio|studios)\b/i,
-      /\b(penthouse|penthouses)\b/i,
-      /\b(townhouse|townhouses)\b/i,
-      /\b(room|rooms|bedroom|bedrooms)\b/i,
-      // ES
-      /\b(piso|pisos|apartamento|apartamentos)\b/i,
-      /\b(casa|casas)\b/i,
-      /\b(estudio|estudios)\b/i,
-      /\b(ático|áticos|atico|aticos)\b/i,
-      /\b(habitaci[oó]n|habitaciones)\b/i
-    ];
-
-    for (const pattern of propertyPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const m = (match[1] || match[0]).toLowerCase();
-        if (/квартир/.test(m)) insights.type = 'квартира';
-        else if (/дом/.test(m)) insights.type = 'дом';
-        else if (/апартамент/.test(m)) insights.type = 'апартаменты';
-        else if (/комнат/.test(m)) insights.type = 'комната';
-        else if (/студи/.test(m)) insights.type = 'студия';
-        else if (/пентхаус/.test(m)) insights.type = 'пентхаус';
-        else if (/таунхаус/.test(m)) insights.type = 'таунхаус';
-        else if (/apartment|flat/.test(m)) insights.type = 'apartment';
-        else if (/house/.test(m)) insights.type = 'house';
-        else if (/studio/.test(m)) insights.type = 'studio';
-        else if (/penthouse/.test(m)) insights.type = 'penthouse';
-        else if (/townhouse/.test(m)) insights.type = 'townhouse';
-        else if (/room|bedroom/.test(m)) insights.type = 'room';
-        else if (/piso|apartamento/.test(m)) insights.type = 'piso';
-        else if (/casa/.test(m)) insights.type = 'casa';
-        else if (/estudio/.test(m)) insights.type = 'estudio';
-        else if (/ático|atico/.test(m)) insights.type = 'ático';
-        else if (/habitaci/.test(m)) insights.type = 'habitación';
-        if (insights.type) {
-          console.log(`✅ Найден тип недвижимости: ${insights.type}`);
-          break;
-        }
-      }
-    }
-  }
-
-  // 3. 💰 Тип операции (покупка/аренда) — RU + EN + ES
-  if (!insights.operation) {
-    const operationPatterns = [
-      // RU покупка
-      /(купить|покуп[каеи]|куплю|приобрести|приобретение)/i,
-      /(покупк[аеуи]|в\s*покупку)/i,
-      /(купил|хочу\s+купить|планирую\s+купить)/i,
-      /(инвестиц|инвестировать)/i,
-      // RU аренда
-      /(снять|аренд[аеуио]*|арендовать|сдать)/i,
-      /(в\s*аренду|на\s*аренду|под\s*аренду)/i,
-      /(съем|снимать|найм)/i,
-      // EN
-      /\b(buy|buying|purchase|purchasing|invest|investment)\b/i,
-      /\b(rent|renting|lease|leasing|rental)\b/i,
-      // ES
-      /\b(comprar|compra|invertir|inversi[oó]n)\b/i,
-      /\b(alquilar|alquiler|arrendar|arriendo)\b/i
-    ];
-
-    for (const pattern of operationPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const matched = (match[1] || match[0]).toLowerCase();
-        if (/купи|покуп|приобр|инвест|buy|purchase|invest|comprar|compra|invertir/.test(matched)) {
-          if (/купи|покуп|приобр|инвест/.test(matched)) insights.operation = 'покупка';
-          else if (/buy|purchase|invest/.test(matched)) insights.operation = 'buy';
-          else insights.operation = 'compra';
-        } else if (/снять|аренд|съем|найм|rent|lease|alquilar|alquiler|arrendar/.test(matched)) {
-          if (/снять|аренд|съем|найм/.test(matched)) insights.operation = 'аренда';
-          else if (/rent|lease/.test(matched)) insights.operation = 'rent';
-          else insights.operation = 'alquiler';
-        }
-        if (insights.operation) {
-          console.log(`✅ Найдена операция: ${insights.operation}`);
-          break;
-        }
-      }
-    }
-  }
-
-  // 4. 💵 Бюджет — RU + EN + ES (USD/AED defaulting to USD)
-  if (!insights.budget) {
-    // Если площадь уже известна, извлекаем её числовое значение,
-    // чтобы не дублировать одно и то же число как budget и area.
-    let areaNumber = null;
-    if (insights.area && typeof insights.area === 'string') {
-      const m = insights.area.match(/(\d+)/);
-      if (m) {
-        const n = Number(m[1]);
-        if (!Number.isNaN(n)) areaNumber = n;
-      }
-    }
-
-    const budgetPatterns = [
-      // RU
-      /(\d+[\d\s]*)\s*(тысяч?|тыс\.?)\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)/i,
-      /(\d+[\d\s]*)\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)/i,
-      /(от\s*)?(\d+)[\s-]*(\d+)?\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)?/i,
-      /(около|примерно|где-?то|приблизительно)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)?\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)?/i,
-      /(до|максимум|не\s*больше)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro|eur|usd|\$|доллар(?:ов|а)?|aed|dirham(?:s)?|дирхам(?:ов|а)?)?/i,
-      // EN
-      /(\d+[\d\s,]*)\s*(thousand|k)\s*(euro|€|eur|usd|\$|dollars?|aed|dirhams?)?/i,
-      /(\d+[\d\s,]*)\s*(euro|€|eur|usd|\$|dollars?|aed|dirhams?)/i,
-      /(up\s*to|max|around|about)\s*(\d+[\d\s,]*)\s*(k|thousand)?\s*(euro|€|eur|usd|\$|dollars?|aed|dirhams?)?/i,
-      // ES
-      /(\d+[\d\s.]*)\s*(mil|miles|k)\s*(euro|€|eur|usd|\$|d[oó]lares?|aed|dirhams?)?/i,
-      /(\d+[\d\s.]*)\s*(euro|€|eur|usd|\$|d[oó]lares?|aed|dirhams?)/i,
-      /(hasta|m[aá]ximo|alrededor\s*de|unos?)\s*(\d+[\d\s.]*)\s*(mil|k)?\s*(euro|€|eur|usd|\$|d[oó]lares?|aed|dirhams?)?/i
-    ];
-
-    for (const pattern of budgetPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        let amount = '';
-        let numberIndex = 1;
-        for (let i = 1; i < match.length; i++) {
-          if (match[i] && /\d/.test(match[i])) {
-            numberIndex = i;
-            break;
-          }
-        }
-        let number = match[numberIndex];
-        if (number) {
-          number = number.replace(/[\s,]/g, '');
-          const raw = match[0].toLowerCase();
-          if (/^\d+\.\d{3}$/.test(number)) number = number.replace('.', '');
-          const isThousands = /тысяч|тыс|\bk\b|thousand|mil|miles/.test(raw) && !/^\d+0{3,}$/.test(number);
-          amount = isThousands ? `${number}000` : number;
-
-          // Если найденный бюджет по числу совпадает с уже известной площадью — пропускаем,
-          // чтобы одно и то же число (например, 45) не стало и area, и budget.
-          const amountNumber = Number(amount);
-          if (!Number.isNaN(amountNumber) && areaNumber != null && amountNumber === areaNumber) {
-            console.log(`⚠️ Пропускаем бюджет ${amountNumber}, так как совпадает с площадью ${insights.area}`);
-            continue;
-          }
-
-          const currency = detectBudgetCurrency(text);
-          const formattedAmount = formatNumberUS(amount) || amount;
-          insights.budget = `${formattedAmount} ${currency}`;
-          console.log(`✅ Найден бюджет: ${insights.budget}`);
-          break;
-        }
-      }
-    }
-  }
-
-  // 5. 📍 Район/локация — RU + EN + ES (районы Валенсии и общие)
-  if (!insights.location) {
-    const locationPatterns = [
-      // RU
-      /(центр[ае]?|исторический\s*центр|старый\s*город)/i,
-      /(русаф[аеы]?|russafa)/i,
-      /(алавес|alavés)/i,
-      /(кабаньял|cabanyal|кабанал)/i,
-      /(бенимаклет|benimaclet)/i,
-      /(патраикс|patraix)/i,
-      /(camins|каминс)/i,
-      /(побленоу|poblats\s*del\s*sud)/i,
-      /(экстрамурс|extramurs)/i,
-      /(пла\s*дель\s*реаль|pla\s*del\s*real)/i,
-      /(ла\s*сайдиа|la\s*saïdia)/i,
-      /(морской|побережье|у\s*моря|пляж)/i,
-      /(район[еа]?\s*(\w+))/i,
-      /(зон[аеу]\s*(\w+))/i,
-      /(недалеко\s*от\s*(\w+))/i,
-      // EN
-      /\b(center|centre|downtown|city\s*center)\b/i,
-      /\b(ruzafa|russafa)\b/i,
-      /\b(cabanyal)\b/i,
-      /\b(benimaclet)\b/i,
-      /\b(patraix)\b/i,
-      /\b(extramurs)\b/i,
-      /\b(beach|sea|coast|by\s*the\s*sea)\b/i,
-      // ES
-      /\b(centro|centro\s*hist[oó]rico)\b/i,
-      /\b(ruzafa)\b/i,
-      /\b(cabanyal|el\s*cabanyal)\b/i,
-      /\b(benimaclet)\b/i,
-      /\b(patraix)\b/i,
-      /\b(extramurs)\b/i,
-      /\b(playa|mar|costas?)\b/i
-    ];
-
-    for (const pattern of locationPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const location = (match[1] || match[0]).toLowerCase();
-        if (location.includes('центр')) insights.location = 'Центр';
-        else if (location.includes('русаф') || location.includes('russafa') || location.includes('ruzafa')) insights.location = location.includes('русаф') ? 'Русафа' : 'Ruzafa';
-        else if (location.includes('алавес')) insights.location = 'Алавес';
-        else if (location.includes('кабаньял') || location.includes('кабанал') || location.includes('cabanyal')) insights.location = location.includes('cabanyal') ? 'Cabanyal' : 'Кабаньял';
-        else if (location.includes('бенимаклет') || location.includes('benimaclet')) insights.location = location.includes('benimaclet') ? 'Benimaclet' : 'Бенимаклет';
-        else if (location.includes('патраикс') || location.includes('patraix')) insights.location = location.includes('patraix') ? 'Patraix' : 'Патраикс';
-        else if (location.includes('camins') || location.includes('каминс')) insights.location = 'Camins al Grau';
-        else if (location.includes('побленоу')) insights.location = 'Побленоу';
-        else if (location.includes('экстрамурс') || location.includes('extramurs')) insights.location = location.includes('extramurs') ? 'Extramurs' : 'Экстрамурс';
-        else if (location.includes('морской') || location.includes('пляж') || location.includes('beach') || location.includes('sea') || location.includes('playa') || location.includes('mar')) insights.location = location.includes('playa') || location.includes('mar') ? 'Playa' : (location.includes('beach') || location.includes('sea') ? 'Beach' : 'У моря');
-        else if (location.includes('center') || location.includes('centre') || location.includes('downtown')) insights.location = 'Center';
-        else if (location.includes('centro')) insights.location = 'Centro';
-        else if (match[2]) insights.location = match[2];
-        if (insights.location) {
-          console.log(`✅ Найдена локация: ${insights.location}`);
-          break;
-        }
-      }
-    }
-  }
-
-  // 🆕 6. 🏠 Количество комнат — RU + EN + ES
-  if (!insights.rooms) {
-    const roomPatterns = [
-      /(студи[юя]|studio|estudio)/i,
-      /(\d+)[\s-]*(комнат[ауыйе]*|спален|bedroom|bedrooms|habitaci[oó]n|habitaciones)/i,
-      /(одн[ауо][\s-]*комнат|однушк|1[\s-]*комнат)/i,
-      /(двух[\s-]*комнат|двушк|2[\s-]*комнат)/i,
-      /(трех[\s-]*комнат|трешк|3[\s-]*комнат)/i,
-      /(четырех[\s-]*комнат|4[\s-]*комнат)/i,
-      /(one|two|three|four)\s*(bed|bedroom)/i,
-      /(una?|dos|tres|cuatro)\s*(habitaci[oó]n|habitaciones)/i
-    ];
-
-    for (const pattern of roomPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const m0 = (match[0] || '').toLowerCase();
-        const m1 = match[1];
-        if (/студи/.test(m0)) { insights.rooms = 'студия'; }
-        else if (/studio/.test(m0)) { insights.rooms = 'studio'; }
-        else if (/estudio/.test(m0)) { insights.rooms = 'estudio'; }
-        else if (/одн|однушк|^1\s/.test(m0)) { insights.rooms = '1 комната'; }
-        else if (/двух|двушк|^2\s/.test(m0)) { insights.rooms = '2 комнаты'; }
-        else if (/трех|трешк|^3\s/.test(m0)) { insights.rooms = '3 комнаты'; }
-        else if (/четырех|^4\s/.test(m0)) { insights.rooms = '4 комнаты'; }
-        else if (/one\s/.test(m0)) { insights.rooms = '1 bedroom'; }
-        else if (/two\s/.test(m0)) { insights.rooms = '2 bedrooms'; }
-        else if (/three\s/.test(m0)) { insights.rooms = '3 bedrooms'; }
-        else if (/four\s/.test(m0)) { insights.rooms = '4 bedrooms'; }
-        else if (/una?\s|dos\s|tres\s|cuatro\s/.test(m0)) {
-          if (/una?\s/.test(m0)) insights.rooms = '1 habitación';
-          else if (/dos\s/.test(m0)) insights.rooms = '2 habitaciones';
-          else if (/tres\s/.test(m0)) insights.rooms = '3 habitaciones';
-          else if (/cuatro\s/.test(m0)) insights.rooms = '4 habitaciones';
-        } else if (m1 && /\d/.test(m1)) {
-          const num = String(m1).replace(/\D/g, '') || m1;
-          if (/habitaci|dormitorio/.test(m0)) insights.rooms = num === '1' ? '1 habitación' : `${num} habitaciones`;
-          else if (/bed/.test(m0)) insights.rooms = num === '1' ? '1 bedroom' : `${num} bedrooms`;
-          else insights.rooms = `${num} ${num == 1 ? 'комната' : 'комнаты'}`;
-        }
-        if (insights.rooms) {
-          console.log(`✅ Найдено количество комнат: ${insights.rooms}`);
-          break;
-        }
-      }
-    }
-  }
-
-  // 🆕 7. 📐 Площадь — RU + EN + ES
-  if (!insights.area) {
-    const areaPatterns = [
-      /(\d+)[\s-]*(кв\.?\s*м\.?|м2|квадрат|метр)/i,
-      /площад[ьи]?\s*(\d+)/i,
-      /(\d+)[\s-]*квадрат/i,
-      /(от|около|примерно)\s*(\d+)[\s-]*(кв\.?\s*м\.?|м2)/i,
-      /(\d+)[\s-]*(sq\.?\s*m\.?|m2|square\s*meter|sqm)/i,
-      /(\d+)\s*(m2|metros?\s*cuadrados?|m²)/i,
-      /(around|about|at\s*least)\s*(\d+)\s*(sq|m2|square)/i
-    ];
-
-    for (const pattern of areaPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        let area = '';
-        for (let i = 1; i < match.length; i++) {
-          if (match[i] && /\d/.test(match[i])) {
-            area = match[i];
-            break;
-          }
-        }
-        if (area) {
-          insights.area = `${area} м²`;
-          console.log(`✅ Найдена площадь: ${insights.area}`);
-          break;
-        }
-      }
-    }
-  }
-
-  // 🆕 8. 📍 Детали локации — RU + EN + ES
-  if (!insights.details) {
-    const detailPatterns = [
-      /(возле|рядом\s*с|около|недалеко\s*от)\s*(парк[аеуи]*|сквер[аеуи]*|зелен[иоы]*)/i,
-      /(возле|рядом\s*с|около|недалеко\s*от)\s*(метро|станци[иеяй]*)/i,
-      /(возле|рядом\s*с|около|недалеко\s*от)\s*(школ[ыаеий]*|детск[аеойи]*)/i,
-      /(возле|рядом\s*с|около|недалеко\s*от)\s*(магазин[аеовы]*|торгов[аеоый]*)/i,
-      /(центральн[аяое]*|тихий|спокойн[ыйое]*|шумн[ыйое]*)/i,
-      /(пешком\s*до|5\s*минут|10\s*минут)/i,
-      /(перекрест[окек]*|пересечени[ея]*|угол[у]*)\s*улиц/i,
-      // EN
-      /(near|close\s*to|next\s*to)\s*(the\s*)?(park|green)/i,
-      /(near|close\s*to|by)\s*(the\s*)?(metro|station)/i,
-      /(near|close\s*to)\s*(the\s*)?(school|shops|shopping)/i,
-      /(quiet|peaceful|central|downtown)/i,
-      /(walking\s*distance|minutes\s*walk)/i,
-      // ES
-      /(cerca\s*del?\s*|junto\s*al?\s*)(parque|verde)/i,
-      /(cerca\s*del?\s*|junto\s*al?\s*)(metro|estaci[oó]n)/i,
-      /(cerca\s*del?\s*|junto\s*al?\s*)(colegio|escuela|tiendas)/i,
-      /(tranquilo|tranquila|centro|céntrico)/i,
-      /(a\s*pie|minutos\s*a\s*pie)/i
-    ];
-
-    for (const pattern of detailPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const d = (match[0] || '').toLowerCase();
-        if (/парк|зелен|park|green|parque|verde/.test(d)) insights.details = /парк|зелен/.test(d) ? 'возле парка' : (/parque|verde/.test(d) ? 'cerca del parque' : 'near park');
-        else if (/метро|станци|metro|station|estaci/.test(d)) insights.details = /метро|станци/.test(d) ? 'рядом с метро' : (/estaci/.test(d) ? 'cerca del metro' : 'near metro');
-        else if (/школ|детск|school|colegio|escuela/.test(d)) insights.details = /школ|детск/.test(d) ? 'около школы' : (/colegio|escuela/.test(d) ? 'cerca del colegio' : 'near school');
-        else if (/магазин|торгов|shops|shopping|tiendas/.test(d)) insights.details = /магазин|торгов/.test(d) ? 'рядом с магазинами' : 'near shops';
-        else if (/тихий|спокойн|quiet|peaceful|tranquilo/.test(d)) insights.details = /тихий|спокойн/.test(d) ? 'тихий район' : (/tranquilo/.test(d) ? 'zona tranquila' : 'quiet area');
-        else if (/центральн|central|centro|céntrico/.test(d)) insights.details = /центральн/.test(d) ? 'центральное расположение' : (/centro|céntrico/.test(d) ? 'ubicación céntrica' : 'central location');
-        else if (/пешком|минут|walking|minutes\s*walk|a\s*pie/.test(d)) insights.details = /пешком|минут/.test(d) ? 'удобная транспортная доступность' : (/a\s*pie/.test(d) ? 'a pie' : 'walking distance');
-        else if (/перекрест|пересечени|угол/.test(d)) insights.details = 'пересечение улиц';
-        else insights.details = match[0];
-        if (insights.details) {
-          console.log(`✅ Найдены детали локации: ${insights.details}`);
-          break;
-        }
-      }
-    }
-  }
-
-  // 🆕 9. ⭐ Предпочтения — RU + EN + ES
-  if (!insights.preferences) {
-    const preferencePatterns = [
-      // RU
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(балкон|лоджи[яй]*)/i,
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(лифт|подъемник)/i,
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(паркинг|гараж|парковк)/i,
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(ремонт|обновлен)/i,
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(мебел[ьи]*)/i,
-      /(важн[оы]*|нужн[оы]*|хоч[уеть]*|предпочитаю|желательно)\s*.*(кондиционер|климат)/i,
-      /(без\s*посредник|напряму[ую]*|от\s*собственник)/i,
-      /(срочн[оы]*|быстр[оы]*|как\s*можно\s*скорее)/i,
-      /(в\s*рассрочку|ипотек[аеуи]*|кредит)/i,
-      // EN
-      /\b(balcony|terrace)\b/i,
-      /\b(elevator|lift)\b/i,
-      /\b(parking|garage)\b/i,
-      /\b(renovated|renovation|refurbished)\b/i,
-      /\b(furnished)\b/i,
-      /\b(air\s*conditioning|ac)\b/i,
-      /\b(urgent|asap)\b/i,
-      // ES
-      /\b(balc[oó]n|terraza)\b/i,
-      /\b(ascensor)\b/i,
-      /\b(parking|garaje|plaza\s*de\s*garaje)\b/i,
-      /\b(reformado|reformada|renovado)\b/i,
-      /\b(amueblado|amueblada)\b/i,
-      /\b(aire\s*acondicionado|climatizaci[oó]n)\b/i,
-      /\b(urgente)\b/i
-    ];
-
-    for (const pattern of preferencePatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const p = (match[0] || '').toLowerCase();
-        if (/балкон|лоджи|balcony|terrace|balcón|terraza/.test(p)) insights.preferences = /балкон|лоджи/.test(p) ? 'с балконом' : (/balcón|terraza/.test(p) ? 'con balcón' : 'with balcony');
-        else if (/лифт|подъемник|elevator|lift|ascensor/.test(p)) insights.preferences = /лифт|подъемник/.test(p) ? 'с лифтом' : (/ascensor/.test(p) ? 'con ascensor' : 'with elevator');
-        else if (/паркинг|гараж|парковк|parking|garage|garaje/.test(p)) insights.preferences = /паркинг|гараж|парковк/.test(p) ? 'с парковкой' : (/garaje|plaza/.test(p) ? 'con parking' : 'with parking');
-        else if (/ремонт|обновлен|renovated|refurbished|reformado/.test(p)) insights.preferences = /ремонт|обновлен/.test(p) ? 'с ремонтом' : (/reformado/.test(p) ? 'reformado' : 'renovated');
-        else if (/мебел|furnished|amueblado/.test(p)) insights.preferences = /мебел/.test(p) ? 'с мебелью' : (/amueblado/.test(p) ? 'amueblado' : 'furnished');
-        else if (/кондиционер|климат|air\s*conditioning|ac|aire\s*acondicionado/.test(p)) insights.preferences = /кондиционер|климат/.test(p) ? 'с кондиционером' : (/aire|climatizaci/.test(p) ? 'con aire acondicionado' : 'with air conditioning');
-        else if (/без\s*посредник/.test(p)) insights.preferences = 'без посредников';
-        else if (/срочн|быстр|скорее|urgent|asap|urgente/.test(p)) insights.preferences = /срочн|быстр|скорее/.test(p) ? 'срочный поиск' : (/urgente/.test(p) ? 'urgente' : 'urgent');
-        else if (/рассрочку|ипотек|кредит/.test(p)) insights.preferences = 'ипотека/рассрочка';
-        else insights.preferences = match[0];
-        if (insights.preferences) {
-          console.log(`✅ Найдены предпочтения: ${insights.preferences}`);
-          break;
-        }
-      }
-    }
-  }
-
-  // 📊 Обновляем прогресс по системе весов фронтенда
   const weights = {
-    // Блок 1: Основная информация (33.3%)
     name: 11,
     operation: 11,
     budget: 11,
-    
-    // Блок 2: Параметры недвижимости (33.3%)
     type: 11,
     location: 11,
     rooms: 11,
-    
-    // Блок 3: Детали и предпочтения (33.3%)
     area: 11,
     details: 11,
     preferences: 11
   };
-  
   let totalProgress = 0;
-  let filledFields = 0;
-  
   for (const [field, weight] of Object.entries(weights)) {
-    if (insights[field] && insights[field].trim()) {
+    const value = normalized[field];
+    if (value != null && String(value).trim().length > 0) {
       totalProgress += weight;
-      filledFields++;
     }
   }
-  
-  insights.progress = Math.min(totalProgress, 99); // максимум 99%
-  
-  console.log(`📊 Прогресс понимания: ${insights.progress}% (${filledFields}/9 полей заполнено)`);
-  console.log(`🔍 Текущие insights:`, insights);
+  normalized.progress = Math.min(totalProgress, 99);
+  session.insights = normalized;
 };
 
 // 🤖 [DEPRECATED] GPT анализатор для извлечения insights (9 параметров)
@@ -1783,20 +1311,7 @@ const buildRmv3GuardrailsSystemMessage = () => ({
 
 // ====== Вспомогательные функции профиля/стадий/META ======
 const determineStage = (clientProfile, currentStage, messageHistory) => {
-  try {
-    const nonSystemCount = Array.isArray(messageHistory)
-      ? messageHistory.filter(m => m && m.role !== 'system').length
-      : 0;
-    if (nonSystemCount <= 1) return 'intro';
-    const missingKey =
-      !clientProfile?.location ||
-      !(clientProfile?.budgetMin || clientProfile?.budgetMax) ||
-      !clientProfile?.purpose;
-    if (missingKey) return 'qualification';
-    return 'matching_closing';
-  } catch {
-    return currentStage || 'intro';
-  }
+  return 'matching_closing';
 };
 
 const mergeClientProfile = (current, delta) => {
@@ -2837,8 +2352,8 @@ const transcribeAndRespond = async (req, res) => {
       return detectedLangFromText || 'en';
     })();
 
-    // Обновляем стадию и язык перед GPT
-    session.stage = determineStage(session.clientProfile, session.stage, session.messages);
+    // Stage machine deactivated: всегда режим прямого поиска
+    session.stage = 'matching_closing';
     // Для аудио синхронизируем язык профиля с фактически распознанной речью.
     // Для текста сохраняем прежнее поведение (устанавливаем только если ещё не задан).
     if (req.file && detectedLangFromText) {
@@ -2851,28 +2366,12 @@ const transcribeAndRespond = async (req, res) => {
     const baseSystemPrompt = BASE_SYSTEM_PROMPT;
 
     // Инструкции по стадии и формат ответа
-    const stageInstruction = (() => {
-      if (session.stage === 'intro') {
-        return `Mode: INTRO.
-Task: Greet the client briefly and identify their real estate needs.
+    const stageInstruction = `Mode: MATCHING_CLOSING.
+Task: Work in direct-search mode: immediately propose relevant properties and refine by user constraints.
 UX constraints:
-- Do not ask more than one explicit question in a single response.
-- Do not ask several narrow questionnaire-style questions in a row; prioritize natural dialogue.`;
-      }
-      if (session.stage === 'qualification') {
-        return `Mode: QUALIFICATION.
-Task: Naturally gather profile parameters (location, budget, purpose).
-UX constraints:
-- Do not ask more than one explicit question in a single response.
-- Do not ask several narrow questionnaire-style questions in a row; prioritize natural dialogue.`;
-      }
-      return `Mode: MATCHING_CLOSING.
-Task: Suggest locations/options based on profile and offer the next step (consultation/viewing).
-UX constraints:
-- Do not ask more than one explicit question in a single response.
-- Do not ask several narrow questionnaire-style questions in a row; prioritize natural dialogue.
-- CTA is allowed only when at least location and budget are known and there has already been a multi-turn exchange.`;
-    })();
+- Keep responses concise and actionable.
+- Prefer concrete options over qualification questionnaires.
+- Ask only one clarifying question when strictly needed for narrowing results.`;
 
     // Инструкция по языку ответа (если определён)
     const languageInstruction = (() => {
@@ -3044,11 +2543,8 @@ ${factsList.join('\n')}
         // До handoff: обновляем как раньше
         const updatedProfile = mergeClientProfile(session.clientProfile, clientProfileDelta);
         session.clientProfile = updatedProfile;
-        // Валидируем и принимаем stage из META (если прислали)
-        const allowedStages = new Set(['intro', 'qualification', 'matching_closing']);
-        if (meta && typeof meta.stage === 'string' && allowedStages.has(meta.stage)) {
-          session.stage = meta.stage;
-        }
+        // Stage machine deactivated: игнорируем stage из META
+        session.stage = 'matching_closing';
         // Синхронизация с insights и пересчёт прогресса
         mapClientProfileToInsights(session.clientProfile, session.insights);
         // Компактный лог обновления профиля и стадии
@@ -3075,7 +2571,7 @@ ${factsList.join('\n')}
     let cards = [];
     let ui = undefined;
     // (удалено) парсинг inline lead из текста и сигналы формы
-    const enoughContext = session.insights?.progress >= 66;
+    // прогресс не используется как гейт выдачи контента
 
    /*
     * УДАЛЁН БЛОК «текстового списка вариантов» (preview-список).
