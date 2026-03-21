@@ -187,26 +187,43 @@ export async function startTelegramBot() {
       ].join('\n');
 
       const miniAppDeepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}/app?startapp=${encodeURIComponent(`${START_PREFIX}${property.id}`)}`;
-      const result = {
-        type: 'article',
-        id: `share_${property.id}_${Date.now()}`,
-        title: `🏙 ${heading}`,
-        description: `${property.priceLabel} • ${district}`,
-        input_message_content: {
-          message_text: messageText
-        },
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: 'Смотреть объект', url: miniAppDeepLink }]
-          ]
-        }
-      };
-      result.thumb_url = isValidPublicImageUrl(property.image) ? property.image : VIA_LOGO_FALLBACK;
+      const imageUrl = isValidPublicImageUrl(property.image) ? property.image : '';
+      const result = imageUrl
+        ? {
+            type: 'photo',
+            id: `share_photo_${property.id}_${Date.now()}`,
+            photo_url: imageUrl,
+            thumbnail_url: imageUrl,
+            title: `🏙 ${heading}`,
+            description: `${property.priceLabel} • ${district}`,
+            caption: messageText,
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: 'Смотреть объект', url: miniAppDeepLink }]
+              ]
+            }
+          }
+        : {
+            type: 'article',
+            id: `share_article_${property.id}_${Date.now()}`,
+            title: `🏙 ${heading}`,
+            description: `${property.priceLabel} • ${district}`,
+            input_message_content: {
+              message_text: messageText
+            },
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: 'Смотреть объект', url: miniAppDeepLink }]
+              ]
+            },
+            thumb_url: VIA_LOGO_FALLBACK
+          };
 
       console.log('Inline query result prepared:', {
         id: result.id,
+        type: result.type,
         title: result.title,
-        hasThumb: Boolean(result.thumb_url),
+        hasThumb: Boolean(result.thumb_url || result.thumbnail_url),
         miniAppDeepLink
       });
       try {
