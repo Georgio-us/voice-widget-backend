@@ -9,7 +9,6 @@ import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 import { appendMessage, upsertSessionLog } from '../services/sessionLogger.js';
 import { sendSessionActivityStartToTelegram, updateSessionActivityFinalToTelegram } from '../services/telegramNotifier.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
-const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || '').trim() === '1';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
@@ -493,28 +492,6 @@ const detectBudgetCurrency = (text = '') => {
   return 'USD';
 };
 
-const buildInventoryContextMessage = async () => {
-  try {
-    const inventory = await getAllNormalizedProperties();
-    if (!Array.isArray(inventory) || inventory.length === 0) return null;
-    const lines = inventory.map((p) => {
-      const id = p?.id || 'N/A';
-      const district = p?.district || p?.city || 'Unknown area';
-      const type = p?.property_type || 'property';
-      const price = formatNumberUS(p?.priceEUR);
-      const priceLabel = price ? `${price} AED` : 'price on request';
-      return `- ${id}: ${type}, ${district}, ${priceLabel}`;
-    });
-    return `This is the current available inventory. You know these properties exist. When a user asks what's available, mention that we have an extensive database and highlight 2-3 matching options.
-Use only real properties from this list. Present options in a consultative style, not as a raw table dump.
-
-${lines.join('\n')}`;
-  } catch (err) {
-    console.warn('⚠️ Failed to build inventory context:', err?.message || err);
-    return null;
-  }
-};
-
 const formatCardForClient = (req, p) => {
   const baseUrl = getBaseUrl(req);
   const images = (Array.isArray(p.images) ? p.images : [])
@@ -681,7 +658,6 @@ const updateInsights = (sessionId, newMessage) => {
       role: session.role,
       stage: session.stage
     });
-    return;
   }
 
   const current = session.insights || {};
@@ -720,200 +696,6 @@ const updateInsights = (sessionId, newMessage) => {
   session.insights = normalized;
 };
 
-// 🤖 [DEPRECATED] GPT анализатор для извлечения insights (9 параметров)
-// Основной механизм анализа теперь через META-JSON в ответе модели внутри основного диалога.
-const analyzeContextWithGPT = async (sessionId) => {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-
-  try {
-    console.log(`🤖 Запускаю GPT анализ контекста для сессии ${sessionId.slice(-8)}`);
-    
-    // Подготавливаем историю диалога для анализа
-    const conversationHistory = session.messages
-      .filter(msg => msg.role !== 'system')
-      .map(msg => `${msg.role === 'user' ? 'Клиент' : 'Джон'}: ${msg.content}`)
-      .join('\n');
-
-    const analysisPrompt = `Проанализируй диалог с клиентом по недвижимости и извлеки ключевую информацию.
-
-ДИАЛОГ:
-${conversationHistory}
-
-ЗАДАЧА: Найди и извлеки следующую информацию о клиенте (9 параметров):
-
-БЛОК 1 - ОСНОВНАЯ ИНФОРМАЦИЯ:
-1. ИМЯ КЛИЕНТА - как его зовут (учти возможные ошибки транскрипции)
-2. ТИП ОПЕРАЦИИ - покупка или аренда  
-3. БЮДЖЕТ - сколько готов потратить (извлеки сумму и валюту)
-
-БЛОК 2 - ПАРАМЕТРЫ НЕДВИЖИМОСТИ:
-4. ТИП НЕДВИЖИМОСТИ - что ищет (квартира, дом, студия, апартаменты, комната, пентхаус)
-5. ЛОКАЦИЯ - где ищет (район, город, особенности расположения)
-6. КОЛИЧЕСТВО КОМНАТ - сколько комнат нужно (1 комната, 2 комнаты, студия, etc.)
-
-БЛОК 3 - ДЕТАЛИ И ПРЕДПОЧТЕНИЯ:
-7. ПЛОЩАДЬ - какая площадь нужна (в м²)
-8. ДЕТАЛИ ЛОКАЦИИ - особенности расположения (возле парка, рядом с метро, тихий район, пересечение улиц)
-9. ПРЕДПОЧТЕНИЯ - дополнительные требования (с балконом, с парковкой, с ремонтом, срочно, etc.)
-
-ВАЖНО:
-- Исправляй ошибки транскрипции (Аленсия → Валенсия, Русфа → Русафа)
-- Учитывай контекст и подтекст
-- Если информации нет - укажи null
-- Для бюджета указывай валюту явно: "число USD" или "число AED" (например: "300000 USD")
-- Если валюта не указана явно, используй USD по умолчанию (Dubai demo)
-- Комнаты в формате "число комнаты" или "студия"
-- Площадь в формате "число м²"
-
-ОТВЕТ СТРОГО В JSON:
-{
-  "name": "имя или null",
-  "operation": "покупка/аренда или null",
-  "budget": "сумма с валютой (USD/AED) или null",
-  "type": "тип недвижимости или null", 
-  "location": "локация или null",
-  "rooms": "количество комнат или null",
-  "area": "площадь м² или null",
-  "details": "детали локации или null",
-  "preferences": "предпочтения или null"
-}`;
-
-    // Делаем запрос к GPT для анализа
-    // RMv3 / Sprint 1: transient LLM Context Pack + [CTX] log (infrastructure only)
-    const llmContextPack = buildLlmContextPack(session, sessionId, 'analysis');
-    logCtx(llmContextPack);
-    const factsMsg = buildLlmFactsSystemMessage(llmContextPack);
-    const guardMsg = buildRmv3GuardrailsSystemMessage();
-    // RMv3 / Sprint 2 / Task 5: expose clarificationMode + diagnostics (only if active)
-    const shapedForDiag = buildShapedFactsPackForLLM(llmContextPack);
-    if (shapedForDiag?.clarificationMode === true) {
-      const reasons = [];
-      if (shapedForDiag?.ref?.ambiguity === true) reasons.push('ambiguity');
-      if (shapedForDiag?.ref?.clarificationRequired === true) reasons.push('clarificationRequired');
-      if (shapedForDiag?.ref?.clarificationBoundaryActive === true) reasons.push('clarificationBoundary');
-      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-        session.debugTrace = { items: [] };
-      }
-      session.debugTrace.items.push({
-        type: 'clarification_mode_exposed',
-        at: Date.now(),
-        payload: {
-          active: true,
-          reasons
-        }
-      });
-      const sid = String(sessionId || '').slice(-8) || 'unknown';
-      console.log(`[CLARIFICATION_MODE] sid=${sid} reasons=${reasons.join(',')}`);
-    }
-    const analysisResponse = await callOpenAIWithRetry(() => 
-      openai.chat.completions.create({
-        messages: [
-          factsMsg,
-          guardMsg,
-          { role: 'system', content: 'Ты эксперт по анализу диалогов с клиентами недвижимости. Отвечай только валидным JSON.' },
-          { role: 'user', content: analysisPrompt }
-        ],
-        model: 'gpt-4o-mini',
-        temperature: 0.1,
-        max_tokens: 500
-      }), 2, 'GPT-Analysis'
-    );
-
-    const analysisText = analysisResponse.choices[0].message.content.trim();
-    console.log(`🔍 GPT анализ результат: ${analysisText}`);
-
-    // Парсим JSON ответ
-    let extractedData;
-    try {
-      // Убираем возможные markdown блоки
-      const cleanJson = analysisText.replace(/```json\n?|\n?```/g, '').trim();
-      extractedData = JSON.parse(cleanJson);
-    } catch (parseError) {
-      console.error('❌ Ошибка парсинга JSON от GPT:', parseError.message);
-      return;
-    }
-
-    // 🆕 Sprint III: после handoff не обновляем insights, только логируем в enrichment
-    if (session.handoffDone) {
-      addPostHandoffEnrichment(session, 'gpt_analysis', JSON.stringify(extractedData), {
-        role: session.role,
-        stage: session.stage
-      });
-      return;
-    }
-    
-    // Обновляем insights только если GPT нашел что-то новое
-    let updated = false;
-    const oldInsights = { ...session.insights };
-
-    // Проверяем все 9 параметров
-    const fieldsToCheck = ['name', 'operation', 'budget', 'type', 'location', 'rooms', 'area', 'details', 'preferences'];
-    
-    for (const field of fieldsToCheck) {
-      if (extractedData[field] && !session.insights[field]) {
-        session.insights[field] = extractedData[field];
-        updated = true;
-        console.log(`✅ GPT обновил ${field}: ${extractedData[field]}`);
-      }
-      
-      // Если GPT нашел исправления для существующих данных
-      if (extractedData[field] && session.insights[field] && extractedData[field] !== session.insights[field]) {
-        console.log(`🔄 GPT предлагает исправить ${field}: ${session.insights[field]} → ${extractedData[field]}`);
-        session.insights[field] = extractedData[field];
-        updated = true;
-      }
-    }
-
-    if (updated) {
-      // Пересчитываем прогресс по системе весов фронтенда
-      const weights = {
-        name: 11, operation: 11, budget: 11,
-        type: 11, location: 11, rooms: 11,
-        area: 11, details: 11, preferences: 11
-      };
-      
-      let totalProgress = 0;
-      let filledFields = 0;
-      
-      for (const [field, weight] of Object.entries(weights)) {
-        if (session.insights[field] && session.insights[field].trim()) {
-          totalProgress += weight;
-          filledFields++;
-        }
-      }
-      
-      session.insights.progress = Math.min(totalProgress, 99);
-      
-      console.log(`🚀 GPT анализ завершен. Прогресс: ${session.insights.progress}% (${filledFields}/9 полей)`);
-      console.log(`📊 Обновленные insights:`, session.insights);
-    } else {
-      console.log(`ℹ️ GPT не нашел новой информации для обновления`);
-    }
-
-    // Логируем использование токенов
-    console.log(`💰 GPT анализ использовал ${analysisResponse.usage.total_tokens} токенов`);
-
-  } catch (error) {
-    console.error(`❌ Ошибка GPT анализа для сессии ${sessionId.slice(-8)}:`, error.message);
-  }
-};
-
-// 📊 [DEPRECATED] Проверяем, нужно ли запустить GPT анализ раз в N сообщений
-// Основной механизм анализа теперь через META-JSON; этот триггер оставлен для совместимости и может быть отключён ENV.
-const checkForGPTAnalysis = async (sessionId) => {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-
-  // Считаем только пользовательские сообщения (не системные)
-  const userMessages = session.messages.filter(msg => msg.role === 'user');
-  
-  // Каждые 5 пользовательских сообщений запускаем GPT анализ
-  if (userMessages.length > 0 && userMessages.length % 5 === 0) {
-    console.log(`🎯 Достигнуто ${userMessages.length} сообщений - запускаю GPT анализ`);
-    await analyzeContextWithGPT(sessionId);
-  }
-};
 
 // 🔄 Функция retry для OpenAI API
 const callOpenAIWithRetry = async (apiCall, maxRetries = 2, operation = 'OpenAI') => {
@@ -1286,33 +1068,7 @@ const buildShapedFactsPackForLLM = (pack) => {
   return shaped;
 };
 
-const buildLlmFactsSystemMessage = (pack) => {
-  const shaped = buildShapedFactsPackForLLM(pack);
-  return {
-    role: 'system',
-    content: `RMV3_SERVER_FACTS_V1 ${JSON.stringify(shaped)}`
-  };
-};
-
-// RMv3 / Sprint 1 / Task 6: deterministic guardrails system layer (infrastructure only)
-// Must be inserted AFTER FACTS and BEFORE existing prompts/messages.
-const buildRmv3GuardrailsSystemMessage = () => ({
-  role: 'system',
-  content: [
-    'RMV3_GUARDRAILS_V1',
-    '1) FACTS precedence: Используй только server facts из RMV3_SERVER_FACTS_V1. Если факта нет — скажи что нет данных или задай уточняющий вопрос.',
-    '2) Card ≠ image: Карточки — UI-объекты. Не говори, что ты "не видишь/не можешь показать изображения".',
-    '3) Boundaries: Если clarificationBoundaryActive=true ИЛИ referenceAmbiguity.isAmbiguous=true ИЛИ clarificationRequired.isRequired=true — задавай уточняющий вопрос; не выбирай карточку и не подтверждай выбор.',
-    '3b) Clarification enforcement: If any clarification boundary is active, respond ONLY with a clarification question. Do NOT confirm choice. Do NOT describe any card as selected.',
-    '4) Binding: Если singleReferenceBinding.hasProposal=true — говори про proposedCardId как "вы про эту карточку…"; не меняй id.',
-    '5) No guessing: Не выдумывай цену/район/комнаты/наличие объектов. Только факты из server facts.'
-  ].join('\n')
-});
-
-// ====== Вспомогательные функции профиля/стадий/META ======
-const determineStage = (clientProfile, currentStage, messageHistory) => {
-  return 'matching_closing';
-};
+// ====== Вспомогательные функции профиля/META ======
 
 const mergeClientProfile = (current, delta) => {
   const result = { ...(current || {}) };
@@ -2394,11 +2150,6 @@ const transcribeAndRespond = async (req, res) => {
       console.error('❌ Failed to append user message to session log:', err);
     });
 
-    // 🤖 Проверяем, нужен ли GPT анализ каждые 5 сообщений
-    if (ENABLE_PERIODIC_ANALYSIS) {
-      await checkForGPTAnalysis(sessionId);
-    }
-
     // const totalProps = properties.length; // устарело – переезд на БД
     const detectedLangFromText = (() => {
       const sample = (transcription || req.body.text || '').toString();
@@ -2414,8 +2165,6 @@ const transcribeAndRespond = async (req, res) => {
       return detectedLangFromText || 'en';
     })();
 
-    // Stage machine deactivated: всегда режим прямого поиска
-    session.stage = 'matching_closing';
     // Для аудио синхронизируем язык профиля с фактически распознанной речью.
     // Для текста сохраняем прежнее поведение (устанавливаем только если ещё не задан).
     if (req.file && detectedLangFromText) {
@@ -2424,93 +2173,7 @@ const transcribeAndRespond = async (req, res) => {
       session.clientProfile.language = targetLang;
     }
 
-    // Базовый системный промпт (личность Джона)
     const baseSystemPrompt = BASE_SYSTEM_PROMPT;
-
-    // Инструкции по стадии и формат ответа
-    const stageInstruction = `Mode: MATCHING_CLOSING.
-Task: Work in direct-search mode: immediately propose relevant properties and refine by user constraints.
-UX constraints:
-- Keep responses concise and actionable.
-- Prefer concrete options over qualification questionnaires.
-- Ask only one clarifying question when strictly needed for narrowing results.`;
-
-    // Инструкция по языку ответа (если определён)
-    const languageInstruction = (() => {
-      const lang = String(session.clientProfile.language || '').toLowerCase();
-      if (!lang || lang === 'en') return 'Answer in English.';
-      if (lang === 'ru') return 'Answer in Russian.';
-      return 'Answer in English.';
-    })();
-
-    const inventoryInstruction = await buildInventoryContextMessage();
-
-    const outputFormatInstruction = `Формат ответа строго двухчастный:
-1) Текст для пользователя.
-2) Строка ---META---
-3) JSON:
-{
-  "clientProfileDelta": {
-    // только обновляемые поля профиля, без null и undefined
-  },
-  "clientProfile": {
-    // новые/уточнённые данные клиента (name, operation, budget, type, location, rooms, area, details, preferences)
-  },
-  "insights": {
-    // новые/уточнённые insights по тем же полям
-  },
-  "stage": "matching_closing"
-}
-Если нечего обновлять, пришли пустые объекты:
-{ "clientProfileDelta": {}, "clientProfile": {}, "insights": {}, "stage": "matching_closing" }.
-КРИТИЧЕСКИ ВАЖНО: как только в диалоге появляются новые данные клиента, добавь их в clientProfile и/или insights в этом же ответе (без отдельного запроса).`;
-
-    // 🆕 Sprint II / Block A: добавляем allowedFactsSnapshot в контекст модели (если есть факты)
-    const allowedFactsInstruction = (() => {
-      const snapshot = session.allowedFactsSnapshot || {};
-      const hasFacts = snapshot && Object.keys(snapshot).length > 0 && Object.values(snapshot).some(v => v !== null && v !== undefined);
-      
-      if (!hasFacts) {
-        return null; // Если snapshot пустой, не добавляем инструкцию
-      }
-      
-      // Формируем список фактов для модели
-      const factsList = [];
-      if (snapshot.city) factsList.push(`Город: ${snapshot.city}`);
-      if (snapshot.district) factsList.push(`Район: ${snapshot.district}`);
-      if (snapshot.neighborhood) factsList.push(`Район/квартал: ${snapshot.neighborhood}`);
-      if (snapshot.priceEUR) factsList.push(`Цена: ${formatNumberUS(snapshot.priceEUR) || snapshot.priceEUR} AED`);
-      if (snapshot.rooms) factsList.push(`Количество комнат: ${snapshot.rooms}`);
-      if (snapshot.floor) factsList.push(`Этаж: ${snapshot.floor}`);
-      if (snapshot.hasImage) factsList.push(`Есть изображения: да`);
-      
-      if (factsList.length === 0) {
-        return null;
-      }
-      
-      return `РАЗРЕШЁННЫЕ ФАКТЫ О ПОКАЗАННОЙ КАРТОЧКЕ:
-${factsList.join('\n')}
-
-ВАЖНО: Ты можешь говорить только об этих фактах. Не упоминай характеристики объекта, которых нет в списке выше. Можешь интерпретировать, сравнивать, советовать, но не добавляй новых фактов.`;
-    })();
-
-    // 🆕 Sprint III: post-handoff mode instruction для AI
-    const postHandoffInstruction = (() => {
-      if (!session.handoffDone) {
-        return null; // До handoff — инструкция не нужна
-      }
-      
-      return `РЕЖИМ POST-HANDOFF:
-Ты находишься в post-handoff режиме. Данные лида уже заморожены и не могут быть изменены.
-
-ОГРАНИЧЕНИЯ:
-- Не собирай контакт заново (имя, телефон, email).
-- Не утверждай, что лид передан менеджеру, если это не подтверждено явно.
-- Факты об объектах недвижимости — только из allowedFactsSnapshot (если он предоставлен выше), иначе не упоминай конкретные характеристики объектов.
-- Можешь отвечать на вопросы и помогать, но не обновляй профиль клиента или insights.
-
-Продолжай диалог естественно, но соблюдай эти ограничения.`;
-    })();
 
     // RMv3 / Sprint 4 / Task 4.1: полный контекст диалога для LLM (user + assistant)
     // ВАЖНО:
@@ -2525,14 +2188,6 @@ ${factsList.join('\n')}
         role: 'system',
         content: baseSystemPrompt
       },
-      {
-        role: 'system',
-        content: `${stageInstruction}\n\n${outputFormatInstruction}`
-      },
-      ...(inventoryInstruction ? [{ role: 'system', content: inventoryInstruction }] : []),
-      ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
-      ...(allowedFactsInstruction ? [{ role: 'system', content: allowedFactsInstruction }] : []),
-      ...(postHandoffInstruction ? [{ role: 'system', content: postHandoffInstruction }] : []),
       ...dialogMessages
     ];
 
@@ -2542,32 +2197,9 @@ ${factsList.join('\n')}
     // RMv3 / Sprint 1: transient LLM Context Pack + [CTX] log (infrastructure only)
     llmContextPackForMainCall = buildLlmContextPack(session, sessionId, 'main');
     logCtx(llmContextPackForMainCall);
-    const factsMsg = buildLlmFactsSystemMessage(llmContextPackForMainCall);
-    const guardMsg = buildRmv3GuardrailsSystemMessage();
-    // RMv3 / Sprint 2 / Task 5: expose clarificationMode + diagnostics (only if active)
-    const shapedForDiag = buildShapedFactsPackForLLM(llmContextPackForMainCall);
-    if (shapedForDiag?.clarificationMode === true) {
-      const reasons = [];
-      if (shapedForDiag?.ref?.ambiguity === true) reasons.push('ambiguity');
-      if (shapedForDiag?.ref?.clarificationRequired === true) reasons.push('clarificationRequired');
-      if (shapedForDiag?.ref?.clarificationBoundaryActive === true) reasons.push('clarificationBoundary');
-      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-        session.debugTrace = { items: [] };
-      }
-      session.debugTrace.items.push({
-        type: 'clarification_mode_exposed',
-        at: Date.now(),
-        payload: {
-          active: true,
-          reasons
-        }
-      });
-      const sid = String(sessionId || '').slice(-8) || 'unknown';
-      console.log(`[CLARIFICATION_MODE] sid=${sid} reasons=${reasons.join(',')}`);
-    }
     const completion = await callOpenAIWithRetry(() => 
       openai.chat.completions.create({
-        messages: [factsMsg, guardMsg, ...messages],
+        messages,
         model: 'gpt-4o-mini',
         temperature: 0.5,
         stream: false
@@ -2578,6 +2210,12 @@ ${factsList.join('\n')}
 
     const fullModelText = completion.choices[0].message.content.trim();
     const { assistantText, meta } = extractAssistantAndMeta(fullModelText);
+    try {
+      const sid = String(sessionId || '').slice(-8) || 'unknown';
+      console.log(`[META_RAW] sid=${sid} ${JSON.stringify(meta ?? null)}`);
+    } catch {
+      console.log('[META_RAW] failed_to_stringify');
+    }
     let botResponse = assistantText || fullModelText;
     // Bonus: после ответа GPT подтверждаем язык сессии по распознанному языку пользовательского текста.
     if (detectedLangFromText) {
@@ -2594,32 +2232,17 @@ ${factsList.join('\n')}
       console.log(`[MISMATCH] sid=${String(sessionId || '').slice(-8) || 'unknown'} bind=${bindCardId || 'null'} spoke=${spoke.cardId || 'null'} focus=${session.currentFocusCard?.cardId || 'null'} lastShown=${session.lastShown?.cardId || 'null'} rule=${rule || 'null'}`);
     }
 
-    // META обработка: clientProfileDelta + stage
+    // META обработка: единый парсинг произвольного ---META--- блока от модели
     try {
-      const clientProfileDelta = meta?.clientProfileDelta && typeof meta.clientProfileDelta === 'object'
-        ? meta.clientProfileDelta
-        : {};
-      
-      // 🆕 Sprint III: после handoff не обновляем clientProfile и insights, только логируем в enrichment
-      if (session.handoffDone) {
-        addPostHandoffEnrichment(session, 'assistant_meta', JSON.stringify({
-          clientProfileDelta: clientProfileDelta,
-          stage: meta?.stage || null
-        }), {
-          role: session.role,
-          stage: session.stage
-        });
-      } else {
-        // До handoff: обновляем как раньше
-        const updatedProfile = mergeClientProfile(session.clientProfile, clientProfileDelta);
-        session.clientProfile = updatedProfile;
-        // Stage machine deactivated: игнорируем stage из META
-        session.stage = 'matching_closing';
-        // Синхронизация с insights и пересчёт прогресса
+      if (meta && typeof meta === 'object') {
+        const profilePatches = [];
+        if (meta.clientProfileDelta && typeof meta.clientProfileDelta === 'object') profilePatches.push(meta.clientProfileDelta);
+        if (meta.clientProfile && typeof meta.clientProfile === 'object') profilePatches.push(meta.clientProfile);
+        for (const patch of profilePatches) {
+          session.clientProfile = mergeClientProfile(session.clientProfile, patch);
+        }
         mapClientProfileToInsights(session.clientProfile, session.insights);
-        // Прямой мост: если LLM вернул insights/clientProfile в META, переносим их в session.insights
         applyMetaInsightsToSession(session, meta);
-        // Компактный лог обновления профиля и стадии
         const profileLog = {
           language: session.clientProfile.language,
           location: session.clientProfile.location,
@@ -2629,7 +2252,7 @@ ${factsList.join('\n')}
           propertyType: session.clientProfile.propertyType,
           urgency: session.clientProfile.urgency
         };
-        console.log(`🧩 Профиль обновлён [${String(sessionId).slice(-8)}]: ${JSON.stringify(profileLog)} | stage: ${session.stage}`);
+        console.log(`🧩 Профиль/инсайты обновлены [${String(sessionId).slice(-8)}]: ${JSON.stringify(profileLog)}`);
       }
     } catch (e) {
       console.log('ℹ️ META отсутствует или невалидна, продолжаем без обновления профиля');
