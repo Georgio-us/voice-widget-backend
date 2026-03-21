@@ -7,6 +7,7 @@ const DEFAULT_FRONTEND_URL = 'https://voice-widget-frontend-tgdubai-split.up.rai
 const START_PREFIX = 'prop_';
 const INLINE_SHARE_PREFIX = 'share_prop_';
 const TELEGRAM_BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || 'viaproperties_bot').replace(/^@/, '');
+const VIA_LOGO_FALLBACK = 'https://voice-widget-frontend-tgdubai-split.up.railway.app/assets/LOGO-light.svg';
 
 let botInstance = null;
 
@@ -158,13 +159,22 @@ export async function startTelegramBot() {
       console.log('Received inline query:', query);
       const propId = parseInlineSharePropId(query);
       if (!propId) {
-        await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
+        try {
+          await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
+        } catch (answerError) {
+          console.warn('answerInlineQuery rejected (empty/no propId):', answerError?.response?.description || answerError?.message || answerError);
+        }
         return;
       }
 
+      console.log('Inline share property ID to lookup:', propId);
       const property = await getPropertyForInlineShare(propId);
       if (!property) {
-        await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
+        try {
+          await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
+        } catch (answerError) {
+          console.warn('answerInlineQuery rejected (property not found):', answerError?.response?.description || answerError?.message || answerError);
+        }
         return;
       }
 
@@ -179,7 +189,7 @@ export async function startTelegramBot() {
       const miniAppDeepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}/app?startapp=${encodeURIComponent(`${START_PREFIX}${property.id}`)}`;
       const result = {
         type: 'article',
-        id: `share_${property.id}`,
+        id: `share_${property.id}_${Date.now()}`,
         title: `🏙 ${heading}`,
         description: `${property.priceLabel} • ${district}`,
         input_message_content: {
@@ -191,9 +201,7 @@ export async function startTelegramBot() {
           ]
         }
       };
-      if (isValidPublicImageUrl(property.image)) {
-        result.thumb_url = property.image;
-      }
+      result.thumb_url = isValidPublicImageUrl(property.image) ? property.image : VIA_LOGO_FALLBACK;
 
       console.log('Inline query result prepared:', {
         id: result.id,
@@ -201,10 +209,19 @@ export async function startTelegramBot() {
         hasThumb: Boolean(result.thumb_url),
         miniAppDeepLink
       });
-      await ctx.answerInlineQuery([result], { cache_time: 0, is_personal: true });
+      try {
+        await ctx.answerInlineQuery([result], { cache_time: 0, is_personal: true });
+      } catch (answerError) {
+        console.warn('answerInlineQuery rejected (with result):', answerError?.response?.description || answerError?.message || answerError);
+        throw answerError;
+      }
     } catch (error) {
       console.warn('inline_query handling failed:', error?.message || error);
-      try { await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true }); } catch {}
+      try {
+        await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
+      } catch (fallbackError) {
+        console.warn('answerInlineQuery fallback rejected:', fallbackError?.response?.description || fallbackError?.message || fallbackError);
+      }
     }
   });
 
