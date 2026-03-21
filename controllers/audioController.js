@@ -6,7 +6,7 @@ import { getAllProperties } from '../services/propertiesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
-import { appendMessage } from '../services/sessionLogger.js';
+import { appendMessage, upsertSessionLog } from '../services/sessionLogger.js';
 import { sendSessionActivityStartToTelegram, updateSessionActivityFinalToTelegram } from '../services/telegramNotifier.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || '').trim() === '1';
@@ -2228,6 +2228,12 @@ const transcribeAndRespond = async (req, res) => {
     // - храним message_id в session, чтобы потом обновить тем же сообщением при финализации (TTL/clear)
     try {
       if (isNewSession === true) {
+        const tgUser = {
+          userId: req.body?.tgUserId ? String(req.body.tgUserId).trim() : null,
+          username: req.body?.tgUsername ? String(req.body.tgUsername).trim() : null,
+          firstName: req.body?.tgFirstName ? String(req.body.tgFirstName).trim() : null,
+          lastName: req.body?.tgLastName ? String(req.body.tgLastName).trim() : null
+        };
         // best-effort geo from headers (no external dependencies)
         const h = (k) => {
           try { return req?.headers?.[k] || req?.headers?.[String(k || '').toLowerCase()] || null; } catch { return null; }
@@ -2240,6 +2246,25 @@ const transcribeAndRespond = async (req, res) => {
           ...(country ? { country: String(country).trim() } : {}),
           ...(city ? { city: String(city).trim() } : {})
         };
+        const hasTgUser = Object.values(tgUser).some((v) => String(v || '').trim().length > 0);
+        if (hasTgUser) {
+          session.telegramUser = {
+            ...(tgUser.userId ? { userId: tgUser.userId } : {}),
+            ...(tgUser.username ? { username: tgUser.username } : {}),
+            ...(tgUser.firstName ? { firstName: tgUser.firstName } : {}),
+            ...(tgUser.lastName ? { lastName: tgUser.lastName } : {})
+          };
+        }
+        upsertSessionLog({
+          sessionId,
+          userAgent,
+          userIp,
+          payloadPatch: {
+            sessionMeta: {
+              ...(hasTgUser ? { telegramUser: session.telegramUser } : {})
+            }
+          }
+        }).catch(() => {});
         // store on session (server is source of truth)
         session.geo = geo && (geo.country || geo.city) ? geo : null;
         session.telegram = session.telegram || {};

@@ -71,8 +71,10 @@ export async function createLead({
   const normalizedPreferredContactMethod = preferredContactMethod && String(preferredContactMethod).trim().length > 0
     ? String(preferredContactMethod).trim()
     : null;
+  const normalizedSource = String(source || '').trim().toLowerCase();
   const telegramContactOk =
-    (String(source || '').trim() === 'tg_mini_app' || String(normalizedPreferredContactMethod || '').toLowerCase() === 'telegram') &&
+    ((normalizedSource === 'tg_mini_app' || normalizedSource === 'tg_header_main' || normalizedSource === 'tg_property_card') ||
+      String(normalizedPreferredContactMethod || '').toLowerCase() === 'telegram') &&
     telegramUsernameTrimmed.length > 0;
   if (phoneNumberTrimmed.length === 0 && emailTrimmed.length === 0 && !telegramContactOk) {
     throw new Error('at least one contact (phone, email or telegram) must be provided');

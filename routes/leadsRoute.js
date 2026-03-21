@@ -83,8 +83,10 @@ router.post('/', async (req, res) => {
     const phoneNumberTrimmed = phoneNumber ? String(phoneNumber).trim() : '';
     const emailTrimmed = email ? String(email).trim() : '';
     const telegramUsernameTrimmed = telegramUsername ? String(telegramUsername).trim() : '';
+    const normalizedSource = String(source || '').trim().toLowerCase();
     const telegramContactOk =
-      (source === 'tg_mini_app' || String(preferredContactMethod || '').toLowerCase() === 'telegram') &&
+      ((normalizedSource === 'tg_mini_app' || normalizedSource === 'tg_header_main' || normalizedSource === 'tg_property_card') ||
+        String(preferredContactMethod || '').toLowerCase() === 'telegram') &&
       telegramUsernameTrimmed.length > 0;
     if (phoneNumberTrimmed.length === 0 && emailTrimmed.length === 0 && !telegramContactOk) {
       return res.status(400).json({
@@ -163,6 +165,7 @@ router.post('/', async (req, res) => {
         createdAt: result.created_at,
         sessionId: sessionId || null,
         source,
+        telegramUsername: telegramUsernameTrimmed || null,
         name,
         phoneCountryCode,
         phoneNumber,

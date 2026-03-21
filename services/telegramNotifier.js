@@ -101,12 +101,27 @@ const pickInsightLines = (insights) => {
 
 export function buildLeadTelegramMessage(lead) {
   const lines = [];
-  lines.push('🆕 Новая заявка с виджета');
+  const source = String(lead?.source || '').trim().toLowerCase();
+  const propertyId = String(lead?.propertyId || lead?.lastShownCardId || '').trim();
+  if (source === 'tg_property_card') {
+    lines.push(`🔥 ИНТЕРЕС К ОБЪЕКТУ: ${propertyId || '-'}`);
+  } else if (source === 'tg_header_main') {
+    lines.push('📞 ОБЩАЯ КОНСУЛЬТАЦИЯ (из хедера)');
+  } else {
+    lines.push('🆕 Новая заявка с виджета');
+  }
   lines.push('');
 
   // Client
   lines.push('👤 Клиент:');
   lines.push(clip(lead?.name || '-', 200));
+  const telegramUsernameRaw = String(lead?.telegramUsername || '').trim();
+  if (telegramUsernameRaw) {
+    const telegramUsername = telegramUsernameRaw.startsWith('@')
+      ? telegramUsernameRaw
+      : `@${telegramUsernameRaw}`;
+    lines.push(`Telegram: ${clip(telegramUsername, 100)}`);
+  }
   lines.push('');
 
   // Contacts
@@ -374,4 +389,3 @@ export async function updateSessionActivityFinalToTelegram(params = {}) {
   });
   return { ok: true, skipped: false };
 }
-
