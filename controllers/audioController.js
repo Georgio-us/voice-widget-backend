@@ -3005,45 +3005,54 @@ const getStats = (req, res) => {
 };
 
 // ✅ Получение полной информации о сессии по ID
-const getSessionInfo = (req, res) => {
-  const sessionId = req.params.sessionId;
-  const session = sessions.get(sessionId);
+const getSessionInfo = async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const session = sessions.get(sessionId);
 
-  if (!session) {
-    return res.status(404).json({ error: 'Сессия не найдена' });
+    if (!session) {
+      return res.status(404).json({ error: 'Сессия не найдена' });
+    }
+
+    const { totalMatches } = await getRankedProperties(session.insights || {});
+
+    res.json({
+      sessionId,
+      clientProfile: session.clientProfile,
+      stage: session.stage,
+      role: session.role, // 🆕 Sprint I: server-side role
+      insights: session.insights, // 🆕 Теперь содержит все 9 параметров
+      totalMatches,
+      lastCandidates: Array.isArray(session.lastCandidates) ? session.lastCandidates : [],
+      messageCount: session.messages.length,
+      lastActivity: session.lastActivity,
+      // 🆕 Sprint IV: distinction between shown and focused (для валидации/debug)
+      currentFocusCard: session.currentFocusCard || { cardId: null, updatedAt: null },
+      lastShown: session.lastShown || { cardId: null, updatedAt: null },
+      lastFocusSnapshot: session.lastFocusSnapshot || null,
+      // 🆕 Sprint V: reference and ambiguity states (для валидации/debug)
+      referenceIntent: session.referenceIntent || null,
+      referenceAmbiguity: session.referenceAmbiguity || { isAmbiguous: false, reason: null, detectedAt: null, source: 'server_contract' },
+      clarificationRequired: session.clarificationRequired || { isRequired: false, reason: null, detectedAt: null, source: 'server_contract' },
+      singleReferenceBinding: session.singleReferenceBinding || { hasProposal: false, proposedCardId: null, source: 'server_contract', detectedAt: null, basis: null },
+      clarificationBoundaryActive: session.clarificationBoundaryActive || false,
+      // 🆕 Sprint VI / Task #1: Candidate Shortlist (debug/diagnostics only)
+      candidateShortlist: session.candidateShortlist || { items: [] },
+      // 🆕 Sprint VI / Task #2: Explicit Choice Event (debug/diagnostics only)
+      explicitChoiceEvent: session.explicitChoiceEvent || { isConfirmed: false, cardId: null, detectedAt: null, source: 'user_message' },
+      // 🆕 Sprint VI / Task #3: Choice Confirmation Boundary (debug/diagnostics only)
+      choiceConfirmationBoundary: session.choiceConfirmationBoundary || { active: false, chosenCardId: null, detectedAt: null, source: null },
+      // 🆕 Sprint VI / Task #4: No-Guessing Invariant (debug/diagnostics only)
+      noGuessingInvariant: session.noGuessingInvariant || { active: false, reason: null, enforcedAt: null },
+      // 🆕 Sprint VII / Task #1: Unknown UI Actions (debug/diagnostics only)
+      unknownUiActions: session.unknownUiActions || { count: 0, items: [] },
+      // 🆕 Sprint VII / Task #2: Debug Trace (debug/diagnostics only)
+      debugTrace: session.debugTrace || { items: [] }
+    });
+  } catch (e) {
+    console.error('getSessionInfo error:', e);
+    res.status(500).json({ error: 'internal' });
   }
-
-  res.json({
-    sessionId,
-    clientProfile: session.clientProfile,
-    stage: session.stage,
-    role: session.role, // 🆕 Sprint I: server-side role
-    insights: session.insights, // 🆕 Теперь содержит все 9 параметров
-    messageCount: session.messages.length,
-    lastActivity: session.lastActivity,
-    // 🆕 Sprint IV: distinction between shown and focused (для валидации/debug)
-    currentFocusCard: session.currentFocusCard || { cardId: null, updatedAt: null },
-    lastShown: session.lastShown || { cardId: null, updatedAt: null },
-    lastFocusSnapshot: session.lastFocusSnapshot || null,
-    // 🆕 Sprint V: reference and ambiguity states (для валидации/debug)
-    referenceIntent: session.referenceIntent || null,
-    referenceAmbiguity: session.referenceAmbiguity || { isAmbiguous: false, reason: null, detectedAt: null, source: 'server_contract' },
-    clarificationRequired: session.clarificationRequired || { isRequired: false, reason: null, detectedAt: null, source: 'server_contract' },
-    singleReferenceBinding: session.singleReferenceBinding || { hasProposal: false, proposedCardId: null, source: 'server_contract', detectedAt: null, basis: null },
-    clarificationBoundaryActive: session.clarificationBoundaryActive || false,
-    // 🆕 Sprint VI / Task #1: Candidate Shortlist (debug/diagnostics only)
-    candidateShortlist: session.candidateShortlist || { items: [] },
-    // 🆕 Sprint VI / Task #2: Explicit Choice Event (debug/diagnostics only)
-    explicitChoiceEvent: session.explicitChoiceEvent || { isConfirmed: false, cardId: null, detectedAt: null, source: 'user_message' },
-    // 🆕 Sprint VI / Task #3: Choice Confirmation Boundary (debug/diagnostics only)
-    choiceConfirmationBoundary: session.choiceConfirmationBoundary || { active: false, chosenCardId: null, detectedAt: null, source: null },
-    // 🆕 Sprint VI / Task #4: No-Guessing Invariant (debug/diagnostics only)
-    noGuessingInvariant: session.noGuessingInvariant || { active: false, reason: null, enforcedAt: null },
-    // 🆕 Sprint VII / Task #1: Unknown UI Actions (debug/diagnostics only)
-    unknownUiActions: session.unknownUiActions || { count: 0, items: [] },
-    // 🆕 Sprint VII / Task #2: Debug Trace (debug/diagnostics only)
-    debugTrace: session.debugTrace || { items: [] }
-  });
 };
 
 // 🆕 Sprint III: централизованная функция установки handoff как boundary-события
