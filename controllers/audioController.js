@@ -23,15 +23,26 @@ const INSIGHTS_RESPONSE_SCHEMA = {
       insights: {
         type: 'object',
         additionalProperties: false,
-        required: ['name', 'operation', 'budget', 'type', 'location', 'rooms', 'area', 'details', 'preferences'],
+        required: [
+          'name', 'operation', 'budget', 'budgetMax', 'type', 'location', 'rooms',
+          'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences'
+        ],
         properties: {
           name: { type: ['string', 'null'] },
           operation: { type: ['string', 'null'], enum: ['buy', 'rent', null] },
           budget: { type: ['number', 'string', 'null'] },
+          budgetMax: { type: ['number', 'string', 'null'] },
           type: { type: ['string', 'null'], enum: ['apartment', 'house', 'land', null] },
           location: { type: ['string', 'null'] },
           rooms: { type: ['number', 'string', 'null'] },
           area: { type: ['number', 'string', 'null'] },
+          areaMin: { type: ['number', 'string', 'null'] },
+          areaMax: { type: ['number', 'string', 'null'] },
+          floor: { type: ['number', 'string', 'null'] },
+          features: {
+            type: ['array', 'null'],
+            items: { type: 'string' }
+          },
           details: { type: ['string', 'null'] },
           preferences: { type: ['string', 'null'] }
         }
@@ -191,23 +202,22 @@ const getOrCreateSession = (sessionId) => {
       stage: 'matching_closing',
       // 🆕 Sprint III: server-side role (детерминированное состояние через state machine)
       role: ROLE_SEARCH_READY,
-      // 🆕 РАСШИРЕННАЯ СТРУКТУРА INSIGHTS (9 параметров)
+      // 🆕 РАСШИРЕННАЯ СТРУКТУРА INSIGHTS (v2)
       insights: {
-        // Блок 1: Основная информация (33.3%)
-        name: null,           // 10%
-        operation: null,      // 12%  
-        budget: null,         // 11%
-        
-        // Блок 2: Параметры недвижимости (33.3%)
-        type: null,           // 11%
-        location: null,       // 11%
-        rooms: null,          // 11%
-        
-        // Блок 3: Детали и предпочтения (33.3%)
-        area: null,           // 11%
-        details: null,        // 11% (детали локации: возле парка, пересечение улиц)
-        preferences: null,    // 11%
-        
+        name: null,
+        operation: null,
+        budget: null,
+        budgetMax: null,
+        type: null,
+        location: null,
+        rooms: null,
+        area: null,
+        areaMin: null,
+        areaMax: null,
+        floor: null,
+        features: null,
+        details: null,
+        preferences: null,
         progress: 0
       },
       extractionMetrics: {
@@ -220,10 +230,15 @@ const getOrCreateSession = (sessionId) => {
           name: 0,
           operation: 0,
           budget: 0,
+          budgetMax: 0,
           type: 0,
           location: 0,
           rooms: 0,
           area: 0,
+          areaMin: 0,
+          areaMax: 0,
+          floor: 0,
+          features: 0,
           details: 0,
           preferences: 0
         }
@@ -460,7 +475,14 @@ const normalizeDistrict = (val) => {
 };
 
 const hasHardFilters = (insights = {}) => {
-  return Boolean(insights?.operation || insights?.budget || insights?.type);
+  return Boolean(
+    insights?.operation ||
+    insights?.budget ||
+    insights?.budgetMax ||
+    insights?.type ||
+    insights?.location ||
+    insights?.rooms
+  );
 };
 
 const normalizeOperationForProperty = (value) => {
@@ -482,58 +504,155 @@ const normalizeTypeForProperty = (value) => {
   return null;
 };
 
-const passHardFilters = (p, insights = {}) => {
-  const expectedOperation = normalizeOperationForProperty(insights.operation);
-  if (expectedOperation) {
-    const actualOperation = normalizeOperationForProperty(p.operation);
-    if (!actualOperation || actualOperation !== expectedOperation) return false;
-  }
+const SCORE_WEIGHTS = Object.freeze({
+  budget: 30,
+  location: 22,
+  rooms: 16,
+  operation: 10,
+  type: 8,
+  area: 6,
+  floor: 4,
+  features: 4
+});
 
-  const expectedType = normalizeTypeForProperty(insights.type);
-  if (expectedType) {
-    const actualType = normalizeTypeForProperty(p.property_type);
-    if (!actualType || actualType !== expectedType) return false;
-  }
-
-  const budget = parseBudgetEUR(insights.budget);
-  if (budget != null && Number.isFinite(budget)) {
-    const price = Number(p.priceEUR);
-    if (!Number.isFinite(price) || price > budget) return false;
-  }
-
-  return true;
+const getBudgetCap = (insights = {}) => {
+  const fromMax = parseBudgetEUR(insights?.budgetMax);
+  if (fromMax != null && Number.isFinite(fromMax)) return fromMax;
+  const fromBudget = parseBudgetEUR(insights?.budget);
+  if (fromBudget != null && Number.isFinite(fromBudget)) return fromBudget;
+  return null;
 };
 
-const scoreProperty = (p, insights) => {
-  if (!passHardFilters(p, insights)) return 0;
+const parseIntLoose = (value) => {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+  const m = String(value).match(/\d+/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+};
 
-  let score = 1;
-  // rooms
-  const roomsNum = (() => {
-    const m = insights.rooms && String(insights.rooms).match(/\d+/);
-    return m ? parseInt(m[0], 10) : null;
-  })();
-  if (roomsNum != null && Number(p.rooms) === roomsNum) score += 2;
-  // location (insights.location хранит район/локацию)
-  const insightDistrict = normalizeDistrict(insights.location);
-  const propDistrict = normalizeDistrict(p.district || p.neighborhood || p.city);
-  if (insightDistrict && propDistrict) {
-    if (propDistrict === insightDistrict) score += 3;
-    else if (propDistrict.includes(insightDistrict) || insightDistrict.includes(propDistrict)) score += 2;
+const normalizeFeaturesArray = (value) => {
+  if (value == null) return [];
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean);
   }
+  return String(value)
+    .split(/[,\n;|]/)
+    .map((v) => String(v || '').trim().toLowerCase())
+    .filter(Boolean);
+};
 
-  // budget proximity bonus (после прохождения hard-budget)
-  const budget = parseBudgetEUR(insights.budget);
-  if (budget != null && Number.isFinite(budget)) {
-    const price = Number(p.priceEUR);
-    if (Number.isFinite(price)) {
-      const diff = Math.abs(price - budget) / (budget || 1);
-      if (diff <= 0.1) score += 2;
-      else if (diff <= 0.2) score += 1;
+const getPropertyFeaturesIndex = (property = {}) => {
+  const text = String(property?.description || '').toLowerCase();
+  const candidates = [
+    ['terrace', /(terrace|терасс|террас)/i],
+    ['balcony', /(balcony|балкон)/i],
+    ['pool', /(pool|бассейн)/i],
+    ['sea view', /(sea view|вид на море)/i],
+    ['high floor', /(high floor|высокий этаж)/i],
+    ['concierge', /(concierge|консьерж)/i],
+    ['parking', /(parking|парковк)/i]
+  ];
+  return candidates.filter(([, re]) => re.test(text)).map(([label]) => label);
+};
+
+const resolveTierByScore = (score) => {
+  const safe = Number(score) || 0;
+  if (safe >= 80) return 'high';
+  if (safe >= 50) return 'mid';
+  return 'low';
+};
+
+const scoreProperty = (p, insights, mode = 'relaxed') => {
+  const strictMode = mode === 'strict';
+  let penalty = 1;
+  let score = 0;
+
+  const expectedOperation = normalizeOperationForProperty(insights?.operation);
+  const actualOperation = normalizeOperationForProperty(p?.operation);
+  if (expectedOperation) {
+    if (!actualOperation || actualOperation !== expectedOperation) {
+      if (strictMode) return 0;
+      penalty *= 0.3;
+    } else {
+      score += SCORE_WEIGHTS.operation;
     }
   }
 
-  return score;
+  const expectedType = normalizeTypeForProperty(insights?.type);
+  const actualType = normalizeTypeForProperty(p?.property_type);
+  if (expectedType) {
+    if (!actualType || actualType !== expectedType) {
+      if (strictMode) return 0;
+      penalty *= 0.4;
+    } else {
+      score += SCORE_WEIGHTS.type;
+    }
+  }
+
+  const budgetCap = getBudgetCap(insights);
+  const price = Number(p?.priceEUR);
+  if (budgetCap != null && Number.isFinite(budgetCap) && Number.isFinite(price) && price > 0) {
+    if (price > budgetCap * 1.2) {
+      if (strictMode) return 0;
+      penalty *= 0.2;
+    } else if (price <= budgetCap) {
+      score += SCORE_WEIGHTS.budget;
+    } else {
+      const overRatio = (price - budgetCap) / (budgetCap || 1);
+      const coeff = Math.max(0, 1 - overRatio / 0.2);
+      score += SCORE_WEIGHTS.budget * coeff;
+      penalty *= strictMode ? 0.7 : 0.85;
+    }
+  }
+
+  const insightDistrict = normalizeDistrict(insights?.location);
+  const propDistrict = normalizeDistrict(p?.district || p?.neighborhood || p?.city);
+  if (insightDistrict) {
+    if (propDistrict === insightDistrict) {
+      score += SCORE_WEIGHTS.location;
+    } else if (propDistrict.includes(insightDistrict) || insightDistrict.includes(propDistrict)) {
+      score += SCORE_WEIGHTS.location * 0.6;
+    } else {
+      penalty *= strictMode ? 0.5 : 0.8;
+    }
+  }
+
+  const expectedRooms = parseIntLoose(insights?.rooms);
+  const actualRooms = parseIntLoose(p?.rooms);
+  if (expectedRooms != null && actualRooms != null) {
+    if (expectedRooms === actualRooms) score += SCORE_WEIGHTS.rooms;
+    else if (Math.abs(expectedRooms - actualRooms) === 1) score += SCORE_WEIGHTS.rooms * 0.45;
+    else penalty *= strictMode ? 0.6 : 0.85;
+  }
+
+  const expectedAreaMin = parseIntLoose(insights?.areaMin ?? insights?.area);
+  const expectedAreaMax = parseIntLoose(insights?.areaMax);
+  const actualArea = parseIntLoose(p?.area_m2);
+  if (actualArea != null && (expectedAreaMin != null || expectedAreaMax != null)) {
+    if (expectedAreaMin != null && actualArea < expectedAreaMin) score += SCORE_WEIGHTS.area * 0.25;
+    else if (expectedAreaMax != null && actualArea > expectedAreaMax) score += SCORE_WEIGHTS.area * 0.4;
+    else score += SCORE_WEIGHTS.area;
+  }
+
+  const expectedFloor = parseIntLoose(insights?.floor);
+  const actualFloor = parseIntLoose(p?.floor);
+  if (expectedFloor != null && actualFloor != null) {
+    if (expectedFloor === actualFloor) score += SCORE_WEIGHTS.floor;
+    else if (Math.abs(expectedFloor - actualFloor) <= 2) score += SCORE_WEIGHTS.floor * 0.5;
+  }
+
+  const requestedFeatures = normalizeFeaturesArray(insights?.features || insights?.preferences || insights?.details);
+  if (requestedFeatures.length) {
+    const index = getPropertyFeaturesIndex(p);
+    const hits = requestedFeatures.filter((f) => index.includes(f)).length;
+    const ratio = requestedFeatures.length ? (hits / requestedFeatures.length) : 0;
+    score += SCORE_WEIGHTS.features * ratio;
+  }
+
+  const finalScore = Math.max(0, Math.round(score * penalty * 100) / 100);
+  return finalScore;
 };
 
 // Нормализация строки из БД к формату карточек, совместимому с фронтом
@@ -568,13 +687,26 @@ const getAllNormalizedProperties = async () => {
 };
 
 const rankPropertiesByInsights = (properties, insights) => {
-  const rankedRows = properties
-    .map((p) => ({ p, s: scoreProperty(p, insights) }))
-    .filter(({ s }) => s > 0)
-    .sort((a, b) => b.s - a.s);
+  const scored = properties.map((p) => {
+    const relaxedScore = scoreProperty(p, insights, 'relaxed');
+    const strictScore = scoreProperty(p, insights, 'strict');
+    return { p, relaxedScore, strictScore, tier: resolveTierByScore(relaxedScore) };
+  });
+  const rankedRows = scored
+    .filter(({ relaxedScore }) => relaxedScore > 0)
+    .sort((a, b) => b.relaxedScore - a.relaxedScore);
+  const strictMatches = scored.filter(({ strictScore }) => strictScore > 0).length;
+  const relaxedMatches = rankedRows.length;
   return {
-    ranked: rankedRows.map(({ p }) => p),
-    totalMatches: rankedRows.length
+    ranked: rankedRows.map(({ p, relaxedScore, strictScore, tier }) => ({
+      ...p,
+      _score: relaxedScore,
+      _strictScore: strictScore,
+      _tier: tier
+    })),
+    totalMatches: relaxedMatches,
+    strictMatches,
+    relaxedMatches
   };
 };
 
@@ -623,6 +755,8 @@ const formatCardForClient = (req, p) => {
     city: p.city ?? p?.location?.city ?? null,
     district: p.district ?? p?.location?.district ?? null,
     neighborhood: p.neighborhood ?? p?.location?.neighborhood ?? null,
+    operation: p.operation ?? null,
+    property_type: p.property_type ?? null,
     // Правые поля (основные цифры)
     price: formattedPrice ? `${formattedPrice} AED` : null,
     priceEUR: p.priceEUR ?? p?.price?.amount ?? null,
@@ -633,6 +767,9 @@ const formatCardForClient = (req, p) => {
     area_m2: p.area_m2 ?? p?.specs?.area_m2 ?? null,
     price_per_m2: p.price_per_m2 ?? null,
     bathrooms: p.bathrooms ?? p?.specs?.bathrooms ?? null,
+    score: p._score ?? null,
+    strictScore: p._strictScore ?? null,
+    matchTier: p._tier ?? null,
     // Изображение
     image,
     imageUrl: image,
@@ -1177,20 +1314,28 @@ const formatBudgetFromRange = (min, max) => {
   return null;
 };
 
-const INSIGHT_FIELDS = ['name', 'operation', 'budget', 'type', 'location', 'rooms', 'area', 'details', 'preferences'];
+const INSIGHT_FIELDS = [
+  'name', 'operation', 'budget', 'budgetMax', 'type', 'location', 'rooms',
+  'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences'
+];
 
 const recalcInsightsProgress = (insights) => {
   if (!insights || typeof insights !== 'object') return;
   const weights = {
-    name: 11,
-    operation: 11,
-    budget: 11,
-    type: 11,
-    location: 11,
-    rooms: 11,
-    area: 11,
-    details: 11,
-    preferences: 11
+    name: 7,
+    operation: 7,
+    budget: 7,
+    budgetMax: 7,
+    type: 7,
+    location: 7,
+    rooms: 7,
+    area: 7,
+    areaMin: 7,
+    areaMax: 7,
+    floor: 7,
+    features: 7,
+    details: 7,
+    preferences: 7
   };
   let totalProgress = 0;
   for (const [field, weight] of Object.entries(weights)) {
@@ -1237,6 +1382,7 @@ const mapClientProfileToInsights = (clientProfile, insights) => {
   const explicitBudget = sanitizeInsightValue(clientProfile.budget);
   const budgetStr = explicitBudget || formatBudgetFromRange(clientProfile.budgetMin, clientProfile.budgetMax);
   if (budgetStr) insights.budget = budgetStr;
+  if (clientProfile.budgetMax != null) insights.budgetMax = clientProfile.budgetMax;
   // Локация
   const location = sanitizeInsightValue(clientProfile.location);
   if (location) insights.location = location;
@@ -1257,6 +1403,7 @@ const mapClientProfileToInsights = (clientProfile, insights) => {
     ['name', 'name'],
     ['rooms', 'rooms'],
     ['area', 'area'],
+    ['floor', 'floor'],
     ['details', 'details'],
     ['preferences', 'preferences']
   ]) {
@@ -1327,6 +1474,20 @@ const applyMetaInsightsToSession = (session, meta) => {
     return Number.isFinite(parsed) ? parsed : null;
   };
 
+  const parseFloorNumber = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+    const raw = String(value).trim().toLowerCase();
+    if (!raw) return null;
+    if (/(высок(ий|ого)|high)/i.test(raw)) return 20;
+    if (/(средн(ий|его)|middle)/i.test(raw)) return 10;
+    if (/(низк(ий|ого)|low)/i.test(raw)) return 3;
+    const numeric = raw.match(/\d+/);
+    if (!numeric) return null;
+    const parsed = Number(numeric[0]);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
   const normalizeOperation = (value) => {
     if (value === null || value === undefined) return null;
     const raw = String(value).trim().toLowerCase();
@@ -1358,6 +1519,33 @@ const applyMetaInsightsToSession = (session, meta) => {
     return Number.isFinite(parsed) ? Math.round(parsed) : null;
   };
 
+  const parseFeatures = (value) => {
+    if (value === null || value === undefined) return null;
+    const out = [];
+    const pushToken = (token) => {
+      const normalized = String(token || '').trim().toLowerCase();
+      if (!normalized) return;
+      if (!out.includes(normalized)) out.push(normalized);
+    };
+    if (Array.isArray(value)) {
+      value.forEach((item) => pushToken(item));
+    } else {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+      raw.split(/[,\n;|]/).forEach((item) => pushToken(item));
+      // heuristic extraction from details-like sentence
+      const map = [
+        ['terrace', /(terrace|терасс|террас)/i],
+        ['balcony', /(balcony|балкон)/i],
+        ['pool', /(pool|бассейн)/i],
+        ['sea view', /(sea view|вид на море)/i],
+        ['high floor', /(high floor|высокий этаж)/i]
+      ];
+      map.forEach(([label, re]) => { if (re.test(raw)) pushToken(label); });
+    }
+    return out.length ? out : null;
+  };
+
   const invalidFields = [];
   let appliedCount = 0;
   for (const field of INSIGHT_FIELDS) {
@@ -1365,17 +1553,33 @@ const applyMetaInsightsToSession = (session, meta) => {
     if (incoming === undefined) continue;
     let nextValue = null;
     if (field === 'budget') nextValue = parseBudgetNumber(incoming);
+    else if (field === 'budgetMax') nextValue = parseBudgetNumber(incoming);
     else if (field === 'rooms') nextValue = parseRoomsNumber(incoming);
     else if (field === 'operation') nextValue = normalizeOperation(incoming);
     else if (field === 'type') nextValue = normalizeType(incoming);
     else if (field === 'area') nextValue = parseNumeric(incoming);
+    else if (field === 'areaMin') nextValue = parseNumeric(incoming);
+    else if (field === 'areaMax') nextValue = parseNumeric(incoming);
+    else if (field === 'floor') nextValue = parseFloorNumber(incoming);
+    else if (field === 'features') nextValue = parseFeatures(incoming);
     else nextValue = sanitizeInsightValue(incoming);
-    if (nextValue === null || nextValue === undefined || String(nextValue).trim() === '') {
+    const isEmptyArray = Array.isArray(nextValue) && nextValue.length === 0;
+    if (nextValue === null || nextValue === undefined || isEmptyArray || (!Array.isArray(nextValue) && String(nextValue).trim() === '')) {
       invalidFields.push(field);
       continue;
     }
     session.insights[field] = nextValue;
     appliedCount += 1;
+  }
+  // back-compat: if model sent only budget, use it as upper cap too
+  if ((session.insights.budgetMax == null || session.insights.budgetMax === '') && session.insights.budget != null) {
+    const inferred = parseBudgetNumber(session.insights.budget);
+    if (inferred != null) session.insights.budgetMax = inferred;
+  }
+  // back-compat: if only area is present, treat it as minimum desired area
+  if ((session.insights.areaMin == null || session.insights.areaMin === '') && session.insights.area != null) {
+    const areaMin = parseNumeric(session.insights.area);
+    if (areaMin != null) session.insights.areaMin = areaMin;
   }
   recalcInsightsProgress(session.insights);
   console.log('[INSIGHTS_UPDATE] Updates applied:', session.insights);
@@ -2768,7 +2972,7 @@ const transcribeAndRespond = async (req, res) => {
       );
     }
 
-    const { totalMatches } = await getRankedProperties(session.insights);
+    const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights);
 
     const responsePayload = {
       response: botResponse,
@@ -2789,6 +2993,9 @@ const transcribeAndRespond = async (req, res) => {
         invalidFields: extractionInvalidFields
       },
       totalMatches,
+      strictMatches,
+      relaxedMatches,
+      topCandidates: ranked.slice(0, 20).map((p) => formatCardForClient(req, p)),
       // ui пропускается, если undefined; cards может быть пустым массивом
       cards: DISABLE_SERVER_UI ? [] : cards,
       ui: DISABLE_SERVER_UI ? undefined : ui,
@@ -2984,7 +3191,7 @@ const getSessionInfo = async (req, res) => {
       return res.status(404).json({ error: 'Сессия не найдена' });
     }
 
-    const { totalMatches } = await getRankedProperties(session.insights || {});
+    const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights || {});
 
     res.json({
       sessionId,
@@ -2993,6 +3200,9 @@ const getSessionInfo = async (req, res) => {
       role: session.role, // 🆕 Sprint I: server-side role
       insights: session.insights, // 🆕 Теперь содержит все 9 параметров
       totalMatches,
+      strictMatches,
+      relaxedMatches,
+      topCandidates: ranked.slice(0, 60).map((p) => formatCardForClient(req, p)),
       lastCandidates: Array.isArray(session.lastCandidates) ? session.lastCandidates : [],
       messageCount: session.messages.length,
       lastActivity: session.lastActivity,
@@ -3150,7 +3360,7 @@ async function handleInteraction(req, res) {
       session.lastCandidates = Array.from(set);
       if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
     }
-    const { totalMatches } = await getRankedProperties(session.insights);
+    const { totalMatches, strictMatches, relaxedMatches } = await getRankedProperties(session.insights);
 
     if (action === 'show') {
       // Первый показ выбранной карточки: только карточка/ID, без backend-комментария
@@ -3160,7 +3370,7 @@ async function handleInteraction(req, res) {
       let id = variantId;
       if (!id) {
         if (hardFilteredMode && list.length === 0) {
-          return res.json(withDebug({ ok: true, cardId: null, card: null, totalMatches, role: session.role }));
+          return res.json(withDebug({ ok: true, cardId: null, card: null, totalMatches, strictMatches, relaxedMatches, role: session.role }));
         }
         const all = await getAllNormalizedProperties();
         id = list[Number.isInteger(session.candidateIndex) ? session.candidateIndex : 0] || (all[0] && all[0].id);
@@ -3173,7 +3383,7 @@ async function handleInteraction(req, res) {
       if (!session.shownSet) session.shownSet = new Set();
       session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
-      return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'next') {
@@ -3182,14 +3392,14 @@ async function handleInteraction(req, res) {
       const len = list.length;
       if (!len) {
         if (hasHardFilters(session.insights)) {
-          return res.json(withDebug({ ok: true, cardId: null, card: null, totalMatches, role: session.role }));
+          return res.json(withDebug({ ok: true, cardId: null, card: null, totalMatches, strictMatches, relaxedMatches, role: session.role }));
         }
         // крайний случай: вернём первый из базы
         const all = await getAllNormalizedProperties();
         const p = all[0];
         if (!p) return res.status(404).json({ error: 'Карточка не найдена' });
         const card = formatCardForClient(req, p);
-        return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
+        return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
       }
       // Если фронт прислал текущий variantId, делаем шаг относительно него
       let idx = list.indexOf(variantId);
@@ -3224,7 +3434,7 @@ async function handleInteraction(req, res) {
       const p = all2.find(x => x.id === id) || all2[0];
       session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
-      return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'like') {
@@ -3233,7 +3443,7 @@ async function handleInteraction(req, res) {
       if (variantId) session.liked.push(variantId);
       const count = session.liked.length;
       const msg = `Супер, сохранил! Могу предложить записаться на просмотр или показать ещё варианты. Что выберем? (понравилось: ${count})`;
-      return res.json(withDebug({ ok: true, assistantMessage: msg, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage: msg, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // RMv3 / Sprint 1 / Task 1: факт выбора карточки пользователем (UI "Выбрать") — server-first
@@ -3262,7 +3472,7 @@ async function handleInteraction(req, res) {
       // при новом handoff сбрасываем cancel-факт (если был)
       session.handoff.canceled = false;
       session.handoff.canceledAt = null;
-      return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
+      return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
     }
 
     // RMv3 / Sprint 2 / Task 2.4: server-fact cancel из in-dialog lead block
@@ -3285,7 +3495,7 @@ async function handleInteraction(req, res) {
       session.selectedCard.cardId = null;
       session.selectedCard.selectedAt = null;
       session.handoff.cardId = null;
-      return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
+      return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
     }
 
     // 🆕 Sprint I: подтверждение факта рендера карточки в UI
@@ -3339,7 +3549,7 @@ async function handleInteraction(req, res) {
       }
       
       console.log(`✅ [Sprint I] Карточка ${variantId} зафиксирована как показанная в UI (сессия ${sessionId.slice(-8)})`);
-      return res.json(withDebug({ ok: true, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // 🆕 Sprint IV: обработка события ui_slider_started для фиксации активности slider
@@ -3350,7 +3560,7 @@ async function handleInteraction(req, res) {
       session.sliderContext.active = true;
       session.sliderContext.updatedAt = Date.now();
       console.log(`📱 [Sprint IV] Slider стал активным (сессия ${sessionId.slice(-8)})`);
-      return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
+      return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
     }
 
     // 🆕 Sprint III: обработка события ui_slider_ended для перехода role
@@ -3367,7 +3577,7 @@ async function handleInteraction(req, res) {
       session.sliderContext.updatedAt = Date.now();
       console.log(`📱 [Sprint IV] Slider стал неактивным (сессия ${sessionId.slice(-8)})`);
       
-      return res.json(withDebug({ ok: true, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // 🆕 Sprint IV: обработка события ui_focus_changed для фиксации текущей карточки в фокусе
@@ -3394,7 +3604,7 @@ async function handleInteraction(req, res) {
       };
       
       console.log(`🎯 [Sprint IV] Focus изменён на карточку ${trimmedCardId} (сессия ${sessionId.slice(-8)})`);
-      return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
+      return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
     }
 
     // 🆕 Sprint VII / Task #1: Unknown UI Action Capture (diagnostics only)
@@ -3408,7 +3618,7 @@ async function handleInteraction(req, res) {
       payload: req.body ? { ...req.body } : null,
       detectedAt: Date.now()
     });
-    return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
+    return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
   } catch (e) {
     console.error('interaction error:', e);
     res.status(500).json({ error: 'internal' });

@@ -56,7 +56,7 @@ LLM Behavior:
 Extraction Layer (MANDATORY):
 - You must always return a ---META--- JSON block after the user-facing text.
 - If the current turn contains any new or clarified client data, include it in META under clientProfile and/or insights.
-- Track these fields when present: name, operation, budget, type, location, rooms, area, details, preferences.
+- Track these fields when present: name, operation, budget, budgetMax, type, location, rooms, area, areaMin, areaMax, floor, features, details, preferences.
 - Never invent missing values. If nothing new is detected, return empty objects.
 
 RESPONSE STRUCTURE (MANDATORY):
@@ -68,10 +68,15 @@ RESPONSE STRUCTURE (MANDATORY):
     "name": string | null,
     "operation": "buy" | "rent" | null,
     "budget": number | null,
+    "budgetMax": number | null,
     "type": "apartment" | "house" | "land" | null,
     "location": string | null,
     "rooms": number | null,
     "area": number | null,
+    "areaMin": number | null,
+    "areaMax": number | null,
+    "floor": number | null,
+    "features": string[] | null,
     "details": string | null,
     "preferences": string | null
   }
