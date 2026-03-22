@@ -268,11 +268,15 @@ const getOrCreateSession = (sessionId) => {
         updatedAt: null
       },
       // 🆕 Sprint IV: current focus card (какая карточка сейчас в фокусе UI)
+      // NOTE (2026-03-22): intentionally retained after slider simplification.
+      // Required to resolve references like "this apartment / эта квартира".
       currentFocusCard: {
         cardId: null,
         updatedAt: null
       },
       // 🆕 Sprint IV: last shown card (последняя показанная карточка, подтверждённая ui_card_rendered)
+      // NOTE (2026-03-22): intentionally retained after slider simplification.
+      // Used as fallback reference anchor when focus is unavailable.
       lastShown: {
         cardId: null,
         updatedAt: null
@@ -285,6 +289,7 @@ const getOrCreateSession = (sessionId) => {
       // 🆕 Sprint IV: last focus snapshot (последний подтверждённый фокус, фиксируется только при ui_focus_changed)
       lastFocusSnapshot: null,
       // 🆕 Sprint V: reference intent (фиксация факта ссылки в сообщении пользователя, без интерпретации)
+      // NOTE (2026-03-22): intentionally retained by product decision.
       referenceIntent: null,
       // 🆕 Sprint V: reference ambiguity (фиксация факта неоднозначности reference, без разрешения)
       referenceAmbiguity: {
@@ -381,19 +386,11 @@ const parseBudgetEUR = (s) => {
   return m ? parseInt(m, 10) : null;
 };
 
-// Show-intent: RU + EN + ES. Used only for computing isShow in detectCardIntent.
-const SHOW_INTENT_PATTERNS = [
-  // RU: "покажи", "покажи карточку", "посмотреть" и т.д.
-  /(покажи(те)?\s*(ее|её)?\s*(подробнее)?|показать\s*(ее|её)?|посмотреть\s*(ее|её)?|карточк|сюда\s*отправь|давай\s*карточку|подробн)/i,
-  // EN: show, show me, show please/pls/plz, can you show, show (this) card/listing/listings/options/properties/variants
-  /\b(show|show\s+me|show\s+please|show\s+pls|show\s+plz|can\s+you\s+show|show\s+(this\s+)?(card|listing|listings|options|properties|variants))\b/i,
-  // ES: muestra, muéstrame, mostrar, enséñame, ver (la) ficha/opciones/propiedades
-  /\b(muestra|muéstrame|mostrar|enséñame|ver\s+(la\s+)?(ficha|opciones|propiedades))\b/i
-];
-
 const detectCardIntent = (text = '') => {
   const t = String(text).toLowerCase();
-  const isShow = SHOW_INTENT_PATTERNS.some(re => re.test(t));
+  // NOTE (2026-03-22): text-triggered slider opening is intentionally disabled.
+  // Slider opens only from explicit UI control (objects counter pill).
+  const isShow = false;
   const isVariants = /(какие|что)\s+(есть|можно)\s+(вариант|квартир)/i.test(t)
     || /подбери(те)?|подобрать|вариант(ы)?|есть\s+вариант/i.test(t)
     || /квартир(а|ы|у)\s+(есть|бывают)/i.test(t);
@@ -1448,6 +1445,8 @@ const updateExtractionMetrics = (session, report = {}) => {
 };
 
 // 🆕 Sprint V: детекция reference в тексте пользователя (без интерпретации)
+// NOTE (2026-03-22): intentionally retained by product decision.
+// This block is the explicit reference resolver for "this/that" utterances.
 // 🔧 Hotfix: Reference Detector Stabilization (Roadmap v2)
 // ВАЖНО: JS \b НЕ работает с кириллицей, поэтому RU матчим через пробельные границы
 const detectReferenceIntent = (text) => {
@@ -2599,7 +2598,7 @@ const transcribeAndRespond = async (req, res) => {
     updateExtractionMetrics(session, extractionReport);
 
     // 🔎 Детектор намерения/вариантов
-    const { show, variants } = detectCardIntent(transcription);
+    const { variants } = detectCardIntent(transcription);
     const schedule = detectScheduleIntent(transcription);
 
     // UI extras and cards container
@@ -2629,42 +2628,13 @@ const transcribeAndRespond = async (req, res) => {
     * - UI предлагает карточку напрямую; числовые «N из M» больше не показываем.
     */
 
-    // Если пользователь просит показать/подробнее — предложим карточку через панель
-    if (show && !DISABLE_SERVER_UI) {
-      // Начинаем новый "сеанс показа" — сбрасываем набор уже показанных в текущем слайдере
-      session.shownSet = new Set();
-      // Формируем пул кандидатов: либо существующий, либо заново
-      let pool = [];
-      if (Array.isArray(session.lastCandidates) && session.lastCandidates.length) {
-        pool = session.lastCandidates.slice();
-      } else {
-        const { ranked } = await getRankedProperties(session.insights);
-        const hasHard = hasHardFilters(session.insights);
-        const source = ranked.length ? ranked : (hasHard ? [] : await getAllNormalizedProperties());
-        pool = source.map(p => p.id);
-      }
-      // Дедупликация пула
-      pool = Array.from(new Set(pool));
-      session.lastCandidates = pool;
-      session.candidateIndex = 0;
-      // Выбираем первый id из пула, которого нет в shownSet (она только что сброшена)
-      let pickedId = pool[0];
-      const allNow = await getAllNormalizedProperties();
-      const candidate = allNow.find((p) => p.id === pickedId) || allNow[0];
-      if (candidate) {
-        session.shownSet.add(candidate.id);
-        cards = [formatCardForClient(req, candidate)];
-        ui = { suggestShowCard: true };
-      }
-    }
-
     // RMv3 / Sprint 4 / Task 4.4: demo-only словесный выбор объекта → тот же button-flow (через /interaction select)
     // ВАЖНО:
     // - используем lastShown (приоритет) или currentFocusCard
     // - если нет cardId → ничего не делаем (no-guessing)
     // - не меняем server-facts здесь: запускаем тот же путь, что и кнопка "Выбрать"
     try {
-      if (show !== true && detectVerbalSelectIntent(transcription) === true) {
+      if (detectVerbalSelectIntent(transcription) === true) {
         const chosenCardId =
           (session?.lastShown && session.lastShown.cardId) ? String(session.lastShown.cardId) :
           (session?.currentFocusCard && session.currentFocusCard.cardId) ? String(session.currentFocusCard.cardId) :
