@@ -12,6 +12,34 @@ const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() ===
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
+const INSIGHTS_RESPONSE_SCHEMA = {
+  name: 'insights_response',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['assistant_text', 'insights'],
+    properties: {
+      assistant_text: { type: 'string' },
+      insights: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name', 'operation', 'budget', 'type', 'location', 'rooms', 'area', 'details', 'preferences'],
+        properties: {
+          name: { type: ['string', 'null'] },
+          operation: { type: ['string', 'null'], enum: ['buy', 'rent', null] },
+          budget: { type: ['number', 'string', 'null'] },
+          type: { type: ['string', 'null'], enum: ['apartment', 'house', 'land', null] },
+          location: { type: ['string', 'null'] },
+          rooms: { type: ['number', 'string', 'null'] },
+          area: { type: ['number', 'string', 'null'] },
+          details: { type: ['string', 'null'] },
+          preferences: { type: ['string', 'null'] }
+        }
+      }
+    }
+  },
+  strict: true
+};
 
 // ====== Diagnostic build tag (DEPLOY_TAG) ======
 const DEPLOY_TAG_FULL = process.env.DEPLOY_TAG || process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown';
@@ -1721,6 +1749,26 @@ const extractAssistantAndMeta = (fullText) => {
   }
 };
 
+const parseStructuredInsightsResponse = (content) => {
+  const fail = { assistantText: null, meta: null, raw: content ?? null, parseError: true };
+  if (typeof content !== 'string' || !content.trim()) return fail;
+  try {
+    const parsed = JSON.parse(content);
+    if (!parsed || typeof parsed !== 'object') return fail;
+    const assistantText = typeof parsed.assistant_text === 'string' ? parsed.assistant_text.trim() : '';
+    const insights = parsed.insights && typeof parsed.insights === 'object' ? parsed.insights : null;
+    if (!assistantText || !insights) return fail;
+    return {
+      assistantText,
+      meta: { insights },
+      raw: content,
+      parseError: false
+    };
+  } catch {
+    return fail;
+  }
+};
+
 const transcribeAndRespond = async (req, res) => {
   const startTime = Date.now();
   let sessionId = null;
@@ -2360,7 +2408,7 @@ const transcribeAndRespond = async (req, res) => {
     const metaRepairHint = session?.metaContract?.needsRepairHint === true
       ? {
           role: 'system',
-          content: 'Contract reminder: include a valid ---META--- JSON block with key "insights" in this response.'
+          content: 'Contract reminder: return valid JSON matching the insights_response schema.'
         }
       : null;
 
@@ -2387,26 +2435,64 @@ const transcribeAndRespond = async (req, res) => {
     // RMv3 / Sprint 1: transient LLM Context Pack + [CTX] log (infrastructure only)
     llmContextPackForMainCall = buildLlmContextPack(session, sessionId, 'main');
     logCtx(llmContextPackForMainCall);
-    const completion = await callOpenAIWithRetry(() => 
+    let completion = await callOpenAIWithRetry(() => 
       openai.chat.completions.create({
         messages,
         model: 'gpt-4o-mini',
         temperature: 0.5,
+        response_format: { type: 'json_schema', json_schema: INSIGHTS_RESPONSE_SCHEMA },
         stream: false
       }), 2, 'GPT'
     );
     
     const gptTime = Date.now() - gptStart;
 
-    const fullModelText = completion.choices[0].message.content.trim();
-    const { assistantText, meta, metaRaw, parseError } = extractAssistantAndMeta(fullModelText);
+    let promptTokens = Number(completion?.usage?.prompt_tokens || 0);
+    let completionTokens = Number(completion?.usage?.completion_tokens || 0);
+    let totalTokens = Number(completion?.usage?.total_tokens || 0);
+
+    let rawModelContent = String(completion?.choices?.[0]?.message?.content || '').trim();
+    let parsedStructured = parseStructuredInsightsResponse(rawModelContent);
+    let fallbackUsed = false;
+
+    // Fallback вызывается только при parse fail structured-ответа.
+    if (parsedStructured.parseError) {
+      fallbackUsed = true;
+      const fallbackMessages = [
+        ...messages,
+        {
+          role: 'system',
+          content: 'Repair mode: output ONLY valid JSON by insights_response schema.'
+        }
+      ];
+      const fallbackCompletion = await callOpenAIWithRetry(() =>
+        openai.chat.completions.create({
+          messages: fallbackMessages,
+          model: 'gpt-4o-mini',
+          temperature: 0,
+          response_format: { type: 'json_schema', json_schema: INSIGHTS_RESPONSE_SCHEMA },
+          stream: false
+        }), 1, 'GPT-Structured-Fallback'
+      );
+      promptTokens += Number(fallbackCompletion?.usage?.prompt_tokens || 0);
+      completionTokens += Number(fallbackCompletion?.usage?.completion_tokens || 0);
+      totalTokens += Number(fallbackCompletion?.usage?.total_tokens || 0);
+      rawModelContent = String(fallbackCompletion?.choices?.[0]?.message?.content || '').trim();
+      parsedStructured = parseStructuredInsightsResponse(rawModelContent);
+      completion = fallbackCompletion;
+    }
+
+    const assistantText = parsedStructured.assistantText;
+    const meta = parsedStructured.meta;
+    const metaRaw = parsedStructured.raw;
+    const parseError = parsedStructured.parseError;
     try {
       const sid = String(sessionId || '').slice(-8) || 'unknown';
       console.log(`[META_RAW] sid=${sid} ${JSON.stringify(meta ?? null)}`);
     } catch {
       console.log('[META_RAW] failed_to_stringify');
     }
-    let botResponse = assistantText || fullModelText;
+    let botResponse = assistantText || rawModelContent || 'Хорошо, уточню детали и вернусь с лучшими вариантами.';
     // Bonus: после ответа GPT подтверждаем язык сессии по распознанному языку пользовательского текста.
     if (detectedLangFromText) {
       session.clientProfile.language = detectedLangFromText;
@@ -2422,7 +2508,14 @@ const transcribeAndRespond = async (req, res) => {
       console.log(`[MISMATCH] sid=${String(sessionId || '').slice(-8) || 'unknown'} bind=${bindCardId || 'null'} spoke=${spoke.cardId || 'null'} focus=${session.currentFocusCard?.cardId || 'null'} lastShown=${session.lastShown?.cardId || 'null'} rule=${rule || 'null'}`);
     }
 
-    let extractionReport = { metaPresent: !!metaRaw, parseError: parseError === true, validationError: false, updatesApplied: false };
+    let extractionReport = {
+      metaPresent: !!metaRaw,
+      parseError: parseError === true,
+      validationError: false,
+      updatesApplied: false,
+      fallbackUsed
+    };
+    let extractionInvalidFields = [];
     // META обработка: единый парсинг произвольного ---META--- блока от модели
     try {
       if (meta && typeof meta === 'object') {
@@ -2434,6 +2527,7 @@ const transcribeAndRespond = async (req, res) => {
         }
         mapClientProfileToInsights(session.clientProfile, session.insights);
         const applyResult = applyMetaInsightsToSession(session, meta);
+        extractionInvalidFields = Array.isArray(applyResult?.invalidFields) ? applyResult.invalidFields : [];
         extractionReport.validationError = Array.isArray(applyResult?.invalidFields) && applyResult.invalidFields.length > 0;
         extractionReport.updatesApplied = applyResult?.applied === true;
         session.metaContract = {
@@ -2594,9 +2688,9 @@ const transcribeAndRespond = async (req, res) => {
         cards: cardsForLog,
         inputType: inputTypeForLog,
         tokens: {
-          prompt: completion.usage.prompt_tokens,
-          completion: completion.usage.completion_tokens,
-          total: completion.usage.total_tokens
+          prompt: promptTokens,
+          completion: completionTokens,
+          total: totalTokens
         },
         timing: {
           transcription: transcriptionTime,
@@ -2618,9 +2712,9 @@ const transcribeAndRespond = async (req, res) => {
         text: botResponse,
         cards: cardsForLog,
         tokens: {
-          prompt: completion.usage.prompt_tokens,
-          completion: completion.usage.completion_tokens,
-          total: completion.usage.total_tokens
+          prompt: promptTokens,
+          completion: completionTokens,
+          total: totalTokens
         },
         timing: {
           transcription: transcriptionTime,
@@ -2684,13 +2778,21 @@ const transcribeAndRespond = async (req, res) => {
       stage: session.stage,
       role: session.role, // 🆕 Sprint I: server-side role
       insights: session.insights, // 🆕 Теперь содержит все 9 параметров
+      extractionStatus: {
+        metaPresent: extractionReport.metaPresent === true,
+        parseError: extractionReport.parseError === true,
+        validationError: extractionReport.validationError === true,
+        updatesApplied: extractionReport.updatesApplied === true,
+        fallbackUsed: extractionReport.fallbackUsed === true,
+        invalidFields: extractionInvalidFields
+      },
       // ui пропускается, если undefined; cards может быть пустым массивом
       cards: DISABLE_SERVER_UI ? [] : cards,
       ui: DISABLE_SERVER_UI ? undefined : ui,
       tokens: {
-        prompt: completion.usage.prompt_tokens,
-        completion: completion.usage.completion_tokens,
-        total: completion.usage.total_tokens
+        prompt: promptTokens,
+        completion: completionTokens,
+        total: totalTokens
       },
       timing: {
         transcription: transcriptionTime,
