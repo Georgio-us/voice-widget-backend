@@ -655,6 +655,17 @@ const scoreProperty = (p, insights, mode = 'relaxed') => {
   return finalScore;
 };
 
+const annotatePropertyWithScores = (property, insights = {}) => {
+  const relaxedScore = scoreProperty(property, insights, 'relaxed');
+  const strictScore = scoreProperty(property, insights, 'strict');
+  return {
+    ...property,
+    _score: relaxedScore,
+    _strictScore: strictScore,
+    _tier: resolveTierByScore(relaxedScore)
+  };
+};
+
 // Нормализация строки из БД к формату карточек, совместимому с фронтом
 const mapRowToProperty = (row) => {
   const images = Array.isArray(row.images)
@@ -767,9 +778,9 @@ const formatCardForClient = (req, p) => {
     area_m2: p.area_m2 ?? p?.specs?.area_m2 ?? null,
     price_per_m2: p.price_per_m2 ?? null,
     bathrooms: p.bathrooms ?? p?.specs?.bathrooms ?? null,
-    score: p._score ?? null,
-    strictScore: p._strictScore ?? null,
-    matchTier: p._tier ?? null,
+    score: p._score ?? p.score ?? 0,
+    strictScore: p._strictScore ?? p.strictScore ?? 0,
+    matchTier: p._tier ?? p.matchTier ?? 'low',
     // Изображение
     image,
     imageUrl: image,
@@ -3382,7 +3393,8 @@ async function handleInteraction(req, res) {
       session.candidateIndex = list.indexOf(id);
       if (!session.shownSet) session.shownSet = new Set();
       session.shownSet.add(p.id);
-      const card = formatCardForClient(req, p);
+      const scored = annotatePropertyWithScores(p, session.insights || {});
+      const card = formatCardForClient(req, scored);
       return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
@@ -3398,7 +3410,8 @@ async function handleInteraction(req, res) {
         const all = await getAllNormalizedProperties();
         const p = all[0];
         if (!p) return res.status(404).json({ error: 'Карточка не найдена' });
-        const card = formatCardForClient(req, p);
+        const scored = annotatePropertyWithScores(p, session.insights || {});
+        const card = formatCardForClient(req, scored);
         return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
       }
       // Если фронт прислал текущий variantId, делаем шаг относительно него
@@ -3433,7 +3446,8 @@ async function handleInteraction(req, res) {
       const all2 = await getAllNormalizedProperties();
       const p = all2.find(x => x.id === id) || all2[0];
       session.shownSet.add(p.id);
-      const card = formatCardForClient(req, p);
+      const scored = annotatePropertyWithScores(p, session.insights || {});
+      const card = formatCardForClient(req, scored);
       return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
