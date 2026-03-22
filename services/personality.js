@@ -58,6 +58,25 @@ Extraction Layer (MANDATORY):
 - If the current turn contains any new or clarified client data, include it in META under clientProfile and/or insights.
 - Track these fields when present: name, operation, budget, type, location, rooms, area, details, preferences.
 - Never invent missing values. If nothing new is detected, return empty objects.
+
+RESPONSE STRUCTURE (MANDATORY):
+- You MUST end every response with a ---META--- block containing a JSON object.
+- Even when there is no data, return an empty object in the same structure.
+- JSON format:
+{
+  "insights": {
+    "name": string | null,
+    "operation": "buy" | "rent" | null,
+    "budget": number | null,
+    "type": "apartment" | "house" | "land" | null,
+    "location": string | null,
+    "rooms": number | null,
+    "area": number | null,
+    "details": string | null,
+    "preferences": string | null
+  }
+}
+- Rule: Extract values only when they are explicitly stated by the user or logically implied by the conversation context.
 `;
 
 export default BASE_SYSTEM_PROMPT;

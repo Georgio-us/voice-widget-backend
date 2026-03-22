@@ -182,6 +182,30 @@ const getOrCreateSession = (sessionId) => {
         
         progress: 0
       },
+      extractionMetrics: {
+        turnsTotal: 0,
+        metaPresentTurns: 0,
+        parseErrors: 0,
+        validationErrors: 0,
+        updatesApplied: 0,
+        fieldFilledTurns: {
+          name: 0,
+          operation: 0,
+          budget: 0,
+          type: 0,
+          location: 0,
+          rooms: 0,
+          area: 0,
+          details: 0,
+          preferences: 0
+        }
+      },
+      metaContract: {
+        needsRepairHint: false,
+        lastError: null,
+        lastMetaRaw: null,
+        lastUpdatedAt: null
+      },
       // 🆕 Sprint II / Block A: allowedFactsSnapshot (разрешённые факты для AI)
       // Формируется только после подтверждённого показа карточки (ui_card_rendered)
       // Пока не используется ни UI, ни AI — чистое введение структуры
@@ -1189,24 +1213,181 @@ const mapClientProfileToInsights = (clientProfile, insights) => {
 };
 
 const applyMetaInsightsToSession = (session, meta) => {
-  if (!session || !meta || typeof meta !== 'object') return;
+  if (!session || !meta || typeof meta !== 'object') return { applied: false, invalidFields: ['meta'] };
+  const sourceInsights = (meta.insights && typeof meta.insights === 'object' && !Array.isArray(meta.insights))
+    ? meta.insights
+    : null;
+  if (!sourceInsights) return { applied: false, invalidFields: ['insights'] };
   if (!session.insights || typeof session.insights !== 'object') {
     session.insights = {};
   }
-  const buckets = [];
-  if (meta.insights && typeof meta.insights === 'object') buckets.push(meta.insights);
-  if (meta.clientProfile && typeof meta.clientProfile === 'object') buckets.push(meta.clientProfile);
-  if (meta.clientProfileDelta && typeof meta.clientProfileDelta === 'object') buckets.push(meta.clientProfileDelta);
-  if (meta.clientProfile?.insights && typeof meta.clientProfile.insights === 'object') buckets.push(meta.clientProfile.insights);
-  for (const bucket of buckets) {
-    for (const field of INSIGHT_FIELDS) {
-      const normalized = sanitizeInsightValue(bucket[field]);
-      if (normalized) {
-        session.insights[field] = normalized;
-      }
+
+  const parseBudgetNumber = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+    const raw = String(value).trim().toLowerCase();
+    if (!raw) return null;
+    const compact = raw.replace(/\s+/g, '');
+    const match = compact.match(/^(\d+(?:[.,]\d+)?)(k|к|тыс|тысяч|m|м|млн|million|миллион|миллиона|миллионов)?$/i);
+    if (match) {
+      const base = Number(String(match[1]).replace(',', '.'));
+      if (!Number.isFinite(base)) return null;
+      const suffix = String(match[2] || '').toLowerCase();
+      if (['k', 'к', 'тыс', 'тысяч'].includes(suffix)) return Math.round(base * 1000);
+      if (['m', 'м', 'млн', 'million', 'миллион', 'миллиона', 'миллионов'].includes(suffix)) return Math.round(base * 1000000);
+      return Math.round(base);
     }
+    const digits = raw.replace(/[^\d]/g, '');
+    if (!digits) return null;
+    const parsed = Number(digits);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const parseRoomsNumber = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+    const raw = String(value).trim().toLowerCase();
+    if (!raw) return null;
+    const namedRooms = {
+      'студия': 0,
+      'studio': 0,
+      'однушка': 1,
+      'one bedroom': 1,
+      '1 bedroom': 1,
+      'двушка': 2,
+      'two bedroom': 2,
+      '2 bedroom': 2,
+      'трешка': 3,
+      'трёшка': 3,
+      'three bedroom': 3,
+      '3 bedroom': 3,
+      'четырешка': 4,
+      'четырёшка': 4,
+      'four bedroom': 4,
+      '4 bedroom': 4
+    };
+    if (Object.prototype.hasOwnProperty.call(namedRooms, raw)) return namedRooms[raw];
+    const numeric = raw.match(/\d+/);
+    if (!numeric) return null;
+    const parsed = Number(numeric[0]);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const normalizeOperation = (value) => {
+    if (value === null || value === undefined) return null;
+    const raw = String(value).trim().toLowerCase();
+    if (!raw) return null;
+    if (/(buy|purchase|invest|покуп|купить|инвест)/i.test(raw)) return 'buy';
+    if (/(rent|lease|аренд|снять)/i.test(raw)) return 'rent';
+    return null;
+  };
+  const normalizeType = (value) => {
+    if (value === null || value === undefined) return null;
+    const raw = String(value).trim().toLowerCase();
+    if (!raw) return null;
+    if (/(apartment|flat|квартир|апартамент|апарты)/i.test(raw)) return 'apartment';
+    if (/(house|villa|home|дом|вилл)/i.test(raw)) return 'house';
+    if (/(land|plot|участок|земля)/i.test(raw)) return 'land';
+    if (raw === 'apartment' || raw === 'house' || raw === 'land') return raw;
+    return null;
+  };
+
+  const parseNumeric = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const normalized = raw.replace(',', '.');
+    const match = normalized.match(/-?\d+(?:\.\d+)?/);
+    if (!match) return null;
+    const parsed = Number(match[0]);
+    return Number.isFinite(parsed) ? Math.round(parsed) : null;
+  };
+
+  const invalidFields = [];
+  let appliedCount = 0;
+  for (const field of INSIGHT_FIELDS) {
+    const incoming = sourceInsights[field];
+    if (incoming === undefined) continue;
+    let nextValue = null;
+    if (field === 'budget') nextValue = parseBudgetNumber(incoming);
+    else if (field === 'rooms') nextValue = parseRoomsNumber(incoming);
+    else if (field === 'operation') nextValue = normalizeOperation(incoming);
+    else if (field === 'type') nextValue = normalizeType(incoming);
+    else if (field === 'area') nextValue = parseNumeric(incoming);
+    else nextValue = sanitizeInsightValue(incoming);
+    if (nextValue === null || nextValue === undefined || String(nextValue).trim() === '') {
+      invalidFields.push(field);
+      continue;
+    }
+    session.insights[field] = nextValue;
+    appliedCount += 1;
   }
   recalcInsightsProgress(session.insights);
+  console.log('[INSIGHTS_UPDATE] Updates applied:', session.insights);
+
+  // best-effort persistence in session_logs for cross-request visibility/debug
+  try {
+    const sid = String(session.sessionId || '').trim();
+    if (sid) {
+      upsertSessionLog({
+        sessionId: sid,
+        payloadPatch: {
+          latestInsights: session.insights,
+          latestInsightsUpdatedAt: new Date().toISOString(),
+          extractionMetrics: session.extractionMetrics || null
+        }
+      }).catch(() => {});
+    }
+  } catch {}
+  return { applied: appliedCount > 0, invalidFields };
+};
+
+const ensureExtractionMetrics = (session) => {
+  if (!session.extractionMetrics || typeof session.extractionMetrics !== 'object') {
+    session.extractionMetrics = {};
+  }
+  const m = session.extractionMetrics;
+  m.turnsTotal = Number(m.turnsTotal || 0);
+  m.metaPresentTurns = Number(m.metaPresentTurns || 0);
+  m.parseErrors = Number(m.parseErrors || 0);
+  m.validationErrors = Number(m.validationErrors || 0);
+  m.updatesApplied = Number(m.updatesApplied || 0);
+  if (!m.fieldFilledTurns || typeof m.fieldFilledTurns !== 'object') {
+    m.fieldFilledTurns = {};
+  }
+  for (const f of INSIGHT_FIELDS) {
+    m.fieldFilledTurns[f] = Number(m.fieldFilledTurns[f] || 0);
+  }
+  return m;
+};
+
+const updateExtractionMetrics = (session, report = {}) => {
+  if (!session) return;
+  const m = ensureExtractionMetrics(session);
+  m.turnsTotal += 1;
+  if (report.metaPresent === true) m.metaPresentTurns += 1;
+  if (report.parseError === true) m.parseErrors += 1;
+  if (report.validationError === true) m.validationErrors += 1;
+  if (report.updatesApplied === true) m.updatesApplied += 1;
+  for (const f of INSIGHT_FIELDS) {
+    const v = session.insights?.[f];
+    if (v !== null && v !== undefined && String(v).trim() !== '') {
+      m.fieldFilledTurns[f] += 1;
+    }
+  }
+  const turns = Math.max(1, m.turnsTotal);
+  const fillRates = {};
+  for (const f of INSIGHT_FIELDS) {
+    fillRates[f] = Number((m.fieldFilledTurns[f] / turns).toFixed(3));
+  }
+  const parseErrorRate = Number((m.parseErrors / turns).toFixed(3));
+  console.log('[INSIGHTS_METRICS]', {
+    turnsTotal: m.turnsTotal,
+    parseErrorRate,
+    updatesApplied: m.updatesApplied,
+    fillRates
+  });
 };
 
 // 🆕 Sprint V: детекция reference в тексте пользователя (без интерпретации)
@@ -1518,7 +1699,7 @@ const extractAssistantAndMeta = (fullText) => {
     const marker = '---META---';
     const idx = fullText.indexOf(marker);
     if (idx === -1) {
-      return { assistantText: fullText, meta: null };
+      return { assistantText: fullText, meta: null, metaRaw: null, parseError: false };
     }
     const assistantText = fullText.slice(0, idx).trim();
     let jsonPart = fullText.slice(idx + marker.length).trim();
@@ -1527,14 +1708,16 @@ const extractAssistantAndMeta = (fullText) => {
     // Защитимся от слишком длинного хвоста
     if (jsonPart.length > 5000) jsonPart = jsonPart.slice(0, 5000);
     let parsed = null;
+    let parseError = false;
     try {
       parsed = JSON.parse(jsonPart);
     } catch {
       parsed = null;
+      parseError = true;
     }
-    return { assistantText, meta: parsed };
+    return { assistantText, meta: parsed, metaRaw: jsonPart, parseError };
   } catch {
-    return { assistantText: fullText, meta: null };
+    return { assistantText: fullText, meta: null, metaRaw: null, parseError: true };
   }
 };
 
@@ -2174,6 +2357,12 @@ const transcribeAndRespond = async (req, res) => {
     }
 
     const baseSystemPrompt = BASE_SYSTEM_PROMPT;
+    const metaRepairHint = session?.metaContract?.needsRepairHint === true
+      ? {
+          role: 'system',
+          content: 'Contract reminder: include a valid ---META--- JSON block with key "insights" in this response.'
+        }
+      : null;
 
     // RMv3 / Sprint 4 / Task 4.1: полный контекст диалога для LLM (user + assistant)
     // ВАЖНО:
@@ -2188,6 +2377,7 @@ const transcribeAndRespond = async (req, res) => {
         role: 'system',
         content: baseSystemPrompt
       },
+      ...(metaRepairHint ? [metaRepairHint] : []),
       ...dialogMessages
     ];
 
@@ -2209,7 +2399,7 @@ const transcribeAndRespond = async (req, res) => {
     const gptTime = Date.now() - gptStart;
 
     const fullModelText = completion.choices[0].message.content.trim();
-    const { assistantText, meta } = extractAssistantAndMeta(fullModelText);
+    const { assistantText, meta, metaRaw, parseError } = extractAssistantAndMeta(fullModelText);
     try {
       const sid = String(sessionId || '').slice(-8) || 'unknown';
       console.log(`[META_RAW] sid=${sid} ${JSON.stringify(meta ?? null)}`);
@@ -2232,6 +2422,7 @@ const transcribeAndRespond = async (req, res) => {
       console.log(`[MISMATCH] sid=${String(sessionId || '').slice(-8) || 'unknown'} bind=${bindCardId || 'null'} spoke=${spoke.cardId || 'null'} focus=${session.currentFocusCard?.cardId || 'null'} lastShown=${session.lastShown?.cardId || 'null'} rule=${rule || 'null'}`);
     }
 
+    let extractionReport = { metaPresent: !!metaRaw, parseError: parseError === true, validationError: false, updatesApplied: false };
     // META обработка: единый парсинг произвольного ---META--- блока от модели
     try {
       if (meta && typeof meta === 'object') {
@@ -2242,7 +2433,16 @@ const transcribeAndRespond = async (req, res) => {
           session.clientProfile = mergeClientProfile(session.clientProfile, patch);
         }
         mapClientProfileToInsights(session.clientProfile, session.insights);
-        applyMetaInsightsToSession(session, meta);
+        const applyResult = applyMetaInsightsToSession(session, meta);
+        extractionReport.validationError = Array.isArray(applyResult?.invalidFields) && applyResult.invalidFields.length > 0;
+        extractionReport.updatesApplied = applyResult?.applied === true;
+        session.metaContract = {
+          ...(session.metaContract || {}),
+          needsRepairHint: extractionReport.parseError || extractionReport.validationError,
+          lastError: extractionReport.parseError ? 'meta_parse_error' : (extractionReport.validationError ? 'meta_validation_error' : null),
+          lastMetaRaw: metaRaw || null,
+          lastUpdatedAt: new Date().toISOString()
+        };
         const profileLog = {
           language: session.clientProfile.language,
           location: session.clientProfile.location,
@@ -2253,10 +2453,27 @@ const transcribeAndRespond = async (req, res) => {
           urgency: session.clientProfile.urgency
         };
         console.log(`🧩 Профиль/инсайты обновлены [${String(sessionId).slice(-8)}]: ${JSON.stringify(profileLog)}`);
+      } else {
+        session.metaContract = {
+          ...(session.metaContract || {}),
+          needsRepairHint: true,
+          lastError: extractionReport.parseError ? 'meta_parse_error' : 'meta_missing',
+          lastMetaRaw: metaRaw || null,
+          lastUpdatedAt: new Date().toISOString()
+        };
       }
     } catch (e) {
       console.log('ℹ️ META отсутствует или невалидна, продолжаем без обновления профиля');
+      extractionReport.validationError = true;
+      session.metaContract = {
+        ...(session.metaContract || {}),
+        needsRepairHint: true,
+        lastError: 'meta_processing_exception',
+        lastMetaRaw: metaRaw || null,
+        lastUpdatedAt: new Date().toISOString()
+      };
     }
+    updateExtractionMetrics(session, extractionReport);
 
     // 🔎 Детектор намерения/вариантов
     const { show, variants } = detectCardIntent(transcription);
