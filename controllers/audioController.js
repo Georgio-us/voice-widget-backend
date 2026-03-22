@@ -446,41 +446,96 @@ const normalizeDistrict = (val) => {
   if (!val) return '';
   let s = String(val).toLowerCase().replace(/^район\s+/i, '').trim();
   const map = {
-    'русафа': 'ruzafa', 'руссафа': 'ruzafa', 'ruzafa': 'ruzafa',
-    'эль кармен': 'el carmen', 'el carmen': 'el carmen',
-    'кабаньял': 'cabanyal', 'кабанал': 'cabanyal', 'cabanyal': 'cabanyal',
-    'бенимаклет': 'benimaclet', 'benimaclet': 'benimaclet',
-    'патраикс': 'patraix', 'patraix': 'patraix',
-    'экстрамурс': 'extramurs', 'extramurs': 'extramurs',
-    'pla del real': 'pla del real', 'пла дель реаль': 'pla del real',
-    'la saïdia': 'la saïdia', 'саидия': 'la saïdia',
-    'camins al grau': 'camins al grau', 'каминс': 'camins al grau',
-    'poblenou': 'poblenou', 'побленоу': 'poblenou'
+    'дубай марина': 'dubai marina', 'марина': 'dubai marina', 'dubai marina': 'dubai marina',
+    'downtown': 'downtown', 'даунтаун': 'downtown', 'downtown dubai': 'downtown',
+    'jvc': 'jvc', 'джвс': 'jvc', 'дживиси': 'jvc', 'jumeirah village circle': 'jvc',
+    'business bay': 'business bay', 'бизнес бей': 'business bay', 'бизнес бай': 'business bay',
+    'bluewaters': 'bluewaters', 'bluewaters island': 'bluewaters', 'блювотерс': 'bluewaters',
+    'dubai hills': 'dubai hills', 'дубай хиллс': 'dubai hills', 'dubai hills estate': 'dubai hills',
+    'jbr': 'jbr', 'джей би ар': 'jbr', 'jumeirah beach residence': 'jbr',
+    'palm jumeirah': 'palm jumeirah', 'пальма джумейра': 'palm jumeirah',
+    'creek harbour': 'creek harbour', 'dubai creek harbour': 'creek harbour', 'крик харбор': 'creek harbour',
+    'emaar beachfront': 'emaar beachfront', 'beachfront': 'emaar beachfront', 'эмаар бичфронт': 'emaar beachfront',
+    'city walk': 'city walk', 'сити вок': 'city walk',
+    'damac lagoons': 'damac lagoons', 'лагаунс': 'damac lagoons'
   };
   return map[s] || s;
 };
 
+const hasHardFilters = (insights = {}) => {
+  return Boolean(insights?.operation || insights?.budget || insights?.type);
+};
+
+const normalizeOperationForProperty = (value) => {
+  if (!value) return null;
+  const raw = String(value).trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'buy' || raw === 'sale' || raw === 'sell' || raw === 'purchase') return 'buy';
+  if (raw === 'rent' || raw === 'lease' || raw === 'rental') return 'rent';
+  return null;
+};
+
+const normalizeTypeForProperty = (value) => {
+  if (!value) return null;
+  const raw = String(value).trim().toLowerCase();
+  if (!raw) return null;
+  if (/(apartment|flat|апартамент|апарты|квартир)/i.test(raw)) return 'apartment';
+  if (/(house|villa|home|townhouse|дом|вилл|таунхаус)/i.test(raw)) return 'house';
+  if (/(land|plot|участок|земля)/i.test(raw)) return 'land';
+  return null;
+};
+
+const passHardFilters = (p, insights = {}) => {
+  const expectedOperation = normalizeOperationForProperty(insights.operation);
+  if (expectedOperation) {
+    const actualOperation = normalizeOperationForProperty(p.operation);
+    if (!actualOperation || actualOperation !== expectedOperation) return false;
+  }
+
+  const expectedType = normalizeTypeForProperty(insights.type);
+  if (expectedType) {
+    const actualType = normalizeTypeForProperty(p.property_type);
+    if (!actualType || actualType !== expectedType) return false;
+  }
+
+  const budget = parseBudgetEUR(insights.budget);
+  if (budget != null && Number.isFinite(budget)) {
+    const price = Number(p.priceEUR);
+    if (!Number.isFinite(price) || price > budget) return false;
+  }
+
+  return true;
+};
+
 const scoreProperty = (p, insights) => {
-  let score = 0;
+  if (!passHardFilters(p, insights)) return 0;
+
+  let score = 1;
   // rooms
   const roomsNum = (() => {
     const m = insights.rooms && String(insights.rooms).match(/\d+/);
     return m ? parseInt(m[0], 10) : null;
   })();
   if (roomsNum != null && Number(p.rooms) === roomsNum) score += 2;
-  // district (insights.location хранит район)
+  // location (insights.location хранит район/локацию)
   const insightDistrict = normalizeDistrict(insights.location);
-  const propDistrict = normalizeDistrict(p.district);
-  if (insightDistrict && propDistrict && propDistrict === insightDistrict) score += 3;
-  // budget
-  const budget = parseBudgetEUR(insights.budget);
-  if (budget != null) {
-    if (Number(p.priceEUR) <= budget) score += 2;
-    const diff = Math.abs(Number(p.priceEUR) - budget) / (budget || 1);
-    if (diff <= 0.2) score += 1; // в пределах 20%
+  const propDistrict = normalizeDistrict(p.district || p.neighborhood || p.city);
+  if (insightDistrict && propDistrict) {
+    if (propDistrict === insightDistrict) score += 3;
+    else if (propDistrict.includes(insightDistrict) || insightDistrict.includes(propDistrict)) score += 2;
   }
-  // default city preference (Valencia)
-  if (p.city && String(p.city).toLowerCase() === 'valencia') score += 1;
+
+  // budget proximity bonus (после прохождения hard-budget)
+  const budget = parseBudgetEUR(insights.budget);
+  if (budget != null && Number.isFinite(budget)) {
+    const price = Number(p.priceEUR);
+    if (Number.isFinite(price)) {
+      const diff = Math.abs(price - budget) / (budget || 1);
+      if (diff <= 0.1) score += 2;
+      else if (diff <= 0.2) score += 1;
+    }
+  }
+
   return score;
 };
 
@@ -497,6 +552,8 @@ const mapRowToProperty = (row) => {
     city: row.location_city || null,
     district: row.location_district || null,
     neighborhood: row.location_neighborhood || null,
+    operation: row.operation || null,
+    property_type: row.property_type || null,
     priceEUR: row.price_amount != null ? Number(row.price_amount) : null,
     price_per_m2: row.price_per_m2 != null ? Number(row.price_per_m2) : null,
     rooms: row.specs_rooms != null ? Number(row.specs_rooms) : null,
@@ -513,14 +570,25 @@ const getAllNormalizedProperties = async () => {
   return rows.map(mapRowToProperty);
 };
 
-const findBestProperties = async (insights, limit = 1) => {
-  const all = await getAllNormalizedProperties();
-  const ranked = all
+const rankPropertiesByInsights = (properties, insights) => {
+  const rankedRows = properties
     .map((p) => ({ p, s: scoreProperty(p, insights) }))
-    .sort((a, b) => b.s - a.s)
-    .slice(0, limit)
-    .map(({ p }) => p);
-  return ranked;
+    .filter(({ s }) => s > 0)
+    .sort((a, b) => b.s - a.s);
+  return {
+    ranked: rankedRows.map(({ p }) => p),
+    totalMatches: rankedRows.length
+  };
+};
+
+const getRankedProperties = async (insights) => {
+  const all = await getAllNormalizedProperties();
+  return rankPropertiesByInsights(all, insights);
+};
+
+const findBestProperties = async (insights, limit = 1) => {
+  const { ranked } = await getRankedProperties(insights);
+  return ranked.slice(0, limit);
 };
 
 const getBaseUrl = (req) => {
@@ -598,45 +666,6 @@ const getUiLanguage = (session) => {
   if (lang === 'en') return 'en';
   if (lang === 'es') return 'es';
   return 'ru';
-};
-
-// Вариативный динамический комментарий под карточкой (для /interaction)
-const generateCardComment = (lang, p) => {
-  const fallbackByLang = {
-    ru: 'Как вам?',
-    en: 'How do you like it?',
-    es: 'Que te parece?'
-  };
-  const formattedPrice = formatNumberUS(p?.priceEUR) || p?.priceEUR || '';
-  const ru = [
-    (p) => `Как вам район: ${p.city}, ${p.district}?`,
-    (p) => `Комнат: ${p.rooms} — ${formattedPrice} AED. Что думаете?`,
-    (p) => `По району и цене — удачное сочетание. Как вам?`,
-    (p) => `В этом бюджете выглядит здраво. Оцените, пожалуйста.`,
-    (p) => `Посмотрите вариант и скажите впечатления.`
-  ];
-  const en = [
-    (p) => `How do you like the area: ${p.city}, ${p.district}?`,
-    (p) => `${p.rooms} rooms for ${formattedPrice} AED. What do you think?`,
-    (p) => `Great balance of area and price. How does it feel to you?`,
-    (p) => `Looks solid for this budget. What is your impression?`,
-    (p) => `Take a look and share your thoughts.`
-  ];
-  const es = [
-    (p) => `Que te parece la zona: ${p.city}, ${p.district}?`,
-    (p) => `${p.rooms} habitaciones por ${formattedPrice} AED. Que opinas?`,
-    (p) => `Buena combinacion de zona y precio. Como lo ves?`,
-    (p) => `Se ve bien para este presupuesto. Cual es tu impresion?`,
-    (p) => `Revisa la opcion y cuentame que te parece.`
-  ];
-  const bank = lang === 'en' ? en : (lang === 'es' ? es : ru);
-  const fallback = fallbackByLang[lang] || fallbackByLang.ru;
-  try {
-    const pick = bank[Math.floor(Math.random() * bank.length)];
-    return (typeof pick === 'function') ? (p ? pick(p) : fallback) : (pick || fallback);
-  } catch {
-    return fallback;
-  }
 };
 
 // --------- Simple parsers for contact and time from text ---------
@@ -2609,9 +2638,10 @@ const transcribeAndRespond = async (req, res) => {
       if (Array.isArray(session.lastCandidates) && session.lastCandidates.length) {
         pool = session.lastCandidates.slice();
       } else {
-        const ranked = await findBestProperties(session.insights, 10);
-        const all = ranked.length ? ranked : await getAllNormalizedProperties();
-        pool = all.map(p => p.id);
+        const { ranked } = await getRankedProperties(session.insights);
+        const hasHard = hasHardFilters(session.insights);
+        const source = ranked.length ? ranked : (hasHard ? [] : await getAllNormalizedProperties());
+        pool = source.map(p => p.id);
       }
       // Дедупликация пула
       pool = Array.from(new Set(pool));
@@ -2768,6 +2798,8 @@ const transcribeAndRespond = async (req, res) => {
       );
     }
 
+    const { totalMatches } = await getRankedProperties(session.insights);
+
     const responsePayload = {
       response: botResponse,
       transcription,
@@ -2786,6 +2818,7 @@ const transcribeAndRespond = async (req, res) => {
         fallbackUsed: extractionReport.fallbackUsed === true,
         invalidFields: extractionInvalidFields
       },
+      totalMatches,
       // ui пропускается, если undefined; cards может быть пустым массивом
       cards: DISABLE_SERVER_UI ? [] : cards,
       ui: DISABLE_SERVER_UI ? undefined : ui,
@@ -3124,12 +3157,13 @@ async function handleInteraction(req, res) {
 
     // Обеспечим список кандидатов в сессии
     if (!Array.isArray(session.lastCandidates) || !session.lastCandidates.length) {
-      const ranked = await findBestProperties(session.insights, 10);
-      // Если нет ничего по инсайтам — используем всю базу
-      const pool = ranked.length ? ranked : await getAllNormalizedProperties();
+      const { ranked } = await getRankedProperties(session.insights);
+      const hasHard = hasHardFilters(session.insights);
+      // Если по hard-filter нет совпадений — пул остаётся пустым
+      const pool = ranked.length ? ranked : (hasHard ? [] : await getAllNormalizedProperties());
       session.lastCandidates = pool.map(p => p.id);
       session.candidateIndex = 0;
-    } else if (session.lastCandidates.length < 2) {
+    } else if (session.lastCandidates.length < 2 && !hasHardFilters(session.insights)) {
       // Гарантируем минимум 2 кандидата, расширив до всей базы (без дубликатов)
       const set = new Set(session.lastCandidates);
       const all = await getAllNormalizedProperties();
@@ -3137,13 +3171,18 @@ async function handleInteraction(req, res) {
       session.lastCandidates = Array.from(set);
       if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
     }
+    const { totalMatches } = await getRankedProperties(session.insights);
 
     if (action === 'show') {
-      // Первый показ выбранной карточки: вернуть саму карточку и динамический комментарий
+      // Первый показ выбранной карточки: только карточка/ID, без backend-комментария
       const list = session.lastCandidates || [];
+      const hardFilteredMode = hasHardFilters(session.insights);
       // Если фронт прислал variantId — используем его, иначе возьмём текущий индекс/первый
       let id = variantId;
       if (!id) {
+        if (hardFilteredMode && list.length === 0) {
+          return res.json(withDebug({ ok: true, cardId: null, card: null, totalMatches, role: session.role }));
+        }
         const all = await getAllNormalizedProperties();
         id = list[Number.isInteger(session.candidateIndex) ? session.candidateIndex : 0] || (all[0] && all[0].id);
       }
@@ -3155,9 +3194,7 @@ async function handleInteraction(req, res) {
       if (!session.shownSet) session.shownSet = new Set();
       session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
-      const lang = getUiLanguage(session);
-      const assistantMessage = generateCardComment(lang, p);
-      return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'next') {
@@ -3165,13 +3202,15 @@ async function handleInteraction(req, res) {
       const list = session.lastCandidates || [];
       const len = list.length;
       if (!len) {
+        if (hasHardFilters(session.insights)) {
+          return res.json(withDebug({ ok: true, cardId: null, card: null, totalMatches, role: session.role }));
+        }
         // крайний случай: вернём первый из базы
         const all = await getAllNormalizedProperties();
         const p = all[0];
+        if (!p) return res.status(404).json({ error: 'Карточка не найдена' });
         const card = formatCardForClient(req, p);
-        const lang = getUiLanguage(session);
-        const assistantMessage = generateCardComment(lang, p);
-        return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
+        return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
       }
       // Если фронт прислал текущий variantId, делаем шаг относительно него
       let idx = list.indexOf(variantId);
@@ -3206,9 +3245,7 @@ async function handleInteraction(req, res) {
       const p = all2.find(x => x.id === id) || all2[0];
       session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
-      const lang = getUiLanguage(session);
-      const assistantMessage = generateCardComment(lang, p);
-      return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'like') {
@@ -3217,7 +3254,7 @@ async function handleInteraction(req, res) {
       if (variantId) session.liked.push(variantId);
       const count = session.liked.length;
       const msg = `Супер, сохранил! Могу предложить записаться на просмотр или показать ещё варианты. Что выберем? (понравилось: ${count})`;
-      return res.json(withDebug({ ok: true, assistantMessage: msg, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage: msg, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // RMv3 / Sprint 1 / Task 1: факт выбора карточки пользователем (UI "Выбрать") — server-first
@@ -3246,7 +3283,7 @@ async function handleInteraction(req, res) {
       // при новом handoff сбрасываем cancel-факт (если был)
       session.handoff.canceled = false;
       session.handoff.canceledAt = null;
-      return res.json(withDebug({ ok: true, role: session.role }));
+      return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
     }
 
     // RMv3 / Sprint 2 / Task 2.4: server-fact cancel из in-dialog lead block
@@ -3269,7 +3306,7 @@ async function handleInteraction(req, res) {
       session.selectedCard.cardId = null;
       session.selectedCard.selectedAt = null;
       session.handoff.cardId = null;
-      return res.json(withDebug({ ok: true, role: session.role }));
+      return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
     }
 
     // 🆕 Sprint I: подтверждение факта рендера карточки в UI
@@ -3323,7 +3360,7 @@ async function handleInteraction(req, res) {
       }
       
       console.log(`✅ [Sprint I] Карточка ${variantId} зафиксирована как показанная в UI (сессия ${sessionId.slice(-8)})`);
-      return res.json(withDebug({ ok: true, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // 🆕 Sprint IV: обработка события ui_slider_started для фиксации активности slider
@@ -3334,7 +3371,7 @@ async function handleInteraction(req, res) {
       session.sliderContext.active = true;
       session.sliderContext.updatedAt = Date.now();
       console.log(`📱 [Sprint IV] Slider стал активным (сессия ${sessionId.slice(-8)})`);
-      return res.json(withDebug({ ok: true, role: session.role }));
+      return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
     }
 
     // 🆕 Sprint III: обработка события ui_slider_ended для перехода role
@@ -3351,7 +3388,7 @@ async function handleInteraction(req, res) {
       session.sliderContext.updatedAt = Date.now();
       console.log(`📱 [Sprint IV] Slider стал неактивным (сессия ${sessionId.slice(-8)})`);
       
-      return res.json(withDebug({ ok: true, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, totalMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // 🆕 Sprint IV: обработка события ui_focus_changed для фиксации текущей карточки в фокусе
@@ -3378,7 +3415,7 @@ async function handleInteraction(req, res) {
       };
       
       console.log(`🎯 [Sprint IV] Focus изменён на карточку ${trimmedCardId} (сессия ${sessionId.slice(-8)})`);
-      return res.json(withDebug({ ok: true, role: session.role }));
+      return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
     }
 
     // 🆕 Sprint VII / Task #1: Unknown UI Action Capture (diagnostics only)
@@ -3392,7 +3429,7 @@ async function handleInteraction(req, res) {
       payload: req.body ? { ...req.body } : null,
       detectedAt: Date.now()
     });
-    return res.json(withDebug({ ok: true, role: session.role }));
+    return res.json(withDebug({ ok: true, totalMatches, role: session.role }));
   } catch (e) {
     console.error('interaction error:', e);
     res.status(500).json({ error: 'internal' });
