@@ -25,7 +25,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
-const DEFAULT_FRONTEND_URL = 'https://voice-widget-frontend-tgdubai-split.up.railway.app/';
+const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+const splitCsv = (value) =>
+  String(value || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+const allowedOriginSet = new Set([
+  ...splitCsv(process.env.FRONTEND_URL),
+  ...splitCsv(process.env.FRONTEND_URLS),
+  ...splitCsv(process.env.CORS_ALLOWED_ORIGINS)
+]);
 
 // ТУТ ИНФОРМАЦИЯ О ДОМЕНАХ СЕРВЕРАХ И КОРС:
 app.use(cors({
@@ -33,24 +43,20 @@ app.use(cors({
     // Разрешаем запросы без origin (Postman, мобильные приложения)
     if (!origin) return callback(null, true);
     
-    // Для development - разрешаем все localhost и 127.0.0.1
-    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+    // Для development - разрешаем localhost и 127.0.0.1
+    if (!isProd && (origin.includes('localhost') || origin.includes('127.0.0.1'))) {
       return callback(null, true);
     }
-    
-    // Продакшен домены
-    const allowedOrigins = [
-      'https://georgio-us.github.io/Voice-Widget-Frontend/',  // ← Полный путь!
-      'https://georgio-us.github.io',  // ← На всякий случай и основной домен
-      process.env.FRONTEND_URL,
-      DEFAULT_FRONTEND_URL
-    ].filter(Boolean);
-    
-    if (allowedOrigins.includes(origin)) {
+
+    if (allowedOriginSet.has(origin)) {
       return callback(null, true);
     }
-    
-    callback(null, true); // Для development разрешаем все
+
+    if (!isProd) {
+      console.warn(`⚠️ CORS origin not in allowlist (dev-open): ${origin}`);
+      return callback(null, true);
+    }
+    return callback(new Error('CORS_NOT_ALLOWED'), false);
   },
   credentials: true,
   optionsSuccessStatus: 200,

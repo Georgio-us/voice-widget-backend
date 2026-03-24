@@ -3,11 +3,11 @@ import { getPropertyByExternalId } from './propertiesRepository.js';
 
 const startMessage =
   'Welcome to Dubai Real Estate! I am your AI assistant. How can I help you today?';
-const DEFAULT_FRONTEND_URL = 'https://voice-widget-frontend-tgdubai-split.up.railway.app/';
+const DEFAULT_FRONTEND_URL = '';
 const START_PREFIX = 'prop_';
 const INLINE_SHARE_PREFIX = 'share_prop_';
-const TELEGRAM_BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || 'viaproperties_bot').replace(/^@/, '');
-const VIA_LOGO_FALLBACK = 'https://voice-widget-frontend-tgdubai-split.up.railway.app/assets/LOGO-light.svg';
+const TELEGRAM_BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '');
+const VIA_LOGO_FALLBACK = String(process.env.VIA_LOGO_FALLBACK || '').trim();
 
 let botInstance = null;
 
@@ -52,6 +52,12 @@ function parseInlineSharePropId(inlineQuery) {
   const raw = query.slice(INLINE_SHARE_PREFIX.length);
   const propId = normalizePropId(raw);
   return propId || null;
+}
+
+function buildMiniAppDeepLink(propId) {
+  const id = normalizePropId(propId);
+  if (!id || !TELEGRAM_BOT_USERNAME) return '';
+  return `https://t.me/${TELEGRAM_BOT_USERNAME}/app?startapp=${encodeURIComponent(`${START_PREFIX}${id}`)}`;
 }
 
 function parseImages(rawImages) {
@@ -114,6 +120,9 @@ export async function startTelegramBot() {
   const bot = new Telegraf(token);
   const miniAppUrl = String(process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL).trim();
   const webAppButtonText = 'Talk to AI / Catalog 🏗️';
+  if (!miniAppUrl) {
+    console.warn('⚠️ FRONTEND_URL не задан. WebApp-кнопки будут ограничены.');
+  }
 
   const setMenuButton = async (chatId = null) => {
     if (!miniAppUrl) return;
@@ -186,8 +195,16 @@ export async function startTelegramBot() {
         `📍 ${district}`
       ].join('\n');
 
-      const miniAppDeepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}/app?startapp=${encodeURIComponent(`${START_PREFIX}${property.id}`)}`;
+      const miniAppDeepLink = buildMiniAppDeepLink(property.id);
       const imageUrl = isValidPublicImageUrl(property.image) ? property.image : '';
+      const openUrl = miniAppDeepLink || miniAppUrl || '';
+      const maybeReplyMarkup = openUrl
+        ? {
+            inline_keyboard: [
+              [{ text: 'Смотреть объект', url: openUrl }]
+            ]
+          }
+        : undefined;
       const result = imageUrl
         ? {
             type: 'photo',
@@ -197,11 +214,7 @@ export async function startTelegramBot() {
             title: `🏙 ${heading}`,
             description: `${property.priceLabel} • ${district}`,
             caption: messageText,
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: 'Смотреть объект', url: miniAppDeepLink }]
-              ]
-            }
+            ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {})
           }
         : {
             type: 'article',
@@ -211,12 +224,8 @@ export async function startTelegramBot() {
             input_message_content: {
               message_text: messageText
             },
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: 'Смотреть объект', url: miniAppDeepLink }]
-              ]
-            },
-            thumb_url: VIA_LOGO_FALLBACK
+            ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {}),
+            ...(VIA_LOGO_FALLBACK ? { thumb_url: VIA_LOGO_FALLBACK } : {})
           };
 
       console.log('Inline query result prepared:', {
