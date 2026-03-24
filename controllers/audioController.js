@@ -458,18 +458,20 @@ const normalizeDistrict = (val) => {
   if (!val) return '';
   let s = String(val).toLowerCase().replace(/^район\s+/i, '').trim();
   const map = {
-    'дубай марина': 'dubai marina', 'марина': 'dubai marina', 'dubai marina': 'dubai marina',
-    'downtown': 'downtown', 'даунтаун': 'downtown', 'downtown dubai': 'downtown',
-    'jvc': 'jvc', 'джвс': 'jvc', 'дживиси': 'jvc', 'jumeirah village circle': 'jvc',
-    'business bay': 'business bay', 'бизнес бей': 'business bay', 'бизнес бай': 'business bay',
-    'bluewaters': 'bluewaters', 'bluewaters island': 'bluewaters', 'блювотерс': 'bluewaters',
-    'dubai hills': 'dubai hills', 'дубай хиллс': 'dubai hills', 'dubai hills estate': 'dubai hills',
-    'jbr': 'jbr', 'джей би ар': 'jbr', 'jumeirah beach residence': 'jbr',
-    'palm jumeirah': 'palm jumeirah', 'пальма джумейра': 'palm jumeirah',
-    'creek harbour': 'creek harbour', 'dubai creek harbour': 'creek harbour', 'крик харбор': 'creek harbour',
-    'emaar beachfront': 'emaar beachfront', 'beachfront': 'emaar beachfront', 'эмаар бичфронт': 'emaar beachfront',
-    'city walk': 'city walk', 'сити вок': 'city walk',
-    'damac lagoons': 'damac lagoons', 'лагаунс': 'damac lagoons'
+    // Odesa districts
+    'одесса': 'odesa', 'одеса': 'odesa', 'odessa': 'odesa', 'odesa': 'odesa',
+    'приморский': 'prymorskyi', 'приморський': 'prymorskyi', 'prymorskyi': 'prymorskyi', 'primorsky': 'prymorskyi',
+    'киевский': 'kyivskyi', 'київський': 'kyivskyi', 'kyivskyi': 'kyivskyi', 'kievskiy': 'kyivskyi',
+    'малиновский': 'khadzhibeyskyi', 'малиновський': 'khadzhibeyskyi', 'хаджибейский': 'khadzhibeyskyi', 'khadzhibeyskyi': 'khadzhibeyskyi',
+    'суворовский': 'peresypskyi', 'суворовський': 'peresypskyi', 'пересыпский': 'peresypskyi', 'пересипський': 'peresypskyi', 'peresypskyi': 'peresypskyi',
+    // Odesa micro-areas / landmarks
+    'аркадия': 'arcadia', 'аркадія': 'arcadia', 'arcadia': 'arcadia',
+    'большой фонтан': 'fontan', 'великий фонтан': 'fontan', 'фонтан': 'fontan', 'fontan': 'fontan',
+    'черемушки': 'cheremushky', 'черемушки одесса': 'cheremushky', 'cheremushky': 'cheremushky',
+    'молдаванка': 'moldavanka', 'moldavanka': 'moldavanka',
+    'слободка': 'slobidka', 'slobidka': 'slobidka',
+    'поселок котовского': 'kotovskoho', 'селище котовського': 'kotovskoho', 'kotovskoho': 'kotovskoho',
+    'лузановка': 'luzanivka', 'лузанівка': 'luzanivka', 'luzanivka': 'luzanivka'
   };
   return map[s] || s;
 };
@@ -798,10 +800,10 @@ const formatNumberUS = (value) => {
 
 const detectBudgetCurrency = (text = '') => {
   const s = String(text || '').toLowerCase();
-  if (/\b(aed|dirham|dirhams|дирхам|дирхама|дирхамов)\b/.test(s)) return 'AED';
+  if (/\b(uah|грн|гривн|гривня|гривні|гривен)\b/.test(s) || /₴/.test(s)) return 'UAH';
   if (/(\$|\busd\b|\bdollar\b|\bdollars\b|доллар|доллара|долларов)/.test(s)) return 'USD';
-  // Dubai demo default
-  return 'USD';
+  // UA market default
+  return 'UAH';
 };
 
 const formatCardForClient = (req, p) => {
@@ -821,7 +823,7 @@ const formatCardForClient = (req, p) => {
     operation: p.operation ?? null,
     property_type: p.property_type ?? null,
     // Правые поля (основные цифры)
-    price: formattedPrice ? `${formattedPrice} AED` : null,
+    price: formattedPrice ? `${formattedPrice} UAH` : null,
     priceEUR: p.priceEUR ?? p?.price?.amount ?? null,
     rooms: p.rooms ?? p?.specs?.rooms ?? null,
     floor: p.floor ?? p?.specs?.floor ?? null,
@@ -1371,9 +1373,9 @@ const formatBudgetFromRange = (min, max) => {
   const maxNum = normalizeNumber(max);
   const minFormatted = formatNumberUS(minNum);
   const maxFormatted = formatNumberUS(maxNum);
-  if (minFormatted && maxFormatted) return `${minFormatted}–${maxFormatted} AED`;
-  if (!minFormatted && maxFormatted) return `до ${maxFormatted} AED`;
-  if (minFormatted && !maxFormatted) return `от ${minFormatted} AED`;
+  if (minFormatted && maxFormatted) return `${minFormatted}–${maxFormatted} UAH`;
+  if (!minFormatted && maxFormatted) return `до ${maxFormatted} UAH`;
+  if (minFormatted && !maxFormatted) return `от ${minFormatted} UAH`;
   return null;
 };
 

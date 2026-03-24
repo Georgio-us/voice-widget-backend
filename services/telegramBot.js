@@ -3,7 +3,7 @@ import { getPropertyByExternalId } from './propertiesRepository.js';
 import { upsertTelegramUser } from './usersRepository.js';
 
 const startMessage =
-  'Welcome to Dubai Real Estate! I am your AI assistant. How can I help you today?';
+  'Welcome to Odesa Real Estate! I am your AI assistant. How can I help you today?';
 const DEFAULT_FRONTEND_URL = '';
 const START_PREFIX = 'prop_';
 const INLINE_SHARE_PREFIX = 'share_prop_';
@@ -78,7 +78,7 @@ function parseImages(rawImages) {
 
 function formatPriceLabel(raw) {
   const num = Number(raw);
-  if (Number.isFinite(num) && num > 0) return `${Math.round(num).toLocaleString('en-US')} AED`;
+  if (Number.isFinite(num) && num > 0) return `${Math.round(num).toLocaleString('en-US')} UAH`;
   const text = String(raw || '').trim();
   return text || 'Price on request';
 }
@@ -94,13 +94,14 @@ async function getPropertyForInlineShare(propId) {
   const raw = await getPropertyByExternalId(propId);
   if (!raw) return null;
   const images = parseImages(raw.images);
+  const geo = raw && raw.geo && typeof raw.geo === 'object' ? raw.geo : null;
   return {
     id: normalizePropId(raw.external_id || raw.id),
     title: String(raw.title || '').trim(),
     propertyType: String(raw.property_type || 'property').trim(),
-    city: String(raw.location_city || '').trim(),
-    district: String(raw.location_district || raw.location_neighborhood || '').trim(),
-    neighborhood: String(raw.location_neighborhood || '').trim(),
+    city: String(geo?.city || raw.location_city || '').trim(),
+    district: String(geo?.district || raw.location_district || raw.location_neighborhood || '').trim(),
+    neighborhood: String(geo?.neighborhood || raw.location_neighborhood || '').trim(),
     priceLabel: formatPriceLabel(raw.price_amount),
     image: images[0] || ''
   };
@@ -204,7 +205,7 @@ export async function startTelegramBot() {
         return;
       }
 
-      const district = property.district || property.neighborhood || 'Dubai';
+      const district = property.district || property.neighborhood || 'Odesa';
       const heading = `${property.propertyType} in ${district}`;
       const messageText = [
         `🏙 ${heading}`,
