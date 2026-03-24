@@ -1,5 +1,6 @@
 import { Telegraf } from 'telegraf';
 import { getPropertyByExternalId } from './propertiesRepository.js';
+import { upsertTelegramUser } from './usersRepository.js';
 
 const startMessage =
   'Welcome to Dubai Real Estate! I am your AI assistant. How can I help you today?';
@@ -8,6 +9,7 @@ const START_PREFIX = 'prop_';
 const INLINE_SHARE_PREFIX = 'share_prop_';
 const TELEGRAM_BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '');
 const VIA_LOGO_FALLBACK = String(process.env.VIA_LOGO_FALLBACK || '').trim();
+const BOT_CLIENT_ID = String(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID || 'demo').trim() || 'demo';
 
 let botInstance = null;
 
@@ -143,6 +145,21 @@ export async function startTelegramBot() {
   await setMenuButton();
 
   bot.start(async (ctx) => {
+    try {
+      const from = ctx?.from || {};
+      await upsertTelegramUser({
+        clientId: BOT_CLIENT_ID,
+        tgUserId: from?.id,
+        username: from?.username || null,
+        firstName: from?.first_name || null,
+        lastName: from?.last_name || null,
+        languageCode: from?.language_code || null,
+        meta: { source: 'telegram_start' }
+      });
+    } catch (userSyncError) {
+      console.warn('[telegram] users upsert failed:', userSyncError?.message || userSyncError);
+    }
+
     const propIdFromPayload = parseStartPayload(ctx.startPayload);
     const propIdFromText = parseStartPayloadFromMessage(ctx.message?.text);
     const propId = propIdFromPayload || propIdFromText || null;

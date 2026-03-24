@@ -544,7 +544,20 @@ const normalizeFeaturesArray = (value) => {
 };
 
 const getPropertyFeaturesIndex = (property = {}) => {
-  const text = String(property?.description || '').toLowerCase();
+  const textParts = [String(property?.description || '').toLowerCase()];
+  if (property?.features && typeof property.features === 'object') {
+    for (const value of Object.values(property.features)) {
+      if (value == null) continue;
+      if (Array.isArray(value)) {
+        textParts.push(value.map((v) => String(v || '')).join(' ').toLowerCase());
+      } else if (typeof value === 'object') {
+        textParts.push(JSON.stringify(value).toLowerCase());
+      } else {
+        textParts.push(String(value).toLowerCase());
+      }
+    }
+  }
+  const text = textParts.join(' ');
   const candidates = [
     ['terrace', /(terrace|терасс|террас)/i],
     ['balcony', /(balcony|балкон)/i],
@@ -668,27 +681,66 @@ const annotatePropertyWithScores = (property, insights = {}) => {
 
 // Нормализация строки из БД к формату карточек, совместимому с фронтом
 const mapRowToProperty = (row) => {
+  const toJsonObject = (v) => {
+    if (!v) return null;
+    if (typeof v === 'object' && !Array.isArray(v)) return v;
+    if (typeof v !== 'string') return null;
+    try {
+      const parsed = JSON.parse(v);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const toJsonArray = (v) => {
+    if (!v) return [];
+    if (Array.isArray(v)) return v;
+    if (typeof v !== 'string') return [];
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const geo = toJsonObject(row.geo) || {};
+  const features = toJsonObject(row.features) || {};
+  const media = toJsonArray(row.media);
+
   const images = Array.isArray(row.images)
     ? row.images
     : (typeof row.images === 'string'
         ? (() => { try { return JSON.parse(row.images); } catch { return []; } })()
         : []);
+  const mergedImages = (Array.isArray(images) ? images : []).filter(Boolean);
+  if (!mergedImages.length && media.length) {
+    for (const item of media) {
+      if (!item || typeof item !== 'object') continue;
+      if (String(item.type || '').toLowerCase() === 'video') continue;
+      if (item.url) mergedImages.push(String(item.url));
+    }
+  }
   return {
     // важный момент: используем external_id как основной id (совместимость со старым фронтом)
     id: row.external_id || String(row.id),
-    city: row.location_city || null,
-    district: row.location_district || null,
-    neighborhood: row.location_neighborhood || null,
+    city: geo.city || row.location_city || null,
+    district: geo.district || row.location_district || null,
+    neighborhood: geo.neighborhood || row.location_neighborhood || null,
     operation: row.operation || null,
     property_type: row.property_type || null,
+    price_period: row.price_period || null,
     priceEUR: row.price_amount != null ? Number(row.price_amount) : null,
-    price_per_m2: row.price_per_m2 != null ? Number(row.price_per_m2) : null,
-    rooms: row.specs_rooms != null ? Number(row.specs_rooms) : null,
-    bathrooms: row.specs_bathrooms != null ? Number(row.specs_bathrooms) : null,
-    area_m2: row.specs_area_m2 != null ? Number(row.specs_area_m2) : null,
-    floor: row.specs_floor != null ? Number(row.specs_floor) : null,
+    price_per_m2: row.price_per_m2 != null ? Number(row.price_per_m2) : (features.pricePerM2 != null ? Number(features.pricePerM2) : null),
+    rooms: row.specs_rooms != null ? Number(row.specs_rooms) : (features.rooms != null ? Number(features.rooms) : null),
+    bathrooms: row.specs_bathrooms != null ? Number(row.specs_bathrooms) : (features.bathrooms != null ? Number(features.bathrooms) : null),
+    area_m2: row.specs_area_m2 != null ? Number(row.specs_area_m2) : (features.areaM2 != null ? Number(features.areaM2) : null),
+    floor: row.specs_floor != null ? Number(row.specs_floor) : (features.floor != null ? Number(features.floor) : null),
     description: row.description || null,
-    images,
+    images: mergedImages,
+    geo,
+    features,
+    media
   };
 };
 

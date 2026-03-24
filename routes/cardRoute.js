@@ -37,6 +37,34 @@ const normalizeProperty = (p) => {
     return s === 'true' || s === '1' || s === 'yes' || s === 'y';
   };
 
+  const toJsonObject = (v) => {
+    if (!v) return null;
+    if (typeof v === 'object' && !Array.isArray(v)) return v;
+    if (typeof v !== 'string') return null;
+    try {
+      const parsed = JSON.parse(v);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const toJsonArray = (v) => {
+    if (!v) return [];
+    if (Array.isArray(v)) return v;
+    if (typeof v !== 'string') return [];
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const geo = toJsonObject(p.geo) || {};
+  const feat = toJsonObject(p.features) || {};
+  const media = toJsonArray(p.media);
+
   // ---------- images ----------
   let images = [];
   try {
@@ -53,6 +81,11 @@ const normalizeProperty = (p) => {
   images = (Array.isArray(images) ? images : [])
     .map((x) => toText(x))
     .filter(Boolean);
+  if (!images.length && media.length) {
+    images = media
+      .map((m) => (m && typeof m === 'object' ? toText(m.url) : null))
+      .filter(Boolean);
+  }
 
   // ---------- id ----------
   // важно: trim + (опционально) upperCase, чтобы A102 " и A102 были одним и тем же
@@ -63,18 +96,18 @@ const normalizeProperty = (p) => {
   })();
 
   // ---------- location ----------
-  const city = toText(p.location?.city ?? p.location_city);
-  const district = toText(p.location?.district ?? p.location_district);
-  const neighborhood = toText(p.location?.neighborhood ?? p.location_neighborhood);
-  const address = toText(p.location?.address ?? p.location_address);
+  const city = toText(p.location?.city ?? geo.city ?? p.location_city);
+  const district = toText(p.location?.district ?? geo.district ?? p.location_district);
+  const neighborhood = toText(p.location?.neighborhood ?? geo.neighborhood ?? p.location_neighborhood);
+  const address = toText(p.location?.address ?? geo.address ?? p.location_address);
 
   // ---------- specs ----------
-  const rooms = toInt(p.specs?.rooms ?? p.specs_rooms);
-  const bathrooms = toInt(p.specs?.bathrooms ?? p.specs_bathrooms);
-  const area_m2 = toInt(p.specs?.area_m2 ?? p.specs_area_m2);
-  const floor = toInt(p.specs?.floor ?? p.specs_floor);
-  const balcony = toBool(p.specs?.balcony ?? p.specs_balcony);
-  const terrace = toBool(p.specs?.terrace ?? p.specs_terrace);
+  const rooms = toInt(p.specs?.rooms ?? feat.rooms ?? p.specs_rooms);
+  const bathrooms = toInt(p.specs?.bathrooms ?? feat.bathrooms ?? p.specs_bathrooms);
+  const area_m2 = toInt(p.specs?.area_m2 ?? feat.areaM2 ?? p.specs_area_m2);
+  const floor = toInt(p.specs?.floor ?? feat.floor ?? p.specs_floor);
+  const balcony = toBool(p.specs?.balcony ?? feat.balcony ?? p.specs_balcony);
+  const terrace = toBool(p.specs?.terrace ?? feat.terrace ?? p.specs_terrace);
 
   // ---------- price ----------
   const priceEUR = toInt(
@@ -99,6 +132,7 @@ const normalizeProperty = (p) => {
     id,
     operation,
     property_type,
+    price_period: toText(p.price_period),
     furnished,
 
     // location

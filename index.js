@@ -18,7 +18,6 @@ import audioRouter from './routes/audioRoute.js';
 import cardRouter from './routes/cardRoute.js';
 import telemetryRouter from './routes/telemetryRoute.js';
 import leadsRouter from './routes/leadsRoute.js';
-import supportRouter from './routes/supportRoute.js';
 import { startTelegramBot, stopTelegramBot } from './services/telegramBot.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -124,7 +123,6 @@ app.use('/api/audio', audioRouter);
 app.use('/api/cards', cardRouter);
 app.use('/api/telemetry', telemetryRouter);
 app.use('/api/leads', leadsRouter);
-app.use('/api/support', supportRouter);
 
 // 🔍 Корневой маршрут с информацией об API
 app.get('/', (req, res) => {
