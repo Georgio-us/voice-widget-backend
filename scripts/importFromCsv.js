@@ -163,9 +163,14 @@ async function importCsv() {
     }));
     const featuresJson = JSON.stringify(compactObject({
       furnished: toBool(row.furnished),
+      buildingType: toText(row.building_type),
       buildingYear: toInt(row.building_year),
       buildingFloors: toInt(row.building_floors),
       buildingInfrastructure: infraArr,
+      wallMaterial: toText(row.wall_material || row.material_walls),
+      elevator: toBool(row.elevator),
+      balconyType: toText(row.balcony_type),
+      condition: toText(row.condition || row.object_condition),
       rooms: toInt(row.specs_rooms),
       bathrooms: toInt(row.specs_bathrooms),
       areaM2: toInt(row.specs_area_m2),

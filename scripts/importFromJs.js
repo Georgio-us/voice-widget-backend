@@ -83,9 +83,14 @@ async function importProperties() {
     });
     const featuresPayload = compactObject({
       furnished: p.furnished ?? null,
+      buildingType: p.buildingType ?? p.building_type ?? null,
       buildingYear: building.year ?? null,
       buildingFloors: building.floors ?? null,
       buildingInfrastructure: building.infrastructure || null,
+      wallMaterial: p.wallMaterial ?? p.wall_material ?? null,
+      elevator: p.elevator ?? null,
+      balconyType: p.balconyType ?? p.balcony_type ?? null,
+      condition: p.condition ?? p.object_condition ?? null,
       rooms: specs.rooms ?? null,
       bathrooms: specs.bathrooms ?? null,
       areaM2: specs.area_m2 ?? null,
