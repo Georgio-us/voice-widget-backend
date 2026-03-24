@@ -2079,6 +2079,7 @@ const transcribeAndRespond = async (req, res) => {
           sessionId: session.sessionId || sessionId,
           startedAt: session.createdAt,
           geo: session.geo,
+          telegramUser: session.telegramUser || null,
           messageCount: Array.isArray(session.messages) ? session.messages.length : 0
         })
           .then((r) => {

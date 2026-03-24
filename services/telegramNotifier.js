@@ -249,6 +249,22 @@ const buildGeoLine = (geo) => {
   return country || city;
 };
 
+const buildTelegramUserLines = (tgUser) => {
+  const lines = [];
+  const userId = tgUser?.userId ? String(tgUser.userId).trim() : '';
+  const usernameRaw = tgUser?.username ? String(tgUser.username).trim() : '';
+  const firstName = tgUser?.firstName ? String(tgUser.firstName).trim() : '';
+  const lastName = tgUser?.lastName ? String(tgUser.lastName).trim() : '';
+  const username = usernameRaw
+    ? (usernameRaw.startsWith('@') ? usernameRaw : `@${usernameRaw}`)
+    : '';
+  const fullName = `${firstName} ${lastName}`.trim();
+  if (userId) lines.push(`🆔 Telegram ID: ${clip(userId, 80)}`);
+  if (username) lines.push(`👤 Telegram: ${clip(username, 100)}`);
+  if (fullName) lines.push(`🙍 Имя: ${clip(fullName, 120)}`);
+  return lines;
+};
+
 const buildSessionActivityStartMessage = (p = {}) => {
   const lines = [];
   lines.push('🟢 Кто-то пользуется виджетом прямо сейчас');
@@ -262,6 +278,10 @@ const buildSessionActivityStartMessage = (p = {}) => {
   const geoLine = buildGeoLine(p.geo);
   if (geoLine) {
     lines.push(`🌍 Гео: ${clip(geoLine, 120)}`);
+  }
+  const tgLines = buildTelegramUserLines(p.telegramUser);
+  if (tgLines.length) {
+    lines.push(...tgLines);
   }
   if (typeof p.messageCount === 'number') {
     lines.push(`💬 Сообщений: ${p.messageCount}`);
