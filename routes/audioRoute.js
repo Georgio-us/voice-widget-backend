@@ -11,6 +11,22 @@ import {
 
 const router = express.Router();
 
+const normalizeTgId = (value) => String(value || '').trim();
+const resolveViewerAccess = (tgUserIdRaw) => {
+  const tgUserId = normalizeTgId(tgUserIdRaw);
+  const superAdminId = normalizeTgId(process.env.SUPER_ADMIN_ID);
+  const ownerId = normalizeTgId(process.env.OWNER_TG_ID);
+  const isSuperAdmin = !!(tgUserId && superAdminId && tgUserId === superAdminId);
+  const isOwner = !!(tgUserId && ownerId && tgUserId === ownerId);
+  const isAdmin = isSuperAdmin || isOwner;
+  return {
+    accessRole: isAdmin ? (isSuperAdmin ? 'super_admin' : 'owner') : 'user',
+    isAdmin,
+    isSuperAdmin,
+    isOwner
+  };
+};
+
 // 🚀 Memory storage для максимальной скорости
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -135,6 +151,25 @@ router.post('/upload',
 
 // 📌 Получить информацию о сессии
 router.get('/session/:sessionId', getSessionInfo);
+
+// 🔐 Получить роль доступа для UI (admin/wishlist switch in header)
+router.get('/access', (req, res) => {
+  try {
+    const tgUserId = normalizeTgId(req.query?.tgUserId);
+    const access = resolveViewerAccess(tgUserId);
+    res.json({
+      ok: true,
+      tgUserId: tgUserId || null,
+      ...access
+    });
+  } catch (error) {
+    console.error('❌ /api/audio/access error:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'INTERNAL_ERROR'
+    });
+  }
+});
 
 // 🧹 Очистить конкретную сессию
 router.delete('/session/:sessionId', clearSession);
