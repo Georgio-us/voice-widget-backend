@@ -104,7 +104,7 @@ SET media = (
     ),
     '[]'::jsonb
   )
-  FROM jsonb_array_elements_text(COALESCE(images, '[]'::json)) AS img
+  FROM jsonb_array_elements_text(COALESCE(images::jsonb, '[]'::jsonb)) AS img
 )
 WHERE media IS NULL;
 
@@ -132,4 +132,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS properties_client_external_uidx
   ON properties (client_id, external_id);
 
 COMMIT;
-

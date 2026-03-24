@@ -49,9 +49,26 @@ const toText = (v) => {
   if (!s || s.toLowerCase() === 'null') return null;
   return s;
 };
+const normalizeOperation = (v) => {
+  const s = String(toText(v) || '').toLowerCase();
+  if (!s) return null;
+  if (s === 'buy') return 'sale';
+  if (s === 'sale' || s === 'rent') return s;
+  return s;
+};
 const cleanId = (v) => {
   const s = toText(v);
   return s ? s.toUpperCase() : null;
+};
+const compactObject = (obj = {}) => {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'string' && v.trim() === '') continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    out[k] = v;
+  }
+  return out;
 };
 const toJsonArray = (v) => {
   // 1) JSON array: ["a","b"]
@@ -143,6 +160,30 @@ async function importXlsx() {
     // images: берём из нескольких возможных колонок и нормализуем к массиву строк
     const imagesArr = toJsonArray(row.images || row.image_urls || row.imageurl || row.image);
     const imagesJson = JSON.stringify(imagesArr);
+    const mediaJson = JSON.stringify(imagesArr.map((url) => ({ type: 'image', url })));
+    const geoJson = JSON.stringify(compactObject({
+      country: toText(row.location_country) || 'ES',
+      city: toText(row.location_city),
+      district: toText(row.location_district),
+      neighborhood: toText(row.location_neighborhood),
+      address: toText(row.location_address),
+      lat: toText(row.location_lat ?? row.lat),
+      lng: toText(row.location_lng ?? row.lng)
+    }));
+    const infraArr = toJsonArray(row.building_infrastructure ?? row.infrastructure ?? row.infra);
+    const featuresJson = JSON.stringify(compactObject({
+      furnished: toBool(row.furnished),
+      buildingYear: toInt(row.building_year),
+      buildingFloors: toInt(row.building_floors),
+      buildingInfrastructure: infraArr,
+      rooms: toInt(row.specs_rooms),
+      bathrooms: toInt(row.specs_bathrooms),
+      areaM2: toInt(row.specs_area_m2),
+      floor: toInt(row.specs_floor),
+      balcony: toBool(row.specs_balcony),
+      terrace: toBool(row.specs_terrace),
+      pricePerM2: toInt(row.price_per_m2)
+    }));
 
     await pool.query(
       `
@@ -151,10 +192,14 @@ async function importXlsx() {
         external_id,
         operation,
         property_type,
+        price_period,
         furnished,
         price_amount,
         price_currency,
         price_per_m2,
+        geo,
+        features,
+        media,
         location_country,
         location_city,
         location_district,
@@ -177,20 +222,25 @@ async function importXlsx() {
         created_at,
         updated_at
       ) VALUES (
-        $1, $2, $3, $4, $5,
-        $6, $7, $8,
-        $9, $10, $11, $12, $13,
-        $14, $15, $16,
-        $17, $18, $19, $20, $21, $22,
-        $23, $24, $25, $26, $27, $28, $29
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9,
+        $10, $11, $12,
+        $13, $14, $15, $16, $17,
+        $18, $19, $20,
+        $21, $22, $23, $24, $25, $26,
+        $27, $28, $29, $30, $31, $32, $33
       )
       ON CONFLICT (client_id, external_id) DO UPDATE SET
         operation = EXCLUDED.operation,
         property_type = EXCLUDED.property_type,
+        price_period = EXCLUDED.price_period,
         furnished = EXCLUDED.furnished,
         price_amount = EXCLUDED.price_amount,
         price_currency = EXCLUDED.price_currency,
         price_per_m2 = EXCLUDED.price_per_m2,
+        geo = EXCLUDED.geo,
+        features = EXCLUDED.features,
+        media = EXCLUDED.media,
         location_country = EXCLUDED.location_country,
         location_city = EXCLUDED.location_city,
         location_district = EXCLUDED.location_district,
@@ -215,13 +265,17 @@ async function importXlsx() {
       [
         CLIENT_ID,
         externalId,
-        toText(row.operation),
+        normalizeOperation(row.operation),
         toText(row.property_type),
+        toText(row.price_period || row.rent_period || row.period),
         toBool(row.furnished),
 
         toInt(row.price_amount),
         toText(row.price_currency) || 'EUR',
         toInt(row.price_per_m2),
+        geoJson,
+        featuresJson,
+        mediaJson,
 
         toText(row.location_country) || 'ES',
         toText(row.location_city),
@@ -231,7 +285,7 @@ async function importXlsx() {
 
         toInt(row.building_year),
         toInt(row.building_floors),
-        null, // infrastructure пока не берём из этого XLSX
+        infraArr.length ? JSON.stringify(infraArr) : null,
 
         toInt(row.specs_rooms),
         toInt(row.specs_bathrooms),
