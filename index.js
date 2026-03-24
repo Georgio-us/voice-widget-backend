@@ -26,10 +26,20 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+const normalizeOrigin = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      return new URL(raw).origin;
+    }
+  } catch {}
+  return raw.replace(/\/+$/, '');
+};
 const splitCsv = (value) =>
   String(value || '')
     .split(',')
-    .map((v) => v.trim())
+    .map((v) => normalizeOrigin(v))
     .filter(Boolean);
 const allowedOriginSet = new Set([
   ...splitCsv(process.env.FRONTEND_URL),
@@ -48,7 +58,8 @@ app.use(cors({
       return callback(null, true);
     }
 
-    if (allowedOriginSet.has(origin)) {
+    const normalizedOrigin = normalizeOrigin(origin);
+    if (allowedOriginSet.has(normalizedOrigin)) {
       return callback(null, true);
     }
 
