@@ -18,6 +18,7 @@ import audioRouter from './routes/audioRoute.js';
 import cardRouter from './routes/cardRoute.js';
 import telemetryRouter from './routes/telemetryRoute.js';
 import leadsRouter from './routes/leadsRoute.js';
+import olxRouter from './routes/olxRoute.js';
 import { startTelegramBot, stopTelegramBot } from './services/telegramBot.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -123,6 +124,7 @@ app.use('/api/audio', audioRouter);
 app.use('/api/cards', cardRouter);
 app.use('/api/telemetry', telemetryRouter);
 app.use('/api/leads', leadsRouter);
+app.use('/api/olx', olxRouter);
 
 // 🔍 Корневой маршрут с информацией об API
 app.get('/', (req, res) => {
@@ -133,7 +135,10 @@ app.get('/', (req, res) => {
       audio_upload: 'POST /api/audio/upload',
       audio_formats: 'GET /api/audio/formats', 
       audio_health: 'GET /api/audio/health',
-      audio_stats: 'GET /api/audio/stats'
+      audio_stats: 'GET /api/audio/stats',
+      olx_connect: 'GET /api/olx/connect',
+      olx_callback: 'GET /api/olx/callback',
+      olx_status: 'GET /api/olx/status'
     },
     features: [
       'Whisper speech-to-text',

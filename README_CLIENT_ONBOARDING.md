@@ -25,6 +25,12 @@ Required:
 - `DATABASE_URL`
 - `OPENAI_API_KEY`
 - `FRONTEND_URL` (frontend origin, e.g. `https://<frontend>.up.railway.app`)
+- `OLX_AUTH_URL`
+- `OLX_TOKEN_URL`
+- `OLX_CLIENT_ID`
+- `OLX_CLIENT_SECRET`
+- `OLX_REDIRECT_URI` (e.g. `https://<backend>.up.railway.app/api/olx/callback`)
+- `OLX_STATE_SECRET` (random long secret used to sign OAuth state)
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_INTERACTIVE_TOKEN`
 - `TELEGRAM_CHAT_ID`
@@ -35,6 +41,7 @@ Required:
 Optional:
 - `BOT_CLIENT_ID` (default: `demo`)
 - `VIA_LOGO_FALLBACK`
+- `OLX_SCOPES` (space-separated OAuth scopes required by OLX API)
 
 ### Frontend (`Voice-Widget-Frontend`)
 
@@ -51,6 +58,7 @@ Required:
 Run the foundation SQL once on the target DB:
 
 - `sql/001_stage1_foundation.sql`
+- `sql/002_olx_integrations.sql`
 
 What it does:
 - creates `users` table
