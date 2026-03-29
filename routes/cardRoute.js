@@ -6,6 +6,30 @@ import {
 
 const router = express.Router();
 
+const normalizeText = (value) => String(value || '').trim().toLowerCase();
+const DISTRICT_ALIASES = new Map([
+  ['primorsky', 'приморский'],
+  ['primorskiy', 'приморский'],
+  ['primorski', 'приморский'],
+  ['приморский', 'приморский'],
+  ['kievsky', 'киевский'],
+  ['kyivskyi', 'киевский'],
+  ['киевский', 'киевский'],
+  ['suvorovsky', 'суворовский'],
+  ['suvorovskiy', 'суворовский'],
+  ['суворовский', 'суворовский'],
+  ['malinovsky', 'малиновский'],
+  ['malinovskiy', 'малиновский'],
+  ['малиновский', 'малиновский'],
+  ['tairovo', 'киевский'],
+  ['таирово', 'киевский']
+]);
+const normalizeDistrictValue = (value) => {
+  const key = normalizeText(value);
+  return DISTRICT_ALIASES.get(key) || key;
+};
+const hasToken = (value, token) => normalizeText(value).includes(normalizeText(token));
+
 /**
  * Нормализация объекта из БД (Postgres)
  * + поддержка legacy-формата (если где-то ещё используется)
@@ -158,7 +182,13 @@ const normalizeProperty = (p) => {
     description,
 
     // images
-    images
+    images,
+
+    // raw features subset for advanced filters
+    features: {
+      smartFlat: feat.smartFlat === true,
+      complex: toText(feat.complex)
+    }
   };
 };
 
@@ -169,12 +199,40 @@ const normalizeProperty = (p) => {
 // Поиск по фильтрам
 router.get('/search', async (req, res) => {
   try {
-    const { city, district, rooms, type, minPrice, maxPrice, limit = 10 } = req.query;
+    const {
+      city,
+      district,
+      rooms,
+      type,
+      minPrice,
+      maxPrice,
+      minArea,
+      maxArea,
+      minFloor,
+      maxFloor,
+      smart,
+      arcadia,
+      rcOnly,
+      residentialComplex,
+      limit = 10
+    } = req.query;
 
     const toInt = (v) => (v == null ? null : parseInt(String(v), 10));
+    const toBool = (v) => {
+      const raw = normalizeText(v);
+      return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+    };
     const min = toInt(minPrice);
     const max = toInt(maxPrice);
     const r = toInt(rooms);
+    const areaMin = toInt(minArea);
+    const areaMax = toInt(maxArea);
+    const floorMin = toInt(minFloor);
+    const floorMax = toInt(maxFloor);
+    const onlySmart = toBool(smart);
+    const onlyArcadia = toBool(arcadia);
+    const onlyRc = toBool(rcOnly);
+    const rcNeedle = normalizeText(residentialComplex);
 
     // Берём все объекты клиента из CLIENT_ID env
     const rawList = await getAllProperties();
@@ -187,8 +245,8 @@ router.get('/search', async (req, res) => {
     }
 
     if (district) {
-      const d = String(district).toLowerCase().trim();
-      list = list.filter(p => p.district && p.district.toLowerCase() === d);
+      const d = normalizeDistrictValue(district);
+      list = list.filter((p) => normalizeDistrictValue(p.district) === d);
     }
 
     if (type) {
@@ -196,8 +254,10 @@ router.get('/search', async (req, res) => {
       list = list.filter(p => p.property_type === t);
     }
 
-    if (r != null) {
-      list = list.filter(p => Number(p.rooms) === r);
+    if (String(rooms || '').trim() === '4plus') {
+      list = list.filter((p) => Number(p.rooms) >= 4);
+    } else if (r != null) {
+      list = list.filter((p) => Number(p.rooms) === r);
     }
 
     if (min != null) {
@@ -206,6 +266,41 @@ router.get('/search', async (req, res) => {
 
     if (max != null) {
       list = list.filter(p => Number(p.priceEUR) <= max);
+    }
+
+    if (areaMin != null) {
+      list = list.filter((p) => Number(p.area_m2) >= areaMin);
+    }
+
+    if (areaMax != null) {
+      list = list.filter((p) => Number(p.area_m2) <= areaMax);
+    }
+
+    if (floorMin != null) {
+      list = list.filter((p) => Number(p.floor) >= floorMin);
+    }
+
+    if (floorMax != null) {
+      list = list.filter((p) => Number(p.floor) <= floorMax);
+    }
+
+    if (onlySmart) {
+      list = list.filter((p) => p?.features?.smartFlat === true || hasToken(p.title, 'смарт') || hasToken(p.description, 'смарт') || hasToken(p.title, 'smart') || hasToken(p.description, 'smart'));
+    }
+
+    if (onlyArcadia) {
+      list = list.filter((p) => hasToken(p.neighborhood, 'аркад') || hasToken(p.address, 'аркад') || hasToken(p.title, 'аркад') || hasToken(p.description, 'аркад') || hasToken(p.neighborhood, 'arcad') || hasToken(p.address, 'arcad'));
+    }
+
+    if (onlyRc) {
+      list = list.filter((p) => {
+        const complex = normalizeText(p?.features?.complex);
+        return !!complex || hasToken(p.title, 'жк') || hasToken(p.description, 'жк');
+      });
+    }
+
+    if (rcNeedle) {
+      list = list.filter((p) => hasToken(p?.features?.complex, rcNeedle) || hasToken(p.title, rcNeedle) || hasToken(p.description, rcNeedle));
     }
 
     res.json({ cards: list.slice(0, Number(limit) || 10) });
