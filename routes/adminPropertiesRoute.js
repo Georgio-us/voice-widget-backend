@@ -2,7 +2,11 @@ import express from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { createManualProperty, deactivatePropertyByExternalId } from '../services/propertiesRepository.js';
+import {
+  createManualProperty,
+  deactivatePropertyByExternalId,
+  updateManualPropertyByExternalId
+} from '../services/propertiesRepository.js';
 
 const router = express.Router();
 
@@ -116,6 +120,12 @@ const normalizeImageBuffer = async (buffer) => {
   return transformed;
 };
 
+const toStringArray = (value) => {
+  if (Array.isArray(value)) return value.map((v) => String(v || '').trim()).filter(Boolean);
+  const single = String(value || '').trim();
+  return single ? [single] : [];
+};
+
 router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
   try {
     const cfg = requireR2Config();
@@ -192,6 +202,89 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
       return res.status(500).json({ ok: false, error: msg });
     }
     console.error('❌ /api/admin/properties error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
+
+router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, res) => {
+  try {
+    const externalId = String(req.params?.externalId || '').trim();
+    const cfg = requireR2Config();
+    const s3 = buildS3Client(cfg);
+    const mode = String(req.body?.mode || 'publish').trim().toLowerCase();
+    const clientId = String(req.body?.clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+    const title = String(req.body?.title || '').trim();
+    const description = String(req.body?.description || '').trim();
+    const propertyType = String(req.body?.propertyType || 'apartment').trim().toLowerCase();
+    const district = String(req.body?.district || '').trim();
+    const microdistrict = String(req.body?.microdistrict || '').trim();
+    const rooms = normalizeRooms(req.body?.rooms);
+    const floor = parseIntSafe(req.body?.floor);
+    const floorsTotal = parseIntSafe(req.body?.floorsTotal);
+    const area = parseIntSafe(String(req.body?.area || '').replace(/[^\d]/g, ''));
+    const price = parseIntSafe(String(req.body?.price || '').replace(/[^\d]/g, ''));
+    const balcony = toBool(req.body?.balcony);
+    const terrace = toBool(req.body?.terrace);
+    const furnished = false;
+
+    const files = Array.isArray(req.files) ? req.files : [];
+    const now = Date.now();
+    const uploadedUrls = [];
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i];
+      const key = `clients/${clientId}/properties/edit_${now}_${Math.random().toString(36).slice(2, 10)}/${String(i + 1).padStart(2, '0')}.webp`;
+      const body = await normalizeImageBuffer(file.buffer);
+      await s3.send(new PutObjectCommand({
+        Bucket: cfg.bucket,
+        Key: key,
+        Body: body,
+        ContentType: 'image/webp',
+        CacheControl: 'public, max-age=31536000, immutable'
+      }));
+      const normalizedBase = String(cfg.publicBaseUrl).replace(/\/+$/, '');
+      uploadedUrls.push(`${normalizedBase}/${key}`);
+    }
+    const existingImages = toStringArray(req.body?.existingImages);
+    const images = uploadedUrls.length ? uploadedUrls : existingImages;
+
+    const updated = await updateManualPropertyByExternalId(
+      externalId,
+      {
+        mode,
+        title,
+        description,
+        property_type: propertyType,
+        district,
+        neighborhood: microdistrict,
+        rooms,
+        floor,
+        building_floors: floorsTotal,
+        area_m2: area,
+        price_amount: price,
+        balcony,
+        terrace,
+        furnished,
+        images,
+        extraFeatures: {
+          exclusive: toBool(req.body?.exclusive),
+          penthouse: toBool(req.body?.penthouse),
+          smartFlat: toBool(req.body?.smartFlat),
+          newbuilding: toBool(req.body?.newbuilding),
+          loggia: toBool(req.body?.loggia),
+          parking: toBool(req.body?.parking),
+          complex: String(req.body?.complex || '').trim() || null
+        }
+      },
+      clientId
+    );
+    if (!updated) return res.status(404).json({ ok: false, error: 'PROPERTY_NOT_FOUND' });
+    return res.json({ ok: true, mode, property: updated });
+  } catch (error) {
+    const msg = String(error?.message || 'UNKNOWN_ERROR');
+    if (msg.startsWith('R2_CONFIG_MISSING:')) {
+      return res.status(500).json({ ok: false, error: msg });
+    }
+    console.error('❌ PUT /api/admin/properties/:externalId error:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
 });

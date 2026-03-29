@@ -258,3 +258,106 @@ export async function deactivatePropertyByExternalId(externalId, clientId = DEFA
   );
   return rows[0] || null;
 }
+
+export async function updateManualPropertyByExternalId(externalId, payload = {}, clientId = DEFAULT_CLIENT_ID) {
+  const safeClientId = String(clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+  const safeExternalId = String(externalId || '').trim();
+  if (!safeExternalId) return null;
+  const mode = String(payload.mode || 'publish').trim().toLowerCase();
+  const status = mode === 'draft' ? 'draft' : 'active';
+  const isActive = status === 'active';
+  const operation = String(payload.operation || 'sale').trim() || 'sale';
+  const propertyType = String(payload.property_type || 'apartment').trim() || 'apartment';
+  const city = String(payload.city || 'Одеса').trim() || 'Одеса';
+  const district = String(payload.district || '').trim();
+  const neighborhood = String(payload.neighborhood || '').trim();
+  const address = String(payload.address || '').trim();
+  const title = String(payload.title || '').trim();
+  const description = String(payload.description || '').trim();
+  const priceAmount = Number(payload.price_amount);
+  const rooms = payload.rooms == null || payload.rooms === '' ? null : Number(payload.rooms);
+  const floor = payload.floor == null || payload.floor === '' ? null : Number(payload.floor);
+  const areaM2 = payload.area_m2 == null || payload.area_m2 === '' ? null : Number(payload.area_m2);
+  const buildingFloors = payload.building_floors == null || payload.building_floors === '' ? null : Number(payload.building_floors);
+  const balcony = payload.balcony === true;
+  const terrace = payload.terrace === true;
+  const furnished = payload.furnished === true;
+  const images = Array.isArray(payload.images) ? payload.images.filter(Boolean).map((v) => String(v).trim()).filter(Boolean) : [];
+  const media = images.map((url) => ({ type: 'image', url }));
+  const features = {
+    furnished,
+    rooms: Number.isFinite(rooms) ? rooms : null,
+    areaM2: Number.isFinite(areaM2) ? areaM2 : null,
+    floor: Number.isFinite(floor) ? floor : null,
+    balcony,
+    terrace,
+    ...(payload.extraFeatures && typeof payload.extraFeatures === 'object' ? payload.extraFeatures : {})
+  };
+  const geo = {
+    city,
+    district: district || null,
+    neighborhood: neighborhood || null,
+    address: address || null
+  };
+  const { rows } = await pool.query(
+    `
+    UPDATE properties
+    SET
+      operation = $3,
+      property_type = $4,
+      furnished = $5,
+      price_amount = $6,
+      price_currency = $7,
+      geo = $8::jsonb,
+      features = $9::jsonb,
+      media = $10::jsonb,
+      location_city = $11,
+      location_district = $12,
+      location_neighborhood = $13,
+      location_address = $14,
+      building_floors = $15,
+      specs_rooms = $16,
+      specs_area_m2 = $17,
+      specs_floor = $18,
+      specs_balcony = $19,
+      specs_terrace = $20,
+      title = $21,
+      description = $22,
+      images = $23::jsonb,
+      raw = COALESCE(raw, '{}'::jsonb) || $24::jsonb || jsonb_build_object('updated_via', 'admin_edit'),
+      is_active = $25,
+      updated_at = NOW()
+    WHERE client_id = $1
+      AND TRIM(external_id) = TRIM($2)
+    RETURNING *
+    `,
+    [
+      safeClientId,
+      safeExternalId,
+      operation,
+      propertyType,
+      furnished,
+      Number.isFinite(priceAmount) ? Math.round(priceAmount) : null,
+      'UAH',
+      JSON.stringify(geo),
+      JSON.stringify(features),
+      JSON.stringify(media),
+      city,
+      district || null,
+      neighborhood || null,
+      address || null,
+      Number.isFinite(buildingFloors) ? Math.round(buildingFloors) : null,
+      Number.isFinite(rooms) ? Math.round(rooms) : null,
+      Number.isFinite(areaM2) ? Math.round(areaM2) : null,
+      Number.isFinite(floor) ? Math.round(floor) : null,
+      balcony,
+      terrace,
+      title || null,
+      description || null,
+      JSON.stringify(images),
+      JSON.stringify({ mode, status }),
+      isActive
+    ]
+  );
+  return rows[0] || null;
+}
