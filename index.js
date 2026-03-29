@@ -19,6 +19,7 @@ import cardRouter from './routes/cardRoute.js';
 import telemetryRouter from './routes/telemetryRoute.js';
 import leadsRouter from './routes/leadsRoute.js';
 import olxRouter from './routes/olxRoute.js';
+import adminPropertiesRouter from './routes/adminPropertiesRoute.js';
 import { startTelegramBot, stopTelegramBot } from './services/telegramBot.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -125,6 +126,7 @@ app.use('/api/cards', cardRouter);
 app.use('/api/telemetry', telemetryRouter);
 app.use('/api/leads', leadsRouter);
 app.use('/api/olx', olxRouter);
+app.use('/api/admin', adminPropertiesRouter);
 
 // 🔍 Корневой маршрут с информацией об API
 app.get('/', (req, res) => {
