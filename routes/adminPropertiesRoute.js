@@ -5,6 +5,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import {
   createManualProperty,
   deactivatePropertyByExternalId,
+  getPropertyByExternalId,
   updateManualPropertyByExternalId
 } from '../services/propertiesRepository.js';
 
@@ -125,6 +126,20 @@ const toStringArray = (value) => {
   const single = String(value || '').trim();
   return single ? [single] : [];
 };
+
+router.get('/properties/:externalId', requireAdmin, async (req, res) => {
+  try {
+    const externalId = String(req.params?.externalId || '').trim();
+    if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
+    if (!externalId) return res.status(400).json({ ok: false, error: 'EXTERNAL_ID_REQUIRED' });
+    const property = await getPropertyByExternalId(externalId, SERVICE_CLIENT_ID);
+    if (!property) return res.status(404).json({ ok: false, error: 'PROPERTY_NOT_FOUND' });
+    return res.json({ ok: true, property });
+  } catch (error) {
+    console.error('❌ GET /api/admin/properties/:externalId error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
 
 router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
   try {
