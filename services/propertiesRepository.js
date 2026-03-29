@@ -1,12 +1,21 @@
 // services/propertiesRepository.js
 import { pool } from './db.js';
 
-const DEFAULT_CLIENT_ID = 'demo';
+const REQUIRED_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
 
-// Получить все квартиры для клиента (пока используем только demo)
+const resolveClientId = (clientId) => {
+  const resolved = String(clientId || REQUIRED_CLIENT_ID).trim();
+  if (!resolved) {
+    throw new Error('CLIENT_ID_ENV_REQUIRED');
+  }
+  return resolved;
+};
+
+// Получить все квартиры для клиента (из обязательного CLIENT_ID env или явного аргумента)
 // ✅ Возвращаем КОЛОНКИ таблицы (а не raw), чтобы типы были корректные (int/bool/json)
 // ✅ Сортируем так, чтобы свежедобавленные попадали в limit=10
-export async function getAllProperties(clientId = DEFAULT_CLIENT_ID) {
+export async function getAllProperties(clientId) {
+  const safeClientId = resolveClientId(clientId);
   const { rows } = await pool.query(
     `
     SELECT
@@ -48,7 +57,7 @@ export async function getAllProperties(clientId = DEFAULT_CLIENT_ID) {
     WHERE client_id = $1 AND is_active = true
     ORDER BY created_at DESC, id DESC
     `,
-    [clientId]
+    [safeClientId]
   );
 
   return rows;
@@ -56,7 +65,8 @@ export async function getAllProperties(clientId = DEFAULT_CLIENT_ID) {
 
 // Получить одну квартиру по external_id (например "A001")
 // ✅ TRIM чтобы находило даже если в XLSX случайно прилетели пробелы "A102 "
-export async function getPropertyByExternalId(externalId, clientId = DEFAULT_CLIENT_ID) {
+export async function getPropertyByExternalId(externalId, clientId) {
+  const safeClientId = resolveClientId(clientId);
   const { rows } = await pool.query(
     `
     SELECT
@@ -99,15 +109,16 @@ export async function getPropertyByExternalId(externalId, clientId = DEFAULT_CLI
       AND TRIM(external_id) = TRIM($2)
     LIMIT 1
     `,
-    [clientId, String(externalId ?? '')]
+    [safeClientId, String(externalId ?? '')]
   );
 
   if (!rows.length) return null;
   return rows[0];
 }
 
-async function getNextManualExternalId(client, clientId = DEFAULT_CLIENT_ID, prefix = 'A') {
-  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`manual_external_id:${clientId}:${prefix}`]);
+async function getNextManualExternalId(client, clientId, prefix = 'A') {
+  const safeClientId = resolveClientId(clientId);
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`manual_external_id:${safeClientId}:${prefix}`]);
   const { rows } = await client.query(
     `
     SELECT external_id
@@ -117,7 +128,7 @@ async function getNextManualExternalId(client, clientId = DEFAULT_CLIENT_ID, pre
     ORDER BY LENGTH(external_id) DESC, external_id DESC
     LIMIT 1
     `,
-    [clientId, prefix]
+    [safeClientId, prefix]
   );
   const current = String(rows?.[0]?.external_id || '').trim();
   const numeric = current ? Number(current.replace(new RegExp(`^${prefix}`), '')) : 0;
@@ -125,8 +136,8 @@ async function getNextManualExternalId(client, clientId = DEFAULT_CLIENT_ID, pre
   return `${prefix}${String(next).padStart(3, '0')}`;
 }
 
-export async function createManualProperty(payload = {}, clientId = DEFAULT_CLIENT_ID) {
-  const safeClientId = String(clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+export async function createManualProperty(payload = {}, clientId) {
+  const safeClientId = resolveClientId(clientId);
   const mode = String(payload.mode || 'publish').trim().toLowerCase();
   const status = mode === 'draft' ? 'draft' : 'active';
   const isActive = status === 'active';
@@ -238,8 +249,8 @@ export async function createManualProperty(payload = {}, clientId = DEFAULT_CLIE
   }
 }
 
-export async function deactivatePropertyByExternalId(externalId, clientId = DEFAULT_CLIENT_ID) {
-  const safeClientId = String(clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+export async function deactivatePropertyByExternalId(externalId, clientId) {
+  const safeClientId = resolveClientId(clientId);
   const safeExternalId = String(externalId || '').trim();
   if (!safeExternalId) return null;
   const { rows } = await pool.query(
@@ -259,8 +270,8 @@ export async function deactivatePropertyByExternalId(externalId, clientId = DEFA
   return rows[0] || null;
 }
 
-export async function updateManualPropertyByExternalId(externalId, payload = {}, clientId = DEFAULT_CLIENT_ID) {
-  const safeClientId = String(clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+export async function updateManualPropertyByExternalId(externalId, payload = {}, clientId) {
+  const safeClientId = resolveClientId(clientId);
   const safeExternalId = String(externalId || '').trim();
   if (!safeExternalId) return null;
   const mode = String(payload.mode || 'publish').trim().toLowerCase();

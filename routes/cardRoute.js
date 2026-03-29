@@ -176,7 +176,7 @@ router.get('/search', async (req, res) => {
     const max = toInt(maxPrice);
     const r = toInt(rooms);
 
-    // Берём все объекты клиента demo из БД
+    // Берём все объекты клиента из CLIENT_ID env
     const rawList = await getAllProperties();
     let list = rawList.map(normalizeProperty);
 

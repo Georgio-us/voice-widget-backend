@@ -9,6 +9,12 @@ if (process.env.OPENAI_API_KEY) {
   console.error('❌ OPENAI_API_KEY не найден в переменных окружения!');
   process.exit(1);
 }
+if (String(process.env.CLIENT_ID || '').trim()) {
+  console.log('✅ CLIENT_ID loaded successfully');
+} else {
+  console.error('❌ CLIENT_ID не найден в переменных окружения!');
+  process.exit(1);
+}
 import { testDbConnection } from './services/db.js';
 import express from 'express';
 import cors from 'cors';

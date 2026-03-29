@@ -10,7 +10,7 @@ import {
 
 const router = express.Router();
 
-const DEFAULT_CLIENT_ID = process.env.DEFAULT_CLIENT_ID || 'demo';
+const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
 const MAX_IMAGES = 5;
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -128,10 +128,11 @@ const toStringArray = (value) => {
 
 router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
   try {
+    if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
     const cfg = requireR2Config();
     const s3 = buildS3Client(cfg);
     const mode = String(req.body?.mode || 'publish').trim().toLowerCase();
-    const clientId = String(req.body?.clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+    const clientId = SERVICE_CLIENT_ID;
     const title = String(req.body?.title || '').trim();
     const description = String(req.body?.description || '').trim();
     const propertyType = String(req.body?.propertyType || 'apartment').trim().toLowerCase();
@@ -209,10 +210,11 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
 router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, res) => {
   try {
     const externalId = String(req.params?.externalId || '').trim();
+    if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
     const cfg = requireR2Config();
     const s3 = buildS3Client(cfg);
     const mode = String(req.body?.mode || 'publish').trim().toLowerCase();
-    const clientId = String(req.body?.clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+    const clientId = SERVICE_CLIENT_ID;
     const title = String(req.body?.title || '').trim();
     const description = String(req.body?.description || '').trim();
     const propertyType = String(req.body?.propertyType || 'apartment').trim().toLowerCase();
@@ -292,7 +294,8 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
 router.delete('/properties/:externalId', requireAdmin, async (req, res) => {
   try {
     const externalId = String(req.params?.externalId || '').trim();
-    const clientId = String(req.query?.clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+    if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
+    const clientId = SERVICE_CLIENT_ID;
     if (!externalId) return res.status(400).json({ ok: false, error: 'EXTERNAL_ID_REQUIRED' });
     const removed = await deactivatePropertyByExternalId(externalId, clientId);
     if (!removed) return res.status(404).json({ ok: false, error: 'PROPERTY_NOT_FOUND_OR_ALREADY_REMOVED' });
