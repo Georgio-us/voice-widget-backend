@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { createManualProperty } from '../services/propertiesRepository.js';
+import { createManualProperty, deactivatePropertyByExternalId } from '../services/propertiesRepository.js';
 
 const router = express.Router();
 
@@ -186,6 +186,20 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
       return res.status(500).json({ ok: false, error: msg });
     }
     console.error('❌ /api/admin/properties error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
+
+router.delete('/properties/:externalId', requireAdmin, async (req, res) => {
+  try {
+    const externalId = String(req.params?.externalId || '').trim();
+    const clientId = String(req.query?.clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+    if (!externalId) return res.status(400).json({ ok: false, error: 'EXTERNAL_ID_REQUIRED' });
+    const removed = await deactivatePropertyByExternalId(externalId, clientId);
+    if (!removed) return res.status(404).json({ ok: false, error: 'PROPERTY_NOT_FOUND_OR_ALREADY_REMOVED' });
+    return res.json({ ok: true, removedExternalId: externalId });
+  } catch (error) {
+    console.error('❌ DELETE /api/admin/properties/:externalId error:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
 });

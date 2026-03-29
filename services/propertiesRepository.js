@@ -237,3 +237,24 @@ export async function createManualProperty(payload = {}, clientId = DEFAULT_CLIE
     client.release();
   }
 }
+
+export async function deactivatePropertyByExternalId(externalId, clientId = DEFAULT_CLIENT_ID) {
+  const safeClientId = String(clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+  const safeExternalId = String(externalId || '').trim();
+  if (!safeExternalId) return null;
+  const { rows } = await pool.query(
+    `
+    UPDATE properties
+    SET
+      is_active = false,
+      updated_at = NOW(),
+      raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object('deleted_at', NOW(), 'deleted_via', 'admin_panel')
+    WHERE client_id = $1
+      AND TRIM(external_id) = TRIM($2)
+      AND is_active = true
+    RETURNING *
+    `,
+    [safeClientId, safeExternalId]
+  );
+  return rows[0] || null;
+}
