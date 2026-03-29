@@ -259,7 +259,7 @@ export async function deactivatePropertyByExternalId(externalId, clientId) {
     SET
       is_active = false,
       updated_at = NOW(),
-      raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object('deleted_at', NOW(), 'deleted_via', 'admin_panel')
+      raw = (COALESCE(raw::jsonb, '{}'::jsonb) || jsonb_build_object('deleted_at', NOW(), 'deleted_via', 'admin_panel'))::json
     WHERE client_id = $1
       AND UPPER(TRIM(external_id)) = UPPER(TRIM($2))
       AND is_active = true
@@ -335,7 +335,7 @@ export async function updateManualPropertyByExternalId(externalId, payload = {},
       title = $21,
       description = $22,
       images = $23::jsonb,
-      raw = COALESCE(raw, '{}'::jsonb) || $24::jsonb || jsonb_build_object('updated_via', 'admin_edit'),
+      raw = (COALESCE(raw::jsonb, '{}'::jsonb) || $24::jsonb || jsonb_build_object('updated_via', 'admin_edit'))::json,
       is_active = $25,
       updated_at = NOW()
     WHERE client_id = $1
