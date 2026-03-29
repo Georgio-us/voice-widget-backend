@@ -291,6 +291,21 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
   }
 });
 
+router.post('/properties/delete', requireAdmin, async (req, res) => {
+  try {
+    const externalId = String(req.body?.externalId || '').trim();
+    if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
+    const clientId = SERVICE_CLIENT_ID;
+    if (!externalId) return res.status(400).json({ ok: false, error: 'EXTERNAL_ID_REQUIRED' });
+    const removed = await deactivatePropertyByExternalId(externalId, clientId);
+    if (!removed) return res.status(404).json({ ok: false, error: 'PROPERTY_NOT_FOUND_OR_ALREADY_REMOVED' });
+    return res.json({ ok: true, removedExternalId: externalId });
+  } catch (error) {
+    console.error('❌ POST /api/admin/properties/delete error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
+
 router.delete('/properties/:externalId', requireAdmin, async (req, res) => {
   try {
     const externalId = String(req.params?.externalId || '').trim();
