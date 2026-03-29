@@ -106,7 +106,7 @@ export async function getPropertyByExternalId(externalId, clientId) {
       updated_at
     FROM properties
     WHERE client_id = $1
-      AND TRIM(external_id) = TRIM($2)
+      AND UPPER(TRIM(external_id)) = UPPER(TRIM($2))
     LIMIT 1
     `,
     [safeClientId, String(externalId ?? '')]
@@ -261,7 +261,7 @@ export async function deactivatePropertyByExternalId(externalId, clientId) {
       updated_at = NOW(),
       raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object('deleted_at', NOW(), 'deleted_via', 'admin_panel')
     WHERE client_id = $1
-      AND TRIM(external_id) = TRIM($2)
+      AND UPPER(TRIM(external_id)) = UPPER(TRIM($2))
       AND is_active = true
     RETURNING *
     `,
@@ -339,7 +339,7 @@ export async function updateManualPropertyByExternalId(externalId, payload = {},
       is_active = $25,
       updated_at = NOW()
     WHERE client_id = $1
-      AND TRIM(external_id) = TRIM($2)
+      AND UPPER(TRIM(external_id)) = UPPER(TRIM($2))
     RETURNING *
     `,
     [
