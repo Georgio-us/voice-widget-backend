@@ -150,3 +150,39 @@ export async function getOlxIntegrationStatus({
     throw error;
   }
 }
+
+export async function getOlxIntegrationCredentials({
+  clientId = DEFAULT_CLIENT_ID,
+  tgUserId
+}) {
+  const resolvedClientId = normalizeClientId(clientId);
+  const normalizedTgUserId = normalizeTgUserId(tgUserId);
+  if (!normalizedTgUserId) return null;
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        id,
+        client_id,
+        tg_user_id,
+        olx_user_id,
+        access_token,
+        refresh_token,
+        token_type,
+        scope,
+        expires_at,
+        updated_at
+      FROM olx_integrations
+      WHERE client_id = $1
+        AND tg_user_id = $2
+      LIMIT 1
+      `,
+      [resolvedClientId, normalizedTgUserId]
+    );
+    return result.rows?.[0] || null;
+  } catch (error) {
+    if (error?.code === '42P01') return null;
+    throw error;
+  }
+}

@@ -146,7 +146,8 @@ app.get('/', (req, res) => {
       audio_stats: 'GET /api/audio/stats',
       olx_connect: 'GET /api/olx/connect',
       olx_callback: 'GET /api/olx/callback',
-      olx_status: 'GET /api/olx/status'
+      olx_status: 'GET /api/olx/status',
+      olx_sync: 'POST /api/olx/sync'
     },
     features: [
       'Whisper speech-to-text',

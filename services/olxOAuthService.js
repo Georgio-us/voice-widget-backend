@@ -179,19 +179,21 @@ export async function exchangeCodeForTokens(code) {
     throw new Error('MISSING_AUTHORIZATION_CODE');
   }
 
-  const body = new URLSearchParams();
-  body.set('grant_type', 'authorization_code');
-  body.set('code', normalizedCode);
-  body.set('client_id', config.clientId);
-  body.set('client_secret', config.clientSecret);
-  body.set('redirect_uri', config.redirectUri);
+  const body = {
+    grant_type: 'authorization_code',
+    code: normalizedCode,
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    redirect_uri: config.redirectUri,
+    ...(config.scopes ? { scope: config.scopes } : {})
+  };
 
   const response = await fetch(config.tokenUrl, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded'
+      'Content-Type': 'application/json'
     },
-    body: body.toString()
+    body: JSON.stringify(body)
   });
 
   const responseText = await response.text();
@@ -205,6 +207,47 @@ export async function exchangeCodeForTokens(code) {
   if (!response.ok) {
     const details = parsed?.error_description || parsed?.error || responseText || `HTTP_${response.status}`;
     throw new Error(`OLX_TOKEN_EXCHANGE_FAILED:${details}`);
+  }
+
+  return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+export async function refreshAccessToken(refreshToken) {
+  const { config, missing } = getOlxConfig();
+  if (missing.length) {
+    throw new Error(`OLX_CONFIG_MISSING:${missing.join(',')}`);
+  }
+  const normalizedRefreshToken = normalize(refreshToken);
+  if (!normalizedRefreshToken) {
+    throw new Error('MISSING_REFRESH_TOKEN');
+  }
+
+  const body = {
+    grant_type: 'refresh_token',
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    refresh_token: normalizedRefreshToken
+  };
+
+  const response = await fetch(config.tokenUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+
+  const responseText = await response.text();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(responseText);
+  } catch {
+    parsed = null;
+  }
+
+  if (!response.ok) {
+    const details = parsed?.error_description || parsed?.error || responseText || `HTTP_${response.status}`;
+    throw new Error(`OLX_TOKEN_REFRESH_FAILED:${details}`);
   }
 
   return parsed && typeof parsed === 'object' ? parsed : {};

@@ -11,6 +11,7 @@ import {
   getOlxIntegrationStatus,
   upsertOlxIntegration
 } from '../services/olxIntegrationRepository.js';
+import { syncOlxAdvertsForAdmin } from '../services/olxImportService.js';
 
 const router = express.Router();
 
@@ -148,6 +149,40 @@ router.get('/status', async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: 'INTERNAL_ERROR'
+    });
+  }
+});
+
+router.post('/sync', async (req, res) => {
+  try {
+    const tgUserId = normalize(req.query?.tgUserId || req.body?.tgUserId);
+    if (!isAdminTgUser(tgUserId)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'FORBIDDEN'
+      });
+    }
+
+    const clientId = resolveClientId(req.query?.clientId || req.body?.clientId);
+    const result = await syncOlxAdvertsForAdmin({ clientId, tgUserId });
+    return res.json({
+      ok: true,
+      clientId,
+      ...result
+    });
+  } catch (error) {
+    console.error('❌ /api/olx/sync error:', error);
+    const message = String(error?.message || '');
+    if (message === 'OLX_NOT_CONNECTED') {
+      return res.status(400).json({
+        ok: false,
+        error: 'OLX_NOT_CONNECTED'
+      });
+    }
+    return res.status(500).json({
+      ok: false,
+      error: 'OLX_SYNC_FAILED',
+      details: message || 'unknown_error'
     });
   }
 });
