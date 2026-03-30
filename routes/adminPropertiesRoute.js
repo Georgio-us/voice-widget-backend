@@ -13,7 +13,12 @@ const router = express.Router();
 
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
 const MAX_IMAGES = 5;
-const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+const IMAGE_WARN_SIZE_MB = (() => {
+  const parsed = Number(String(process.env.ADMIN_WARN_IMAGE_MB || '').trim());
+  if (!Number.isFinite(parsed) || parsed <= 0) return 5;
+  return Math.max(1, Math.min(50, Math.round(parsed)));
+})();
+const IMAGE_WARN_SIZE_BYTES = IMAGE_WARN_SIZE_MB * 1024 * 1024;
 const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 const normalizeId = (v) => String(v || '').trim();
@@ -33,7 +38,7 @@ const resolveAccess = (tgUserIdRaw) => {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { files: MAX_IMAGES, fileSize: MAX_IMAGE_SIZE_BYTES },
+  limits: { files: MAX_IMAGES },
   fileFilter: (req, file, cb) => {
     if (ALLOWED_IMAGE_MIME.has(String(file.mimetype || '').toLowerCase())) return cb(null, true);
     cb(new Error('UNSUPPORTED_IMAGE_MIME'));
@@ -44,7 +49,6 @@ const uploadImages = (req, res, next) => {
   upload.array('images', MAX_IMAGES)(req, res, (err) => {
     if (!err) return next();
     if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ ok: false, error: 'IMAGE_TOO_LARGE_MAX_5MB' });
       if (err.code === 'LIMIT_FILE_COUNT') return res.status(400).json({ ok: false, error: 'TOO_MANY_IMAGES_MAX_5' });
       return res.status(400).json({ ok: false, error: 'UPLOAD_VALIDATION_ERROR', code: err.code });
     }
@@ -127,6 +131,21 @@ const toStringArray = (value) => {
   return single ? [single] : [];
 };
 
+const logImageSizes = (files = [], routeTag = 'create') => {
+  if (!Array.isArray(files) || !files.length) return;
+  files.forEach((file, idx) => {
+    const sizeBytes = Number(file?.size || 0);
+    const sizeMb = sizeBytes / (1024 * 1024);
+    const name = String(file?.originalname || `image_${idx + 1}`).slice(0, 120);
+    const mime = String(file?.mimetype || '').slice(0, 60);
+    if (sizeBytes > IMAGE_WARN_SIZE_BYTES) {
+      console.warn(`⚠️ [admin:${routeTag}] large image accepted: #${idx + 1} "${name}" ${sizeMb.toFixed(2)}MB ${mime}`);
+    } else {
+      console.log(`🖼️ [admin:${routeTag}] image: #${idx + 1} "${name}" ${sizeMb.toFixed(2)}MB ${mime}`);
+    }
+  });
+};
+
 router.get('/properties/:externalId', requireAdmin, async (req, res) => {
   try {
     const externalId = String(req.params?.externalId || '').trim();
@@ -163,6 +182,7 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
     const furnished = false;
 
     const files = Array.isArray(req.files) ? req.files : [];
+    logImageSizes(files, 'create');
     const now = Date.now();
     const uploadedUrls = [];
     for (let i = 0; i < files.length; i += 1) {
@@ -245,6 +265,7 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
     const furnished = false;
 
     const files = Array.isArray(req.files) ? req.files : [];
+    logImageSizes(files, 'update');
     const now = Date.now();
     const uploadedUrls = [];
     for (let i = 0; i < files.length; i += 1) {
