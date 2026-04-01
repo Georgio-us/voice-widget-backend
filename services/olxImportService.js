@@ -43,7 +43,7 @@ function mapAdvertToProperty(advert = {}, clientId) {
   const status = normalize(advert?.status).toLowerCase();
   const images = extractImages(advert);
   const priceAmount = toNumber(advert?.price?.value);
-  const priceCurrency = normalize(advert?.price?.currency) || 'UAH';
+  const priceCurrency = normalize(advert?.price?.currency) || 'USD';
   const attributes = Array.isArray(advert?.attributes) ? advert.attributes : [];
 
   const rooms = pickAttributeNumber(attributes, ['rooms', 'number_of_rooms', 'bedrooms']);

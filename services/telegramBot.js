@@ -78,7 +78,7 @@ function parseImages(rawImages) {
 
 function formatPriceLabel(raw) {
   const num = Number(raw);
-  if (Number.isFinite(num) && num > 0) return `${Math.round(num).toLocaleString('en-US')} UAH`;
+  if (Number.isFinite(num) && num > 0) return `${Math.round(num).toLocaleString('en-US')} USD`;
   const text = String(raw || '').trim();
   return text || 'Price on request';
 }

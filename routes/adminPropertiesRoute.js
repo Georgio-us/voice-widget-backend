@@ -93,6 +93,12 @@ const toBool = (value) => {
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
 };
 
+const normalizeListingOperation = (value) => {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (raw === 'rent') return 'rent';
+  return 'sale';
+};
+
 const requireR2Config = () => {
   const cfg = {
     accountId: process.env.R2_ACCOUNT_ID,
@@ -170,6 +176,7 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
     const title = String(req.body?.title || '').trim();
     const description = String(req.body?.description || '').trim();
     const propertyType = String(req.body?.propertyType || 'apartment').trim().toLowerCase();
+    const operation = normalizeListingOperation(req.body?.operation);
     const district = String(req.body?.district || '').trim();
     const microdistrict = String(req.body?.microdistrict || '').trim();
     const rooms = normalizeRooms(req.body?.rooms);
@@ -202,6 +209,7 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
 
     const created = await createManualProperty({
       mode,
+      operation,
       title,
       description,
       property_type: propertyType,
@@ -253,6 +261,7 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
     const title = String(req.body?.title || '').trim();
     const description = String(req.body?.description || '').trim();
     const propertyType = String(req.body?.propertyType || 'apartment').trim().toLowerCase();
+    const operation = normalizeListingOperation(req.body?.operation);
     const district = String(req.body?.district || '').trim();
     const microdistrict = String(req.body?.microdistrict || '').trim();
     const rooms = normalizeRooms(req.body?.rooms);
@@ -289,6 +298,7 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
       externalId,
       {
         mode,
+        operation,
         title,
         description,
         property_type: propertyType,

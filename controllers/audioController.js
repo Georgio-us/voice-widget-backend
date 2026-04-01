@@ -802,8 +802,8 @@ const detectBudgetCurrency = (text = '') => {
   const s = String(text || '').toLowerCase();
   if (/\b(uah|грн|гривн|гривня|гривні|гривен)\b/.test(s) || /₴/.test(s)) return 'UAH';
   if (/(\$|\busd\b|\bdollar\b|\bdollars\b|доллар|доллара|долларов)/.test(s)) return 'USD';
-  // UA market default
-  return 'UAH';
+  // Каталог и новые объекты — USD; гривня только если явно в тексте
+  return 'USD';
 };
 
 const formatCardForClient = (req, p) => {
@@ -823,7 +823,7 @@ const formatCardForClient = (req, p) => {
     operation: p.operation ?? null,
     property_type: p.property_type ?? null,
     // Правые поля (основные цифры)
-    price: formattedPrice ? `${formattedPrice} UAH` : null,
+    price: formattedPrice ? `${formattedPrice} USD` : null,
     priceEUR: p.priceEUR ?? p?.price?.amount ?? null,
     rooms: p.rooms ?? p?.specs?.rooms ?? null,
     floor: p.floor ?? p?.specs?.floor ?? null,
@@ -1376,9 +1376,9 @@ const formatBudgetFromRange = (min, max) => {
   const maxNum = normalizeNumber(max);
   const minFormatted = formatNumberUS(minNum);
   const maxFormatted = formatNumberUS(maxNum);
-  if (minFormatted && maxFormatted) return `${minFormatted}–${maxFormatted} UAH`;
-  if (!minFormatted && maxFormatted) return `до ${maxFormatted} UAH`;
-  if (minFormatted && !maxFormatted) return `от ${minFormatted} UAH`;
+  if (minFormatted && maxFormatted) return `${minFormatted}–${maxFormatted} USD`;
+  if (!minFormatted && maxFormatted) return `до ${maxFormatted} USD`;
+  if (minFormatted && !maxFormatted) return `от ${minFormatted} USD`;
   return null;
 };
 
