@@ -1,7 +1,8 @@
 import express from 'express';
 import {
   listResidentialComplexes,
-  insertResidentialComplex
+  insertResidentialComplex,
+  deleteResidentialComplex
 } from '../services/residentialComplexesRepository.js';
 
 const router = express.Router();
@@ -84,6 +85,27 @@ router.post('/residential-complexes', requireAdmin, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'NAME_TOO_LONG' });
     }
     console.error('POST /api/admin/residential-complexes:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
+
+router.delete('/residential-complexes/:id', requireAdmin, async (req, res) => {
+  try {
+    if (!SERVICE_CLIENT_ID) {
+      return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
+    }
+    const idRaw = String(req.params?.id ?? '').trim();
+    const { deleted } = await deleteResidentialComplex(SERVICE_CLIENT_ID, idRaw);
+    if (!deleted) {
+      return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+    }
+    return res.json({ ok: true, deleted: true });
+  } catch (error) {
+    const msg = String(error?.message || '');
+    if (msg === 'INVALID_ID') {
+      return res.status(400).json({ ok: false, error: 'INVALID_ID' });
+    }
+    console.error('DELETE /api/admin/residential-complexes/:id:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
 });

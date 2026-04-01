@@ -102,3 +102,22 @@ export async function insertResidentialComplex(clientId, rawName, createdByTgUse
   }
   return { item: rows[0], existed: true };
 }
+
+/**
+ * Удаление ЖК из справочника клиента (только эта строка в БД).
+ */
+export async function deleteResidentialComplex(clientId, rawId) {
+  const safeClientId = resolveClientId(clientId);
+  const id = Number(rawId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error('INVALID_ID');
+  }
+  const { rowCount } = await pool.query(
+    `
+    DELETE FROM client_residential_complexes
+    WHERE client_id = $1 AND id = $2
+    `,
+    [safeClientId, id]
+  );
+  return { deleted: Number(rowCount || 0) > 0 };
+}
