@@ -204,6 +204,7 @@ router.get('/search', async (req, res) => {
       district,
       rooms,
       type,
+      operation,
       minPrice,
       maxPrice,
       minArea,
@@ -214,6 +215,10 @@ router.get('/search', async (req, res) => {
       arcadia,
       rcOnly,
       residentialComplex,
+      exclusive,
+      center,
+      parking,
+      balconyLoggia,
       limit = 10
     } = req.query;
 
@@ -233,6 +238,10 @@ router.get('/search', async (req, res) => {
     const onlyArcadia = toBool(arcadia);
     const onlyRc = toBool(rcOnly);
     const rcNeedle = normalizeText(residentialComplex);
+    const onlyExclusive = toBool(exclusive);
+    const onlyCenter = toBool(center);
+    const onlyParking = toBool(parking);
+    const onlyBalconyLoggia = toBool(balconyLoggia);
 
     // Берём все объекты клиента из CLIENT_ID env
     const rawList = await getAllProperties();
@@ -254,7 +263,15 @@ router.get('/search', async (req, res) => {
       list = list.filter(p => p.property_type === t);
     }
 
-    if (String(rooms || '').trim() === '4plus') {
+    if (operation) {
+      const want = normalizeText(operation);
+      list = list.filter((p) => normalizeText(p.operation) === want);
+    }
+
+    const roomsStr = String(rooms || '').trim();
+    if (roomsStr === '5plus') {
+      list = list.filter((p) => Number(p.rooms) >= 5);
+    } else if (roomsStr === '4plus') {
       list = list.filter((p) => Number(p.rooms) >= 4);
     } else if (r != null) {
       list = list.filter((p) => Number(p.rooms) === r);
@@ -290,6 +307,22 @@ router.get('/search', async (req, res) => {
 
     if (onlyArcadia) {
       list = list.filter((p) => hasToken(p.neighborhood, 'аркад') || hasToken(p.address, 'аркад') || hasToken(p.title, 'аркад') || hasToken(p.description, 'аркад') || hasToken(p.neighborhood, 'arcad') || hasToken(p.address, 'arcad'));
+    }
+
+    if (onlyExclusive) {
+      list = list.filter((p) => hasToken(p.title, 'эксклюзив') || hasToken(p.description, 'эксклюзив') || hasToken(p.title, 'exclusive') || hasToken(p.description, 'exclusive'));
+    }
+
+    if (onlyCenter) {
+      list = list.filter((p) => hasToken(p.neighborhood, 'центр') || hasToken(p.address, 'центр') || hasToken(p.title, 'центр') || hasToken(p.description, 'центр'));
+    }
+
+    if (onlyParking) {
+      list = list.filter((p) => hasToken(p.title, 'паркинг') || hasToken(p.description, 'паркинг') || hasToken(p.title, 'parking') || hasToken(p.description, 'parking'));
+    }
+
+    if (onlyBalconyLoggia) {
+      list = list.filter((p) => p.balcony === true || hasToken(p.title, 'балкон') || hasToken(p.description, 'балкон') || hasToken(p.title, 'лодж') || hasToken(p.description, 'лодж'));
     }
 
     if (onlyRc) {
