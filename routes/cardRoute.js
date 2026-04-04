@@ -134,7 +134,7 @@ const normalizeProperty = (p) => {
   const terrace = toBool(p.specs?.terrace ?? feat.terrace ?? p.specs_terrace);
 
   // ---------- price ----------
-  const priceEUR = toInt(
+  const priceUSD = toInt(
     p.price?.amount ??
     p.price_amount ??
     p.priceEUR
@@ -174,7 +174,11 @@ const normalizeProperty = (p) => {
     terrace,
 
     // price
-    priceEUR,
+    // Keep legacy key names for slider compatibility:
+    // `priceEUR` historically used by UI, while values are now normalized to USD.
+    priceEUR: priceUSD,
+    price_amount: priceUSD,
+    price_usd: priceUSD,
     price_per_m2,
 
     // texts
@@ -184,10 +188,12 @@ const normalizeProperty = (p) => {
     // images
     images,
 
-    // raw features subset for advanced filters
+    // full normalized features payload (preserve existing keys + pass through group2 display specs)
     features: {
+      ...feat,
       smartFlat: feat.smartFlat === true,
-      complex: toText(feat.complex)
+      complex: toText(feat.complex),
+      display_specs: toJsonObject(feat.display_specs) || null
     }
   };
 };

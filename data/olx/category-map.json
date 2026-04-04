@@ -1,0 +1,16 @@
+{
+  "by_category_id": {},
+  "defaults": {
+    "operation": "sale",
+    "property_type": "apartment"
+  },
+  "room_slug_to_number": {
+    "odnokomnatnye": 1,
+    "dvuhkomnatnye": 2,
+    "trehkomnatnye": 3,
+    "chetyrehkomnatnye": 4,
+    "pyatikomnatnye": 5,
+    "6_i_bolee": 6,
+    "studio": 1
+  }
+}
