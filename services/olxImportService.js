@@ -142,13 +142,37 @@ const getAttrEntry = (attrsIndex, codes = []) => {
   return null;
 };
 
+const extractAttrPrimitive = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const text = normalize(value);
+    return text || null;
+  }
+  if (typeof value === 'object') {
+    const candidates = [
+      value?.value,
+      value?.key,
+      value?.id,
+      value?.slug,
+      value?.code,
+      value?.label,
+      value?.name
+    ];
+    for (const candidate of candidates) {
+      const text = normalize(candidate);
+      if (text) return text;
+    }
+  }
+  return null;
+};
+
 const getAttrText = (attrsIndex, codes = []) => {
   const entry = getAttrEntry(attrsIndex, codes);
   if (!entry) return null;
-  const direct = normalize(entry.value);
+  const direct = extractAttrPrimitive(entry.value);
   if (direct) return direct;
   if (Array.isArray(entry.values) && entry.values.length) {
-    const first = normalize(entry.values[0]);
+    const first = extractAttrPrimitive(entry.values[0]);
     return first || null;
   }
   return null;
@@ -158,11 +182,11 @@ const getAttrList = (attrsIndex, codes = []) => {
   const entry = getAttrEntry(attrsIndex, codes);
   if (!entry) return [];
   const out = [];
-  const single = normalize(entry.value);
+  const single = extractAttrPrimitive(entry.value);
   if (single) out.push(single);
   if (Array.isArray(entry.values)) {
     for (const value of entry.values) {
-      const v = normalize(value);
+      const v = extractAttrPrimitive(value);
       if (v) out.push(v);
     }
   }
