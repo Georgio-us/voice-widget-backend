@@ -9,7 +9,7 @@
     "3681": { "operation": "sale", "property_type": "commercial" },
     "3684": { "operation": "sale", "property_type": "commercial" },
     "3686": { "operation": "sale", "property_type": "commercial" },
-    "3688": { "operation": "rent", "property_type": "commercial" },
+    "3688": { "operation": "sale", "property_type": "commercial" },
     "3690": { "operation": "rent", "property_type": "commercial" },
     "3692": { "operation": "rent", "property_type": "commercial" },
     "3701": { "operation": "rent", "property_type": "commercial" }
