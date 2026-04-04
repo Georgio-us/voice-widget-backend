@@ -1,5 +1,19 @@
 {
-  "by_category_id": {},
+  "by_category_id": {
+    "21": { "operation": "sale", "property_type": "parking" },
+    "330": { "operation": "rent", "property_type": "house" },
+    "1602": { "operation": "sale", "property_type": "house" },
+    "1608": { "operation": "sale", "property_type": "land" },
+    "1758": { "operation": "sale", "property_type": "apartment" },
+    "1760": { "operation": "rent", "property_type": "apartment" },
+    "3681": { "operation": "sale", "property_type": "commercial" },
+    "3684": { "operation": "sale", "property_type": "commercial" },
+    "3686": { "operation": "sale", "property_type": "commercial" },
+    "3688": { "operation": "rent", "property_type": "commercial" },
+    "3690": { "operation": "rent", "property_type": "commercial" },
+    "3692": { "operation": "rent", "property_type": "commercial" },
+    "3701": { "operation": "rent", "property_type": "commercial" }
+  },
   "defaults": {
     "operation": "sale",
     "property_type": "apartment"

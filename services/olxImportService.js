@@ -92,11 +92,6 @@ const OLX_PARTNER_BASE = () =>
 
 const ACTIVE_STATUSES = new Set(['new', 'active', 'limited', 'unconfirmed', 'unpaid', 'moderated']);
 
-const DEFAULTS = {
-  operation: normalize(CATEGORY_CONFIG?.defaults?.operation).toLowerCase() || 'sale',
-  propertyType: normalize(CATEGORY_CONFIG?.defaults?.property_type).toLowerCase() || 'apartment'
-};
-
 const ROOM_SLUG_TO_NUMBER = CATEGORY_CONFIG?.room_slug_to_number && typeof CATEGORY_CONFIG.room_slug_to_number === 'object'
   ? CATEGORY_CONFIG.room_slug_to_number
   : {};
@@ -381,33 +376,52 @@ const resolveCityName = (location = {}) => {
 };
 
 const resolveCategoryMapping = (advert = {}, attrsIndex) => {
+  const normalizeOperation = (value) => {
+    const raw = normalize(value).toLowerCase();
+    if (!raw) return null;
+    if (raw === 'rent') return 'rent';
+    if (raw === 'sale') return 'sale';
+    return null;
+  };
+  const normalizePropertyType = (value) => {
+    const raw = normalize(value).toLowerCase();
+    if (!raw) return null;
+    if (['apartment', 'house', 'commercial', 'land', 'parking'].includes(raw)) return raw;
+    return null;
+  };
+  const resolveOperationFromAttrs = () => {
+    const contractTokens = getAttrList(attrsIndex, ['contract_type'])
+      .join(' ')
+      .toLowerCase();
+    if (!contractTokens) return null;
+    if (containsAnyToken(contractTokens, [/rent/, /lease/, /оренд/, /аренд/, /долгоср/, /long[_\s-]?term/, /monthly/, /daily/])) {
+      return 'rent';
+    }
+    if (containsAnyToken(contractTokens, [/sale/, /sell/, /продаж/, /купл/, /buy/])) {
+      return 'sale';
+    }
+    return null;
+  };
+  const resolvePropertyTypeFromAttrs = () => {
+    if (getAttrText(attrsIndex, ['property_type_houses'])) return 'house';
+    if (getAttrText(attrsIndex, ['property_type_land'])) return 'land';
+    if (getAttrText(attrsIndex, ['property_type_parking', 'garage_type'])) return 'parking';
+    if (getAttrText(attrsIndex, ['comm_re_object_type', 'comm_re_type', 'office_type', 'comm_re_location'])) {
+      return 'commercial';
+    }
+    if (getAttrText(attrsIndex, ['apartments_object_type', 'apartments_dev_type'])) return 'apartment';
+    return null;
+  };
+
   const categoryId = advert?.category_id;
   const mapValue = categoryId != null
     ? getCfgMapValue(CATEGORY_CONFIG?.by_category_id, String(categoryId))
     : null;
 
-  let operation = normalize(mapValue?.operation).toLowerCase();
-  let propertyType = normalize(mapValue?.property_type).toLowerCase();
-
-  const fullText = `${normalize(advert?.title)} ${normalize(advert?.description)}`.toLowerCase();
-  const contractType = getAttrList(attrsIndex, ['contract_type']).join(' ').toLowerCase();
-
-  if (!operation) {
-    const isRent =
-      containsAnyToken(fullText, [/\brent\b/, /аренд/, /оренд/, /сдам/]) ||
-      containsAnyToken(contractType, [/rent/, /lease/]);
-    operation = isRent ? 'rent' : DEFAULTS.operation;
-  }
-
-  if (!propertyType) {
-    if (getAttrText(attrsIndex, ['property_type_houses'])) {
-      propertyType = 'house';
-    } else if (containsAnyToken(fullText, [/коммерц/, /commercial/, /office/, /shop/, /склад/])) {
-      propertyType = 'commercial';
-    } else {
-      propertyType = DEFAULTS.propertyType;
-    }
-  }
+  // Deterministic order only: category map -> explicit OLX attributes.
+  // No title/description heuristics for operation/property type.
+  const operation = normalizeOperation(mapValue?.operation) || resolveOperationFromAttrs();
+  const propertyType = normalizePropertyType(mapValue?.property_type) || resolvePropertyTypeFromAttrs();
 
   return {
     operation,
