@@ -142,11 +142,19 @@ const getAttrEntry = (attrsIndex, codes = []) => {
   return null;
 };
 
-const extractAttrPrimitive = (value) => {
+const extractAttrPrimitive = (value, depth = 0) => {
   if (value === null || value === undefined) return null;
+  if (depth > 4) return null;
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
     const text = normalize(value);
     return text || null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const extracted = extractAttrPrimitive(item, depth + 1);
+      if (extracted) return extracted;
+    }
+    return null;
   }
   if (typeof value === 'object') {
     const candidates = [
@@ -159,8 +167,8 @@ const extractAttrPrimitive = (value) => {
       value?.name
     ];
     for (const candidate of candidates) {
-      const text = normalize(candidate);
-      if (text) return text;
+      const extracted = extractAttrPrimitive(candidate, depth + 1);
+      if (extracted) return extracted;
     }
   }
   return null;
