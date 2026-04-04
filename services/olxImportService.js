@@ -124,22 +124,32 @@ const buildAttributesIndex = (attributes = []) => {
     if (!code) continue;
     const value = attr?.value;
     const values = Array.isArray(attr?.values) ? attr.values : [];
-    map.set(code, {
+    const entry = {
       code,
       value,
       values
-    });
+    };
+    const bucket = map.get(code);
+    if (bucket) {
+      bucket.push(entry);
+    } else {
+      map.set(code, [entry]);
+    }
   }
   return map;
 };
 
-const getAttrEntry = (attrsIndex, codes = []) => {
+const getAttrEntries = (attrsIndex, codes = []) => {
+  const out = [];
   for (const code of codes) {
     const key = normalize(code).toLowerCase();
     if (!key) continue;
-    if (attrsIndex.has(key)) return attrsIndex.get(key);
+    const entries = attrsIndex.get(key);
+    if (Array.isArray(entries) && entries.length) {
+      out.push(...entries);
+    }
   }
-  return null;
+  return out;
 };
 
 const extractAttrPrimitive = (value, depth = 0) => {
@@ -175,30 +185,34 @@ const extractAttrPrimitive = (value, depth = 0) => {
 };
 
 const getAttrText = (attrsIndex, codes = []) => {
-  const entry = getAttrEntry(attrsIndex, codes);
-  if (!entry) return null;
-  const direct = extractAttrPrimitive(entry.value);
-  if (direct) return direct;
-  if (Array.isArray(entry.values) && entry.values.length) {
-    const first = extractAttrPrimitive(entry.values[0]);
-    return first || null;
+  const entries = getAttrEntries(attrsIndex, codes);
+  for (const entry of entries) {
+    const direct = extractAttrPrimitive(entry.value);
+    if (direct) return direct;
+    if (Array.isArray(entry.values) && entry.values.length) {
+      for (const item of entry.values) {
+        const extracted = extractAttrPrimitive(item);
+        if (extracted) return extracted;
+      }
+    }
   }
   return null;
 };
 
 const getAttrList = (attrsIndex, codes = []) => {
-  const entry = getAttrEntry(attrsIndex, codes);
-  if (!entry) return [];
   const out = [];
-  const single = extractAttrPrimitive(entry.value);
-  if (single) out.push(single);
-  if (Array.isArray(entry.values)) {
-    for (const value of entry.values) {
-      const v = extractAttrPrimitive(value);
-      if (v) out.push(v);
+  const entries = getAttrEntries(attrsIndex, codes);
+  for (const entry of entries) {
+    const single = extractAttrPrimitive(entry.value);
+    if (single) out.push(single);
+    if (Array.isArray(entry.values)) {
+      for (const value of entry.values) {
+        const v = extractAttrPrimitive(value);
+        if (v) out.push(v);
+      }
     }
   }
-  return out;
+  return [...new Set(out)];
 };
 
 const compactObject = (obj = {}) => {
