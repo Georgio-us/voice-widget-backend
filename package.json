@@ -19,6 +19,7 @@
     "dev": "nodemon index.js",
     "analyze:olx-attributes": "node scripts/analyzeOlxRawAttributes.js",
     "diagnose:olx-coverage": "node scripts/diagnoseOlxCoverage.js",
+    "backfill:olx": "node scripts/backfillOlxFromRaw.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
