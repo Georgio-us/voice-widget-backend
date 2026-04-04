@@ -4,11 +4,11 @@ import { normalizeOlxAdvert } from '../services/olxImportService.js';
 
 const BATCH_SIZE = Number(process.env.OLX_BACKFILL_BATCH_SIZE || 200);
 const DRY_RUN = String(process.env.OLX_BACKFILL_DRY_RUN || '').toLowerCase() === 'true';
-const toIntOrNull = (value) => {
+const toNumberOrNull = (value) => {
   if (value === null || value === undefined) return null;
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
-  return Math.round(n);
+  return n;
 };
 
 const parseRaw = (raw) => {
@@ -68,7 +68,7 @@ async function updatePropertyFromMapped(id, mapped) {
       mapped.address,
       mapped.buildingFloors,
       mapped.rooms,
-      toIntOrNull(mapped.areaM2),
+      toNumberOrNull(mapped.areaM2),
       mapped.floor,
       mapped.hasBalcony,
       mapped.title,

@@ -53,6 +53,13 @@ const normalizeProperty = (p) => {
     const n = parseInt(s, 10);
     return Number.isFinite(n) ? n : null;
   };
+  const toNumber = (v) => {
+    if (v === undefined || v === null) return null;
+    const s = String(v).trim();
+    if (!s || s.toLowerCase() === 'null') return null;
+    const n = Number(s.replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  };
 
   const toBool = (v) => {
     if (v === undefined || v === null) return null;
@@ -128,7 +135,7 @@ const normalizeProperty = (p) => {
   // ---------- specs ----------
   const rooms = toInt(p.specs?.rooms ?? feat.rooms ?? p.specs_rooms);
   const bathrooms = toInt(p.specs?.bathrooms ?? feat.bathrooms ?? p.specs_bathrooms);
-  const area_m2 = toInt(p.specs?.area_m2 ?? feat.areaM2 ?? p.specs_area_m2);
+  const area_m2 = toNumber(p.specs?.area_m2 ?? feat.areaM2 ?? p.specs_area_m2);
   const floor = toInt(p.specs?.floor ?? feat.floor ?? p.specs_floor);
   const balcony = toBool(p.specs?.balcony ?? feat.balcony ?? p.specs_balcony);
   const terrace = toBool(p.specs?.terrace ?? feat.terrace ?? p.specs_terrace);
@@ -229,6 +236,11 @@ router.get('/search', async (req, res) => {
     } = req.query;
 
     const toInt = (v) => (v == null ? null : parseInt(String(v), 10));
+    const toNumber = (v) => {
+      if (v == null) return null;
+      const n = Number(String(v).replace(',', '.'));
+      return Number.isFinite(n) ? n : null;
+    };
     const toBool = (v) => {
       const raw = normalizeText(v);
       return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
@@ -236,8 +248,8 @@ router.get('/search', async (req, res) => {
     const min = toInt(minPrice);
     const max = toInt(maxPrice);
     const r = toInt(rooms);
-    const areaMin = toInt(minArea);
-    const areaMax = toInt(maxArea);
+    const areaMin = toNumber(minArea);
+    const areaMax = toNumber(maxArea);
     const floorMin = toInt(minFloor);
     const floorMax = toInt(maxFloor);
     const onlySmart = toBool(smart);

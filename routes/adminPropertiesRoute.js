@@ -80,6 +80,13 @@ const parseIntSafe = (value) => {
   const n = Number.parseInt(String(value ?? '').trim(), 10);
   return Number.isFinite(n) ? n : null;
 };
+const parseDecimalSafe = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const normalized = raw.replace(',', '.').replace(/[^\d.-]/g, '');
+  const n = Number.parseFloat(normalized);
+  return Number.isFinite(n) ? n : null;
+};
 
 const normalizeRooms = (value) => {
   const raw = String(value ?? '').trim();
@@ -182,7 +189,7 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
     const rooms = normalizeRooms(req.body?.rooms);
     const floor = parseIntSafe(req.body?.floor);
     const floorsTotal = parseIntSafe(req.body?.floorsTotal);
-    const area = parseIntSafe(String(req.body?.area || '').replace(/[^\d]/g, ''));
+    const area = parseDecimalSafe(req.body?.area);
     const price = parseIntSafe(String(req.body?.price || '').replace(/[^\d]/g, ''));
     const balcony = toBool(req.body?.balcony);
     const terrace = toBool(req.body?.terrace);
@@ -267,7 +274,7 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
     const rooms = normalizeRooms(req.body?.rooms);
     const floor = parseIntSafe(req.body?.floor);
     const floorsTotal = parseIntSafe(req.body?.floorsTotal);
-    const area = parseIntSafe(String(req.body?.area || '').replace(/[^\d]/g, ''));
+    const area = parseDecimalSafe(req.body?.area);
     const price = parseIntSafe(String(req.body?.price || '').replace(/[^\d]/g, ''));
     const balcony = toBool(req.body?.balcony);
     const terrace = toBool(req.body?.terrace);
