@@ -353,6 +353,17 @@ const resolveDistrictName = (location = {}, attrsIndex) => {
 
   const fromAttrs = getAttrText(attrsIndex, ['district', 'district_name', 'raion', 'rayon']);
   if (fromAttrs) return fromAttrs;
+
+  // Deterministic fallback for OLX locations where district_id is missing
+  // but city_id points to a known suburb/locality.
+  const cityId = location?.city_id;
+  const byCityId = cityId != null
+    ? getCfgMapValue(DISTRICT_CONFIG?.by_city_id, String(cityId))
+    : null;
+  const normalizedCityDistrict = normalize(byCityId);
+  if (normalizedCityDistrict && !['одесса', 'odessa', 'odesa'].includes(normalizedCityDistrict.toLowerCase())) {
+    return normalizedCityDistrict;
+  }
   return null;
 };
 
