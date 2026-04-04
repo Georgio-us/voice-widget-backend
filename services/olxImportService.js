@@ -17,7 +17,11 @@ const normalize = (value) => String(value || '').trim();
 const toNumber = (value) => {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  const cleaned = String(value)
+  const raw = String(value).trim();
+  if (!raw) return null;
+  // Common formats from OLX attributes: "3/9", "80-90", "36,5"
+  const primaryChunk = raw.split('/')[0].split('-')[0];
+  const cleaned = String(primaryChunk)
     .trim()
     .replace(/,/g, '.')
     .replace(/[^\d.-]/g, '');
@@ -62,6 +66,12 @@ const CATEGORY_CONFIG = readJsonConfig('category-map.json', {
     chetyrehkomnatnye: 4,
     pyatikomnatnye: 5,
     '6_i_bolee': 6,
+    six_and_more: 6,
+    one_room: 1,
+    two_rooms: 2,
+    three_rooms: 3,
+    four_rooms: 4,
+    five_rooms: 5,
     studio: 1
   }
 });
@@ -170,30 +180,99 @@ const compactObject = (obj = {}) => {
 };
 
 const parseRooms = (attrsIndex) => {
-  const directNumber = toInt(getAttrText(attrsIndex, ['number_of_rooms', 'rooms', 'bedrooms']));
-  const roomsSlug = normalize(getAttrText(attrsIndex, ['number_of_rooms_string'])).toLowerCase();
-  const fromSlug = roomsSlug ? toInt(ROOM_SLUG_TO_NUMBER[roomsSlug]) : null;
-  const layout = normalize(getAttrText(attrsIndex, ['layout'])).toLowerCase();
+  const directNumber = toInt(getAttrText(attrsIndex, [
+    'number_of_rooms',
+    'rooms',
+    'bedrooms',
+    'rooms_number',
+    'room_count'
+  ]));
 
-  let rooms = directNumber ?? fromSlug;
-  if (!rooms && layout === 'studio') rooms = 1;
-  return Number.isFinite(rooms) ? rooms : null;
+  const roomsSlugRaw = normalize(getAttrText(attrsIndex, [
+    'number_of_rooms_string',
+    'rooms_number_string',
+    'rooms_label'
+  ]));
+  const roomsSlug = roomsSlugRaw.toLowerCase();
+  const fromSlugMap = roomsSlug ? toInt(ROOM_SLUG_TO_NUMBER[roomsSlug]) : null;
+  const fromSlugDigits = (() => {
+    if (!roomsSlug) return null;
+    const m = roomsSlug.match(/(\d+)/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+
+  const layout = normalize(getAttrText(attrsIndex, ['layout'])).toLowerCase();
+  const layoutStudio = ['studio', 'студия', 'студія'].includes(layout);
+
+  const fromSlugWords = (() => {
+    if (!roomsSlug) return null;
+    if (/odn|одно|one|single|1/.test(roomsSlug)) return 1;
+    if (/dvuh|двух|dvu|дво|two|2/.test(roomsSlug)) return 2;
+    if (/treh|трех|tri|three|3/.test(roomsSlug)) return 3;
+    if (/chety|четыр|four|4/.test(roomsSlug)) return 4;
+    if (/pyat|пят|five|5/.test(roomsSlug)) return 5;
+    if (/6|six|bolee|more/.test(roomsSlug)) return 6;
+    return null;
+  })();
+
+  let rooms = directNumber ?? fromSlugMap ?? fromSlugDigits ?? fromSlugWords;
+  if (!rooms && layoutStudio) rooms = 1;
+  return Number.isFinite(rooms) && rooms > 0 ? rooms : null;
 };
 
 const parseAreaM2 = (attrsIndex) => {
-  const raw = getAttrText(attrsIndex, ['total_area', 'area', 'area_m2', 'm2']);
+  const raw = getAttrText(attrsIndex, [
+    'total_area',
+    'area',
+    'area_m2',
+    'm2',
+    'living_area',
+    'house_area',
+    'property_area',
+    'building_area'
+  ]);
   const value = toNumber(raw);
   return Number.isFinite(value) ? value : null;
 };
 
 const parseFloor = (attrsIndex) => {
-  const raw = getAttrText(attrsIndex, ['floor']);
+  const raw = getAttrText(attrsIndex, [
+    'floor',
+    'floor_number',
+    'floor_no',
+    'floor_num',
+    'storey'
+  ]);
   return toInt(raw);
 };
 
 const parseBuildingFloors = (attrsIndex) => {
   const raw = getAttrText(attrsIndex, ['total_floors', 'floors_total', 'building_floors', 'number_of_floors', 'storeys']);
   return toInt(raw);
+};
+
+const parseBathrooms = (attrsIndex) => {
+  const raw = getAttrText(attrsIndex, [
+    'bathroom',
+    'bathroom_3',
+    'bathroom_5'
+  ]);
+  const num = toInt(raw);
+  if (Number.isFinite(num) && num > 0) return num;
+  const bool = normalize(raw).toLowerCase();
+  if (['yes', 'true', '1', 'так', 'да'].includes(bool)) return 1;
+  return null;
+};
+
+const parseRepair = (attrsIndex) => {
+  const explicit = getAttrText(attrsIndex, ['repair']);
+  if (explicit) return explicit;
+  const repaired = normalize(getAttrText(attrsIndex, ['is_repaired'])).toLowerCase();
+  if (['yes', 'true', '1', 'так', 'да'].includes(repaired)) return 'repaired';
+  if (['no', 'false', '0', 'ні', 'нет'].includes(repaired)) return 'needs_repair';
+  return null;
 };
 
 const containsAnyToken = (text, regexList = []) => {
@@ -320,6 +399,7 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
   const rooms = parseRooms(attrsIndex);
   const areaM2 = parseAreaM2(attrsIndex);
   const floor = parseFloor(attrsIndex);
+  const bathrooms = parseBathrooms(attrsIndex);
   const buildingFloors = parseBuildingFloors(attrsIndex);
   const districtName = resolveDistrictName(location, attrsIndex);
   const neighborhood = resolveNeighborhood(attrsIndex);
@@ -330,7 +410,7 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
   const street = getAttrText(attrsIndex, ['street_address']) || normalize(location?.street) || null;
   const kitchenArea = toNumber(getAttrText(attrsIndex, ['kitchen_area']));
   const heating = getAttrText(attrsIndex, ['heating']);
-  const repair = getAttrText(attrsIndex, ['repair']);
+  const repair = parseRepair(attrsIndex);
   const infrastructure = getAttrList(attrsIndex, ['infrastructure_within_500_meters']).join(', ') || null;
   const landscape = getAttrList(attrsIndex, ['landscape_within_1_km']).join(', ') || null;
 
@@ -367,6 +447,7 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
     rooms,
     areaM2,
     floor,
+    bathrooms,
     balcony: hasBalcony,
     parking: hasParking,
     has_balcony: hasBalcony,
