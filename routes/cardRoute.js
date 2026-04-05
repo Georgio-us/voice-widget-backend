@@ -181,8 +181,8 @@ const normalizeProperty = (p) => {
     terrace,
 
     // price
-    // Keep legacy key names for slider compatibility:
-    // `priceEUR` historically used by UI, while values are now normalized to USD.
+    // Canonical price key is USD. Keep legacy aliases for backward compatibility.
+    priceUSD: priceUSD,
     priceEUR: priceUSD,
     price_amount: priceUSD,
     price_usd: priceUSD,
