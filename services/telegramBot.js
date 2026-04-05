@@ -7,6 +7,8 @@ const startMessage =
 const DEFAULT_FRONTEND_URL = '';
 const START_PREFIX = 'prop_';
 const INLINE_SHARE_PREFIX = 'share_prop_';
+const START_SELECTION_PREFIX = 'sel_';
+const INLINE_SHARE_SELECTION_PREFIX = 'share_sel_';
 const TELEGRAM_BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '');
 const VIA_LOGO_FALLBACK = String(process.env.VIA_LOGO_FALLBACK || '').trim();
 const BOT_CLIENT_ID = String(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID || 'demo').trim() || 'demo';
@@ -56,10 +58,48 @@ function parseInlineSharePropId(inlineQuery) {
   return propId || null;
 }
 
+function normalizeSelectionToken(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
+function parseInlineShareSelectionToken(inlineQuery) {
+  const query = String(inlineQuery || '').trim();
+  if (!query.toLowerCase().startsWith(INLINE_SHARE_SELECTION_PREFIX)) return null;
+  const raw = query.slice(INLINE_SHARE_SELECTION_PREFIX.length);
+  const token = normalizeSelectionToken(raw);
+  return token || null;
+}
+
+function decodeSelectionIds(token) {
+  const safe = normalizeSelectionToken(token);
+  if (!safe) return [];
+  const padded = safe.replace(/-/g, '+').replace(/_/g, '/');
+  const fixed = padded + '='.repeat((4 - (padded.length % 4 || 4)) % 4);
+  try {
+    const decoded = Buffer.from(fixed, 'base64').toString('utf8');
+    return Array.from(new Set(
+      String(decoded || '')
+        .split(',')
+        .map((id) => normalizePropId(id))
+        .filter(Boolean)
+    ));
+  } catch {
+    return [];
+  }
+}
+
 function buildMiniAppDeepLink(propId) {
   const id = normalizePropId(propId);
   if (!id || !TELEGRAM_BOT_USERNAME) return '';
   return `https://t.me/${TELEGRAM_BOT_USERNAME}/app?startapp=${encodeURIComponent(`${START_PREFIX}${id}`)}`;
+}
+
+function buildMiniAppSelectionDeepLink(token) {
+  const safeToken = normalizeSelectionToken(token);
+  if (!safeToken || !TELEGRAM_BOT_USERNAME) return '';
+  return `https://t.me/${TELEGRAM_BOT_USERNAME}/app?startapp=${encodeURIComponent(`${START_SELECTION_PREFIX}${safeToken}`)}`;
 }
 
 function parseImages(rawImages) {
@@ -185,11 +225,75 @@ export async function startTelegramBot() {
       const query = String(ctx.inlineQuery?.query || '').trim();
       console.log('Received inline query:', query);
       const propId = parseInlineSharePropId(query);
-      if (!propId) {
+      const selectionToken = parseInlineShareSelectionToken(query);
+      if (!propId && !selectionToken) {
         try {
           await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
         } catch (answerError) {
           console.warn('answerInlineQuery rejected (empty/no propId):', answerError?.response?.description || answerError?.message || answerError);
+        }
+        return;
+      }
+
+      if (selectionToken) {
+        const ids = decodeSelectionIds(selectionToken);
+        if (!ids.length) {
+          try {
+            await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });
+          } catch (answerError) {
+            console.warn('answerInlineQuery rejected (selection decode):', answerError?.response?.description || answerError?.message || answerError);
+          }
+          return;
+        }
+        const first = await getPropertyForInlineShare(ids[0]);
+        const total = ids.length;
+        const heading = `Подборка из ${total} объектов`;
+        const district = first?.district || first?.neighborhood || '';
+        const firstLine = first
+          ? `🏙 ${first.propertyType} ${district ? `• ${district}` : ''}`.trim()
+          : '🏙 Объекты недвижимости';
+        const messageText = [
+          'Здравствуйте! Делюсь подборкой, которая может быть вам интересна.',
+          `📌 ${heading}`,
+          firstLine
+        ].join('\n');
+        const miniAppDeepLink = buildMiniAppSelectionDeepLink(selectionToken);
+        const imageUrl = isValidPublicImageUrl(first?.image) ? first.image : '';
+        const openUrl = miniAppDeepLink || miniAppUrl || '';
+        const maybeReplyMarkup = openUrl
+          ? {
+              inline_keyboard: [
+                [{ text: 'Смотреть подборку', url: openUrl }]
+              ]
+            }
+          : undefined;
+        const result = imageUrl
+          ? {
+              type: 'photo',
+              id: `share_sel_photo_${selectionToken.slice(0, 24)}_${Date.now()}`,
+              photo_url: imageUrl,
+              thumbnail_url: imageUrl,
+              title: `🏘 ${heading}`,
+              description: district ? `${district} • ${total} объектов` : `${total} объектов`,
+              caption: messageText,
+              ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {})
+            }
+          : {
+              type: 'article',
+              id: `share_sel_article_${selectionToken.slice(0, 24)}_${Date.now()}`,
+              title: `🏘 ${heading}`,
+              description: district ? `${district} • ${total} объектов` : `${total} объектов`,
+              input_message_content: {
+                message_text: messageText
+              },
+              ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {}),
+              ...(VIA_LOGO_FALLBACK ? { thumb_url: VIA_LOGO_FALLBACK } : {})
+            };
+        try {
+          await ctx.answerInlineQuery([result], { cache_time: 0, is_personal: true });
+        } catch (answerError) {
+          console.warn('answerInlineQuery rejected (selection result):', answerError?.response?.description || answerError?.message || answerError);
+          throw answerError;
         }
         return;
       }
@@ -208,6 +312,7 @@ export async function startTelegramBot() {
       const district = property.district || property.neighborhood || 'Odesa';
       const heading = `${property.propertyType} in ${district}`;
       const messageText = [
+        'Здравствуйте! Делюсь подборкой, которая может быть вам интересна.',
         `🏙 ${heading}`,
         `💰 ${property.priceLabel}`,
         `📍 ${district}`
