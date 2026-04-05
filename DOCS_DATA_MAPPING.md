@@ -49,9 +49,9 @@
 
 | Логическое поле | Источник OLX | Назначение |
 |-----------------|--------------|------------|
-| **Operation type** | `category_id` → правило: **sale (Продажа)** / **rent (Аренда)** | Тип сделки для фильтра. |
-| **Property type** | `category_id` → **apartment** / **house** / **commercial** | Тип недвижимости. |
-| **District name** | `location.district_id` → текст района (Приморский, Киевский, …) | Фильтр по району; нужен справочник `district_id` → строка. |
+| **Operation type** | `category_id` → детерминированный mapping в `data/olx/category-map.json` | Тип сделки для фильтра. |
+| **Property type** | `category_id` (+ `attributes` fallback) → `apartment` / `house` / `commercial` / `land` / `parking` | Тип недвижимости. |
+| **District name** | `location.district_id` → `data/olx/district-map.json`; если `district_id = null`, fallback из подтверждённых `location.city_id` локализаций | Фильтр по району/локации. |
 | **Price USD** | `price.value` (+ `price.currency`) → сумма **в долларах** | Фильтр по цене; при необходимости конвертация в USD. |
 | **Rooms** | Квартиры: **`number_of_rooms_string`** (slug, см. §C.1). Дома: **`number_of_rooms`** (число в `value`). Плюс **`layout`**: `studio` — учитывать в нормализации комнатности. | Количество комнат для фильтра. |
 | **Total area** | **`total_area`** | Общая площадь, м² (`value` может быть `"36.5"`). |
@@ -61,6 +61,31 @@
 | **Complex name** | **`zkh`** (текст ЖК с OLX) **и/или** title/description + **справочник ЖК**. | Приоритет: структурное поле `zkh`, затем парсинг текста. |
 
 *Дополнительно в выдаче OLX есть `location.city_id`; для согласованных фильтров по городу его тоже предстоит резолвить в текст (например «Одесса») — в переданном списке Группы 1 явно не названо; при необходимости добавить в маппинг отдельной строкой.*
+
+#### Текущая реализация (2026-04-05): детерминированный mapping без текстовых эвристик
+
+- Для `operation/property_type` в импорте OLX **не используется** парсинг `title/description`.
+- Порядок резолва: `category_id` (конфиг) -> явные `attributes` (`contract_type`, `property_type_houses`, `property_type_land`, `comm_re_*`, `apartments_*`) -> `null`.
+- Актуальные `category_id` правила (`data/olx/category-map.json`):
+
+| `category_id` | `operation` | `property_type` |
+|---|---|---|
+| `21` | `sale` | `parking` |
+| `330` | `rent` | `house` |
+| `1602` | `sale` | `house` |
+| `1608` | `sale` | `land` |
+| `1758` | `sale` | `apartment` |
+| `1760` | `rent` | `apartment` |
+| `3681` | `sale` | `commercial` |
+| `3684` | `sale` | `commercial` |
+| `3686` | `sale` | `commercial` |
+| `3688` | `sale` | `commercial` |
+| `3690` | `rent` | `commercial` |
+| `3692` | `rent` | `commercial` |
+| `3701` | `rent` | `commercial` |
+
+- Подтверждённые `district_id` (Одесса): `85=Киевский`, `87=Малиновский`, `89=Приморский`.
+- Для записей с `district_id = null` используется подтверждённый fallback по `city_id` (например: `44411=Лиманка`, `44353=Авангард`, `43857=Фонтанка`, `43791/43795=Крыжановка`, `43097=Маяки`).
 
 ---
 
@@ -205,6 +230,7 @@ WHERE external_id = 'OLX_918995812';
 
 | Версия | Дата | Содержание |
 |--------|------|------------|
+| 0.6 | 2026-04-05 | Зафиксирована детерминированная логика (`category_id`/`attributes` без text-эвристик), актуальный category-map (включая `3688 = sale+commercial`), district fallback по `city_id` для `district_id=null`. |
 | 0.5 | 2026-04-03 | Выгрузка 10× OLX: полная таблица §C, маппинг комнат, разделение `apartments_dev_type` vs балкон; Group 1/2 синхронизированы. |
 | 0.4 | 2026-04-03 | Часть C: частичное заполнение по выгрузке (floor, total_floors, apartments_object_type, zkh); SQL для агрегации всех `code`. |
 | 0.3 | 2026-04-01 | Часть C: скрипт анализа raw + таблица под фактические `code`; снимок в `OLX_ATTRIBUTE_CODES_SNAPSHOT.md`. |
