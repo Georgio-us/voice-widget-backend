@@ -718,7 +718,7 @@ const hasRcOnlySignal = (insights = {}) => {
   if (insights?.location != null) parts.push(insights.location);
   const text = parts.map((v) => String(v || '').toLowerCase()).join(' ');
   if (!text) return false;
-  return /(только\s*жк|лишь\s*жк|в\s*жк|жил(ом|ого)?\s+комплекс|жк|residential\s+complex)/i.test(text);
+  return /(?:только\s*жк|лишь\s*жк|исключительно\s*жк|(?:^|\s)(?:жк|ж\/к)(?:\s|$)|в\s*жк|жил(?:ой|ого|ом|ые|ых)?\s+комплекс(?:ы|а|е|ах)?|в\s+жил(?:ом|ых)\s+комплекс(?:е|ах)|residential\s+complex(?:es)?)/i.test(text);
 };
 
 const applyHardGateByInsights = (properties = [], insights = {}) => {
@@ -759,7 +759,7 @@ const applyResidentialComplexFallbackFromTranscript = (transcription = '', insig
   let complexApplied = null;
 
   const lower = source.toLowerCase();
-  const rcOnlyRe = /(только\s*жк|лишь\s*жк|исключительно\s*жк|в\s*жк|жил(ом|ого)?\s+комплекс(е|ах)?)/i;
+  const rcOnlyRe = /(?:только\s*жк|лишь\s*жк|исключительно\s*жк|(?:^|\s)(?:жк|ж\/к)(?:\s|$)|в\s*жк|жил(?:ой|ого|ом|ые|ых)?\s+комплекс(?:ы|а|е|ах)?|в\s+жил(?:ом|ых)\s+комплекс(?:е|ах)?)/i;
   const hasRcOnly = rcOnlyRe.test(lower);
   if (hasRcOnly && insights.rcOnly !== true) {
     insights.rcOnly = true;
