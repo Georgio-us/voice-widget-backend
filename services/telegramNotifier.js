@@ -4,6 +4,7 @@
 // - если ENV не задан — молча пропускаем
 // - любые ошибки Telegram не должны ломать основной поток
 // - токен никогда не логируем
+import { pool } from './db.js';
 
 const clip = (v, n = 800) => {
   if (v === null || v === undefined) return '';
@@ -99,6 +100,38 @@ const pickInsightLines = (insights) => {
   return lines;
 };
 
+const resolveNotifierClientId = () =>
+  String(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID || 'demo').trim() || 'demo';
+
+const normalizeAlertsMode = (value) => {
+  const v = String(value || '').trim().toLowerCase();
+  if (['off', 'none', '0', 'false'].includes(v)) return 'off';
+  if (['basic'].includes(v)) return 'basic';
+  return 'full';
+};
+
+async function getAdminAlertsMode() {
+  const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
+  const tgUserId = Number(chatId);
+  if (!Number.isFinite(tgUserId)) return 'full';
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT meta
+      FROM users
+      WHERE client_id = $1 AND tg_user_id = $2
+      LIMIT 1
+      `,
+      [resolveNotifierClientId(), tgUserId]
+    );
+    const meta = rows?.[0]?.meta && typeof rows[0].meta === 'object' ? rows[0].meta : {};
+    return normalizeAlertsMode(meta?.telegram_alerts?.mode);
+  } catch (error) {
+    if (error?.code === '42P01') return 'full';
+    return 'full';
+  }
+}
+
 export function buildLeadTelegramMessage(lead) {
   const lines = [];
   const source = String(lead?.source || '').trim().toLowerCase();
@@ -185,6 +218,8 @@ export async function notifyLeadToTelegram(lead) {
   const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
   const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
   if (!token || !chatId) return { ok: false, skipped: true };
+  const alertsMode = await getAdminAlertsMode();
+  if (alertsMode === 'off') return { ok: false, skipped: true, reason: 'alerts_off' };
 
   const text = buildLeadTelegramMessage(lead);
 
@@ -375,6 +410,12 @@ export async function sendSessionActivityStartToTelegram(params = {}) {
   const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
   const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
   if (!token || !chatId) return { ok: false, skipped: true, messageId: null };
+  const alertsMode = await getAdminAlertsMode();
+  if (alertsMode !== 'full') return { ok: false, skipped: true, messageId: null, reason: 'alerts_mode' };
+  const actorTgId = String(params?.telegramUser?.userId || '').trim();
+  if (actorTgId && actorTgId === chatId) {
+    return { ok: false, skipped: true, messageId: null, reason: 'self_activity' };
+  }
 
   const text = buildSessionActivityStartMessage(params);
   const { data } = await telegramCall({
@@ -395,6 +436,8 @@ export async function updateSessionActivityFinalToTelegram(params = {}) {
   const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
   const messageId = params?.messageId || null;
   if (!token || !chatId || !messageId) return { ok: false, skipped: true };
+  const alertsMode = await getAdminAlertsMode();
+  if (alertsMode !== 'full') return { ok: false, skipped: true, reason: 'alerts_mode' };
 
   const text = buildSessionActivityFinalMessage(params);
   await telegramCall({
