@@ -32,7 +32,7 @@ const INSIGHTS_RESPONSE_SCHEMA = {
           operation: { type: ['string', 'null'], enum: ['buy', 'rent', null] },
           budget: { type: ['number', 'string', 'null'] },
           budgetMax: { type: ['number', 'string', 'null'] },
-          type: { type: ['string', 'null'], enum: ['apartment', 'house', 'land', null] },
+          type: { type: ['string', 'null'], enum: ['apartment', 'house', 'land', 'commercial', 'parking', null] },
           location: { type: ['string', 'null'] },
           rooms: { type: ['number', 'string', 'null'] },
           area: { type: ['number', 'string', 'null'] },
@@ -503,6 +503,8 @@ const normalizeTypeForProperty = (value) => {
   if (/(apartment|flat|апартамент|апарты|квартир)/i.test(raw)) return 'apartment';
   if (/(house|villa|home|townhouse|дом|вилл|таунхаус)/i.test(raw)) return 'house';
   if (/(land|plot|участок|земля)/i.test(raw)) return 'land';
+  if (/(commercial|office|retail|warehouse|коммер|офис|склад|нежил)/i.test(raw)) return 'commercial';
+  if (/(parking|гараж|паркинг|паркомест)/i.test(raw)) return 'parking';
   return null;
 };
 
@@ -1571,7 +1573,9 @@ const applyMetaInsightsToSession = (session, meta) => {
     if (/(apartment|flat|квартир|апартамент|апарты)/i.test(raw)) return 'apartment';
     if (/(house|villa|home|дом|вилл)/i.test(raw)) return 'house';
     if (/(land|plot|участок|земля)/i.test(raw)) return 'land';
-    if (raw === 'apartment' || raw === 'house' || raw === 'land') return raw;
+    if (/(commercial|office|retail|warehouse|коммер|офис|склад|нежил)/i.test(raw)) return 'commercial';
+    if (/(parking|гараж|паркинг|паркомест)/i.test(raw)) return 'parking';
+    if (raw === 'apartment' || raw === 'house' || raw === 'land' || raw === 'commercial' || raw === 'parking') return raw;
     return null;
   };
 
