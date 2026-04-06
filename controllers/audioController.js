@@ -508,14 +508,17 @@ const normalizeTypeForProperty = (value) => {
 };
 
 const SCORE_WEIGHTS = Object.freeze({
-  budget: 30,
-  location: 22,
-  rooms: 16,
-  operation: 10,
-  type: 8,
-  area: 6,
-  floor: 4,
-  features: 4
+  rooms: 34,
+  budget: 20,
+  area: 10,
+  floor: 10,
+  parking: 13,
+  balcony: 13
+});
+
+const SCORE_BANDS = Object.freeze({
+  preferred: 0.10,
+  acceptable: 0.25
 });
 
 const getBudgetCap = (insights = {}) => {
@@ -535,6 +538,36 @@ const parseIntLoose = (value) => {
   return Number.isFinite(n) ? n : null;
 };
 
+const parseFloatLoose = (value) => {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const normalized = String(value).replace(',', '.');
+  const match = normalized.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const n = Number(match[0]);
+  return Number.isFinite(n) ? n : null;
+};
+
+const clamp01 = (n) => {
+  if (!Number.isFinite(n)) return 0;
+  if (n <= 0) return 0;
+  if (n >= 1) return 1;
+  return n;
+};
+
+const scoreByRelativeDistance = (actual, target, acceptableRatio = SCORE_BANDS.acceptable, preferredRatio = SCORE_BANDS.preferred) => {
+  if (!Number.isFinite(actual) || !Number.isFinite(target) || target <= 0) return null;
+  const ratio = Math.abs(actual - target) / target;
+  if (ratio <= preferredRatio) return 1;
+  if (ratio <= acceptableRatio) {
+    const span = Math.max(0.0001, acceptableRatio - preferredRatio);
+    return 1 - ((ratio - preferredRatio) / span) * 0.35; // 1 -> 0.65 in acceptable band
+  }
+  const overflowSpan = Math.max(0.0001, acceptableRatio);
+  const overflow = (ratio - acceptableRatio) / overflowSpan;
+  return clamp01(0.65 - overflow * 0.65);
+};
+
 const normalizeFeaturesArray = (value) => {
   if (value == null) return [];
   if (Array.isArray(value)) {
@@ -544,6 +577,131 @@ const normalizeFeaturesArray = (value) => {
     .split(/[,\n;|]/)
     .map((v) => String(v || '').trim().toLowerCase())
     .filter(Boolean);
+};
+
+const toLowerTokens = (value) => {
+  if (value == null) return [];
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((v) => String(v == null ? '' : v).split(/[,\n;|]/))
+      .map((v) => String(v || '').trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return String(value)
+    .split(/[,\n;|]/)
+    .map((v) => String(v || '').trim().toLowerCase())
+    .filter(Boolean);
+};
+
+const coerceBool = (value) => {
+  if (value === true || value === false) return value;
+  if (value == null) return null;
+  if (typeof value === 'number') return value !== 0;
+  const raw = String(value).trim().toLowerCase();
+  if (!raw) return null;
+  if (['true', 'yes', 'y', '1', 'да', 'є', 'так'].includes(raw)) return true;
+  if (['false', 'no', 'n', '0', 'нет', 'ні'].includes(raw)) return false;
+  return null;
+};
+
+const getRequestedAmenityFlags = (insights = {}) => {
+  const pool = [
+    ...toLowerTokens(insights?.features),
+    ...toLowerTokens(insights?.details),
+    ...toLowerTokens(insights?.preferences)
+  ];
+  const text = pool.join(' ');
+  return {
+    parking: /(parking|паркинг|парковк|паркомест|парко ?місц)/i.test(text),
+    balcony: /(balcony|балкон|лоджи|лоджія|loggia)/i.test(text)
+  };
+};
+
+const getPropertyAmenityFlags = (property = {}) => {
+  const features = property?.features && typeof property.features === 'object' ? property.features : {};
+  const desc = String(property?.description || '').toLowerCase();
+  const parkingCandidates = [
+    features.has_parking,
+    features.parking,
+    features?.display_specs?.parking,
+    features?.display_specs?.has_parking
+  ];
+  const balconyCandidates = [
+    features.has_balcony,
+    features.balcony,
+    features.loggia,
+    features?.display_specs?.balcony,
+    features?.display_specs?.loggia
+  ];
+  const parkingFromValue = parkingCandidates.map((v) => coerceBool(v)).find((v) => v !== null);
+  const balconyFromValue = balconyCandidates.map((v) => coerceBool(v)).find((v) => v !== null);
+  return {
+    parking: parkingFromValue === true || /(parking|паркинг|парковк|паркомест|парко ?місц)/i.test(desc),
+    balcony: balconyFromValue === true || /(balcony|балкон|лоджи|лоджія|loggia)/i.test(desc)
+  };
+};
+
+const parseFloorPreference = (insights = {}) => {
+  const text = [
+    ...toLowerTokens(insights?.floor),
+    ...toLowerTokens(insights?.details),
+    ...toLowerTokens(insights?.preferences),
+    ...toLowerTokens(insights?.features)
+  ].join(' ');
+  const parsedFloor = parseIntLoose(insights?.floor);
+  const numericFloor = Number.isFinite(parsedFloor) && parsedFloor > 0 ? parsedFloor : null;
+  return {
+    numericFloor,
+    notFirst: /(не\s*перв|not\s*first)/i.test(text),
+    notLast: /(не\s*послед|не\s*остан|not\s*last)/i.test(text),
+    low: /(низк|low)/i.test(text),
+    middle: /(средн|middle|mid)/i.test(text),
+    high: /(высок|high)/i.test(text)
+  };
+};
+
+const scoreFloorPreference = (property = {}, floorPref = {}, strictMode = false) => {
+  const actualFloor = parseIntLoose(property?.floor);
+  if (actualFloor == null || actualFloor <= 0) return { score: 0, hardFail: strictMode && (floorPref.notFirst || floorPref.notLast) };
+  const totalFloors = parseIntLoose(property?.features?.display_specs?.total_floors ?? property?.features?.total_floors);
+
+  if (floorPref.notFirst && actualFloor <= 1) {
+    return { score: 0, hardFail: strictMode };
+  }
+  if (floorPref.notLast) {
+    if (Number.isFinite(totalFloors) && totalFloors > 1) {
+      if (actualFloor >= totalFloors) return { score: 0, hardFail: strictMode };
+    } else if (strictMode) {
+      return { score: 0, hardFail: true };
+    }
+  }
+
+  if (floorPref.low || floorPref.middle || floorPref.high) {
+    let bucket = null;
+    if (Number.isFinite(totalFloors) && totalFloors >= 3) {
+      const oneThird = totalFloors / 3;
+      if (actualFloor <= oneThird) bucket = 'low';
+      else if (actualFloor <= oneThird * 2) bucket = 'middle';
+      else bucket = 'high';
+    } else if (actualFloor <= 4) bucket = 'low';
+    else if (actualFloor <= 9) bucket = 'middle';
+    else bucket = 'high';
+
+    const target = floorPref.high ? 'high' : (floorPref.middle ? 'middle' : 'low');
+    if (bucket === target) return { score: 1, hardFail: false };
+    if (!strictMode) return { score: 0.45, hardFail: false };
+    return { score: 0, hardFail: false };
+  }
+
+  if (floorPref.numericFloor != null) {
+    const diff = Math.abs(actualFloor - floorPref.numericFloor);
+    if (diff === 0) return { score: 1, hardFail: false };
+    if (diff <= 2) return { score: 0.55, hardFail: false };
+    return { score: strictMode ? 0 : 0.2, hardFail: false };
+  }
+
+  if (floorPref.notFirst || floorPref.notLast) return { score: 1, hardFail: false };
+  return { score: 0, hardFail: false };
 };
 
 const getPropertyComplex = (property = {}) =>
@@ -670,92 +828,62 @@ const resolveTierByScore = (score) => {
 
 const scoreProperty = (p, insights, mode = 'relaxed') => {
   const strictMode = mode === 'strict';
-  let penalty = 1;
   let score = 0;
-
-  const expectedOperation = normalizeOperationForProperty(insights?.operation);
-  const actualOperation = normalizeOperationForProperty(p?.operation);
-  if (expectedOperation) {
-    if (!actualOperation || actualOperation !== expectedOperation) {
-      if (strictMode) return 0;
-      penalty *= 0.3;
-    } else {
-      score += SCORE_WEIGHTS.operation;
-    }
-  }
-
-  const expectedType = normalizeTypeForProperty(insights?.type);
-  const actualType = normalizeTypeForProperty(p?.property_type);
-  if (expectedType) {
-    if (!actualType || actualType !== expectedType) {
-      if (strictMode) return 0;
-      penalty *= 0.4;
-    } else {
-      score += SCORE_WEIGHTS.type;
-    }
-  }
+  const floorPref = parseFloorPreference(insights);
 
   const budgetCap = getBudgetCap(insights);
   const price = Number(p?.priceEUR);
   if (budgetCap != null && Number.isFinite(budgetCap) && Number.isFinite(price) && price > 0) {
-    if (price > budgetCap * 1.2) {
-      if (strictMode) return 0;
-      penalty *= 0.2;
-    } else if (price <= budgetCap) {
-      score += SCORE_WEIGHTS.budget;
-    } else {
-      const overRatio = (price - budgetCap) / (budgetCap || 1);
-      const coeff = Math.max(0, 1 - overRatio / 0.2);
-      score += SCORE_WEIGHTS.budget * coeff;
-      penalty *= strictMode ? 0.7 : 0.85;
-    }
-  }
-
-  const insightDistrict = normalizeDistrict(insights?.location);
-  const propDistrict = normalizeDistrict(p?.district || p?.neighborhood || p?.city);
-  if (insightDistrict) {
-    if (propDistrict === insightDistrict) {
-      score += SCORE_WEIGHTS.location;
-    } else if (propDistrict.includes(insightDistrict) || insightDistrict.includes(propDistrict)) {
-      score += SCORE_WEIGHTS.location * 0.6;
-    } else {
-      penalty *= strictMode ? 0.5 : 0.8;
-    }
+    const budgetScore = scoreByRelativeDistance(price, budgetCap);
+    if (strictMode && (budgetScore == null || budgetScore <= 0)) return 0;
+    score += SCORE_WEIGHTS.budget * (budgetScore == null ? 0 : budgetScore);
   }
 
   const expectedRooms = parseIntLoose(insights?.rooms);
   const actualRooms = parseIntLoose(p?.rooms);
   if (expectedRooms != null && actualRooms != null) {
-    if (expectedRooms === actualRooms) score += SCORE_WEIGHTS.rooms;
-    else if (Math.abs(expectedRooms - actualRooms) === 1) score += SCORE_WEIGHTS.rooms * 0.45;
-    else penalty *= strictMode ? 0.6 : 0.85;
+    if (expectedRooms === actualRooms) {
+      score += SCORE_WEIGHTS.rooms;
+    } else if (!strictMode && Math.abs(expectedRooms - actualRooms) === 1) {
+      score += SCORE_WEIGHTS.rooms * 0.35;
+    } else if (strictMode) {
+      return 0;
+    }
   }
 
-  const expectedAreaMin = parseIntLoose(insights?.areaMin ?? insights?.area);
-  const expectedAreaMax = parseIntLoose(insights?.areaMax);
-  const actualArea = parseIntLoose(p?.area_m2);
-  if (actualArea != null && (expectedAreaMin != null || expectedAreaMax != null)) {
-    if (expectedAreaMin != null && actualArea < expectedAreaMin) score += SCORE_WEIGHTS.area * 0.25;
-    else if (expectedAreaMax != null && actualArea > expectedAreaMax) score += SCORE_WEIGHTS.area * 0.4;
-    else score += SCORE_WEIGHTS.area;
+  const expectedArea = parseFloatLoose(insights?.areaMin ?? insights?.areaMax ?? insights?.area);
+  const actualArea = parseFloatLoose(p?.area_m2);
+  if (actualArea != null && expectedArea != null && expectedArea > 0) {
+    const areaScore = scoreByRelativeDistance(actualArea, expectedArea);
+    if (strictMode && (areaScore == null || areaScore <= 0)) return 0;
+    score += SCORE_WEIGHTS.area * (areaScore == null ? 0 : areaScore);
   }
 
-  const expectedFloor = parseIntLoose(insights?.floor);
-  const actualFloor = parseIntLoose(p?.floor);
-  if (expectedFloor != null && actualFloor != null) {
-    if (expectedFloor === actualFloor) score += SCORE_WEIGHTS.floor;
-    else if (Math.abs(expectedFloor - actualFloor) <= 2) score += SCORE_WEIGHTS.floor * 0.5;
+  const floorScore = scoreFloorPreference(p, floorPref, strictMode);
+  if (floorScore.hardFail) return 0;
+  score += SCORE_WEIGHTS.floor * floorScore.score;
+
+  const requestedAmenities = getRequestedAmenityFlags(insights);
+  const propertyAmenities = getPropertyAmenityFlags(p);
+  if (requestedAmenities.parking) {
+    if (propertyAmenities.parking) score += SCORE_WEIGHTS.parking;
+    else if (strictMode) return 0;
+  }
+  if (requestedAmenities.balcony) {
+    if (propertyAmenities.balcony) score += SCORE_WEIGHTS.balcony;
+    else if (strictMode) return 0;
   }
 
+  // keep a small residual signal from generic feature mentions without turning them into hard gates
   const requestedFeatures = normalizeFeaturesArray(insights?.features || insights?.preferences || insights?.details);
-  if (requestedFeatures.length) {
+  if (!strictMode && requestedFeatures.length) {
     const index = getPropertyFeaturesIndex(p);
     const hits = requestedFeatures.filter((f) => index.includes(f)).length;
     const ratio = requestedFeatures.length ? (hits / requestedFeatures.length) : 0;
-    score += SCORE_WEIGHTS.features * ratio;
+    score += 2 * ratio;
   }
 
-  const finalScore = Math.max(0, Math.round(score * penalty * 100) / 100);
+  const finalScore = Math.max(0, Math.round(score * 100) / 100);
   return finalScore;
 };
 
@@ -1637,9 +1765,9 @@ const applyMetaInsightsToSession = (session, meta) => {
     if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
     const raw = String(value).trim().toLowerCase();
     if (!raw) return null;
-    if (/(высок(ий|ого)|high)/i.test(raw)) return 20;
-    if (/(средн(ий|его)|middle)/i.test(raw)) return 10;
-    if (/(низк(ий|ого)|low)/i.test(raw)) return 3;
+    if (/(не\s*перв|not\s*first|не\s*послед|не\s*остан|not\s*last|высок(ий|ого)|high|средн(ий|его)|middle|mid|низк(ий|ого)|low)/i.test(raw)) {
+      return raw;
+    }
     const numeric = raw.match(/\d+/);
     if (!numeric) return null;
     const parsed = Number(numeric[0]);
@@ -1696,9 +1824,13 @@ const applyMetaInsightsToSession = (session, meta) => {
       const map = [
         ['terrace', /(terrace|терасс|террас)/i],
         ['balcony', /(balcony|балкон)/i],
+        ['balcony', /(лоджи|лоджія|loggia)/i],
+        ['parking', /(parking|паркинг|парковк|паркомест|парко ?місц)/i],
         ['pool', /(pool|бассейн)/i],
         ['sea view', /(sea view|вид на море)/i],
-        ['high floor', /(high floor|высокий этаж)/i]
+        ['high floor', /(high floor|высокий этаж)/i],
+        ['middle floor', /(middle floor|средний этаж)/i],
+        ['low floor', /(low floor|низкий этаж)/i]
       ];
       map.forEach(([label, re]) => { if (re.test(raw)) pushToken(label); });
     }
