@@ -107,13 +107,21 @@ const normalizeAlertsMode = (value) => {
   const v = String(value || '').trim().toLowerCase();
   if (['off', 'none', '0', 'false'].includes(v)) return 'off';
   if (['basic'].includes(v)) return 'basic';
-  return 'full';
+  if (['on', 'full', 'all', '1', 'true'].includes(v)) return 'full';
+  return '';
 };
 
-async function getAdminAlertsMode() {
+const normalizeBool = (value, fallback = true) => {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (['1', 'true', 'on', 'yes', 'y'].includes(v)) return true;
+  if (['0', 'false', 'off', 'no', 'n'].includes(v)) return false;
+  return Boolean(fallback);
+};
+
+async function getAdminAlertsConfig() {
   const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
   const tgUserId = Number(chatId);
-  if (!Number.isFinite(tgUserId)) return 'full';
+  if (!Number.isFinite(tgUserId)) return { leads: true, activity: true };
   try {
     const { rows } = await pool.query(
       `
@@ -125,10 +133,18 @@ async function getAdminAlertsMode() {
       [resolveNotifierClientId(), tgUserId]
     );
     const meta = rows?.[0]?.meta && typeof rows[0].meta === 'object' ? rows[0].meta : {};
-    return normalizeAlertsMode(meta?.telegram_alerts?.mode);
+    const alerts = meta?.telegram_alerts && typeof meta.telegram_alerts === 'object' ? meta.telegram_alerts : {};
+    const legacyMode = normalizeAlertsMode(alerts.mode || '');
+    if (legacyMode === 'off') return { leads: false, activity: false };
+    if (legacyMode === 'basic') return { leads: true, activity: false };
+    if (legacyMode === 'full') return { leads: true, activity: true };
+    return {
+      leads: normalizeBool(alerts.leads, true),
+      activity: normalizeBool(alerts.activity, true)
+    };
   } catch (error) {
-    if (error?.code === '42P01') return 'full';
-    return 'full';
+    if (error?.code === '42P01') return { leads: true, activity: true };
+    return { leads: true, activity: true };
   }
 }
 
@@ -218,8 +234,8 @@ export async function notifyLeadToTelegram(lead) {
   const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
   const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
   if (!token || !chatId) return { ok: false, skipped: true };
-  const alertsMode = await getAdminAlertsMode();
-  if (alertsMode === 'off') return { ok: false, skipped: true, reason: 'alerts_off' };
+  const alerts = await getAdminAlertsConfig();
+  if (!alerts.leads) return { ok: false, skipped: true, reason: 'alerts_leads_off' };
 
   const text = buildLeadTelegramMessage(lead);
 
@@ -410,8 +426,8 @@ export async function sendSessionActivityStartToTelegram(params = {}) {
   const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
   const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
   if (!token || !chatId) return { ok: false, skipped: true, messageId: null };
-  const alertsMode = await getAdminAlertsMode();
-  if (alertsMode !== 'full') return { ok: false, skipped: true, messageId: null, reason: 'alerts_mode' };
+  const alerts = await getAdminAlertsConfig();
+  if (!alerts.activity) return { ok: false, skipped: true, messageId: null, reason: 'alerts_activity_off' };
   const actorTgId = String(params?.telegramUser?.userId || '').trim();
   if (actorTgId && actorTgId === chatId) {
     return { ok: false, skipped: true, messageId: null, reason: 'self_activity' };
@@ -436,8 +452,8 @@ export async function updateSessionActivityFinalToTelegram(params = {}) {
   const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
   const messageId = params?.messageId || null;
   if (!token || !chatId || !messageId) return { ok: false, skipped: true };
-  const alertsMode = await getAdminAlertsMode();
-  if (alertsMode !== 'full') return { ok: false, skipped: true, reason: 'alerts_mode' };
+  const alerts = await getAdminAlertsConfig();
+  if (!alerts.activity) return { ok: false, skipped: true, reason: 'alerts_activity_off' };
 
   const text = buildSessionActivityFinalMessage(params);
   await telegramCall({

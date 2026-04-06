@@ -207,54 +207,65 @@ async function getPropertyForInlineShare(propId) {
   };
 }
 
-const normalizeAlertMode = (value) => {
+const normalizeBool = (value, fallback = true) => {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (['1', 'true', 'on', 'yes', 'y'].includes(v)) return true;
+  if (['0', 'false', 'off', 'no', 'n'].includes(v)) return false;
+  return Boolean(fallback);
+};
+
+const normalizeAlertsMode = (value) => {
   const v = String(value || '').trim().toLowerCase();
-  if (['on', 'full', 'all', '1', 'true'].includes(v)) return 'full';
+  if (['off', 'none', '0', 'false'].includes(v)) return 'off';
   if (['basic'].includes(v)) return 'basic';
-  if (['off', '0', 'false', 'none'].includes(v)) return 'off';
+  if (['on', 'full', 'all', '1', 'true'].includes(v)) return 'full';
   return '';
 };
 
 const buildGuestMenuText = () => [
-  'Здравствуйте! Это каталог недвижимости.',
-  'Нажмите «Открыть каталог», чтобы смотреть объекты.',
-  'Если нужна консультация — напишите сообщение прямо здесь.'
+  '🏠 Добро пожаловать в каталог недвижимости.',
+  'Нажмите «🚀 Открыть каталог», чтобы смотреть объекты.',
+  '✍️ Если нужна консультация — напишите сообщение прямо здесь.'
 ].join('\n');
 
-const buildAdminMenuText = () => [
-  'Админ-меню готово.',
-  'Доступные команды:',
-  '/menu — показать это меню',
-  '/stats — сводка за сегодня',
-  '/leads — последние заявки',
-  '/alerts on|basic|off — режим уведомлений'
+const alertsStateEmoji = (flag) => (flag ? '✅' : '❌');
+
+const buildAdminMenuText = (alerts = { leads: true, activity: true }) => [
+  '🛠️ Админ-панель',
+  '━━━━━━━━━━━━━━━━━━━━',
+  `🔔 Лиды: ${alertsStateEmoji(alerts.leads)}`,
+  `👣 Активность: ${alertsStateEmoji(alerts.activity)}`,
+  '',
+  'Команды:',
+  '/menu — открыть админ-меню',
+  '/stats — статистика за сегодня',
+  '/alerts — статус уведомлений'
 ].join('\n');
 
 const getOpenCatalogKeyboard = (miniAppUrl) => (
   miniAppUrl
     ? {
         inline_keyboard: [
-          [{ text: 'Открыть каталог', web_app: { url: miniAppUrl } }]
+          [{ text: '🚀 ОТКРЫТЬ КАТАЛОГ НЕДВИЖИМОСТИ', web_app: { url: miniAppUrl } }]
         ]
       }
     : undefined
 );
 
-const getAdminMenuKeyboard = (miniAppUrl) => ({
+const getAdminMenuKeyboard = (miniAppUrl, alerts = { leads: true, activity: true }) => ({
   inline_keyboard: [
-    ...(miniAppUrl ? [[{ text: 'Открыть каталог', web_app: { url: miniAppUrl } }]] : []),
-    [{ text: 'Статистика', callback_data: 'menu_stats' }],
-    [{ text: 'Последние заявки', callback_data: 'menu_leads' }],
-    [{ text: 'Уведомления: full', callback_data: 'alerts_full' }],
-    [{ text: 'Уведомления: basic', callback_data: 'alerts_basic' }],
-    [{ text: 'Уведомления: off', callback_data: 'alerts_off' }]
+    ...(miniAppUrl ? [[{ text: '🚀 Открыть каталог', web_app: { url: miniAppUrl } }]] : []),
+    [{ text: '📊 Статистика за сегодня', callback_data: 'menu_stats' }],
+    [{ text: `${alerts.leads ? '✅' : '❌'} Лиды`, callback_data: 'toggle_alerts_leads' }],
+    [{ text: `${alerts.activity ? '✅' : '❌'} Активность`, callback_data: 'toggle_alerts_activity' }],
+    [{ text: '🔄 Обновить меню', callback_data: 'menu_refresh' }]
   ]
 });
 
-async function getAlertsMode(clientId, tgUserId) {
+async function getAlertsConfig(clientId, tgUserId) {
   const safeClientId = String(clientId || BOT_CLIENT_ID).trim() || BOT_CLIENT_ID;
   const safeTg = Number(tgUserId);
-  if (!Number.isFinite(safeTg)) return 'full';
+  if (!Number.isFinite(safeTg)) return { leads: true, activity: true };
   try {
     const { rows } = await pool.query(
       `
@@ -266,32 +277,49 @@ async function getAlertsMode(clientId, tgUserId) {
       [safeClientId, safeTg]
     );
     const meta = rows?.[0]?.meta && typeof rows[0].meta === 'object' ? rows[0].meta : {};
-    const mode = normalizeAlertMode(meta?.telegram_alerts?.mode || '');
-    return mode || 'full';
+    const alerts = meta?.telegram_alerts && typeof meta.telegram_alerts === 'object' ? meta.telegram_alerts : {};
+    const legacyMode = normalizeAlertsMode(alerts.mode || '');
+    if (legacyMode === 'off') return { leads: false, activity: false };
+    if (legacyMode === 'basic') return { leads: true, activity: false };
+    if (legacyMode === 'full') return { leads: true, activity: true };
+    return {
+      leads: normalizeBool(alerts.leads, true),
+      activity: normalizeBool(alerts.activity, true)
+    };
   } catch (error) {
-    if (error?.code === '42P01') return 'full';
+    if (error?.code === '42P01') return { leads: true, activity: true };
     throw error;
   }
 }
 
-async function setAlertsMode(clientId, tgUserId, mode) {
+async function setAlertsConfig(clientId, tgUserId, patch = {}) {
   const safeClientId = String(clientId || BOT_CLIENT_ID).trim() || BOT_CLIENT_ID;
   const safeTg = Number(tgUserId);
-  const safeMode = normalizeAlertMode(mode) || 'full';
   if (!Number.isFinite(safeTg)) return { ok: false };
+  const current = await getAlertsConfig(safeClientId, safeTg);
+  const next = {
+    leads: Object.prototype.hasOwnProperty.call(patch, 'leads') ? Boolean(patch.leads) : current.leads,
+    activity: Object.prototype.hasOwnProperty.call(patch, 'activity') ? Boolean(patch.activity) : current.activity
+  };
   try {
     await pool.query(
       `
       UPDATE users
       SET
-        meta = COALESCE(meta, '{}'::jsonb) ||
-               jsonb_build_object('telegram_alerts', jsonb_build_object('mode', $3, 'updated_at', NOW())),
+        meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object(
+          'telegram_alerts',
+          jsonb_build_object(
+            'leads', $3::boolean,
+            'activity', $4::boolean,
+            'updated_at', NOW()
+          )
+        ),
         last_seen_at = NOW()
       WHERE client_id = $1 AND tg_user_id = $2
       `,
-      [safeClientId, safeTg, safeMode]
+      [safeClientId, safeTg, next.leads, next.activity]
     );
-    return { ok: true, mode: safeMode };
+    return { ok: true, alerts: next };
   } catch (error) {
     if (error?.code === '42P01') return { ok: false, reason: 'users_table_missing' };
     throw error;
@@ -416,7 +444,8 @@ export async function startTelegramBot() {
 
     await setMenuButton(ctx.chat?.id);
 
-    const inlineKeyboardMarkup = isAdmin ? getAdminMenuKeyboard(launchUrl) : getOpenCatalogKeyboard(launchUrl);
+    const adminAlerts = isAdmin ? await getAlertsConfig(BOT_CLIENT_ID, tgUserId) : null;
+    const inlineKeyboardMarkup = isAdmin ? getAdminMenuKeyboard(launchUrl, adminAlerts) : getOpenCatalogKeyboard(launchUrl);
     let replyText = startMessage;
     if (selectionToken) {
       const count = decodeSelectionIds(selectionToken).length;
@@ -426,7 +455,7 @@ export async function startTelegramBot() {
     } else if (propId) {
       replyText = `Открываю объект ${propId}. Нажмите «Открыть каталог».`;
     } else if (isAdmin) {
-      replyText = buildAdminMenuText();
+      replyText = buildAdminMenuText(adminAlerts);
     } else {
       replyText = buildGuestMenuText();
     }
@@ -437,8 +466,9 @@ export async function startTelegramBot() {
     try {
       const tgUserId = String(ctx?.from?.id || '').trim();
       const isAdmin = isAdminTgUser(tgUserId);
-      const replyText = isAdmin ? buildAdminMenuText() : buildGuestMenuText();
-      const keyboard = isAdmin ? getAdminMenuKeyboard(miniAppUrl) : getOpenCatalogKeyboard(miniAppUrl);
+      const alerts = isAdmin ? await getAlertsConfig(BOT_CLIENT_ID, tgUserId) : null;
+      const replyText = isAdmin ? buildAdminMenuText(alerts) : buildGuestMenuText();
+      const keyboard = isAdmin ? getAdminMenuKeyboard(miniAppUrl, alerts) : getOpenCatalogKeyboard(miniAppUrl);
       await ctx.reply(replyText, keyboard ? { reply_markup: keyboard } : undefined);
     } catch (error) {
       console.warn('telegram /menu failed:', error?.message || error);
@@ -454,15 +484,47 @@ export async function startTelegramBot() {
         return;
       }
       const text = String(ctx.message?.text || '').trim();
-      const [, argRaw] = text.split(/\s+/, 2);
-      const requested = normalizeAlertMode(argRaw || '');
-      if (!requested) {
-        const current = await getAlertsMode(BOT_CLIENT_ID, tgUserId);
-        await ctx.reply(`Текущий режим уведомлений: ${current}\nИспользуйте: /alerts on | basic | off`);
+      const parts = text.split(/\s+/).filter(Boolean);
+      const arg1 = String(parts[1] || '').toLowerCase();
+      const arg2 = String(parts[2] || '').toLowerCase();
+      const current = await getAlertsConfig(BOT_CLIENT_ID, tgUserId);
+
+      if (!arg1) {
+        await ctx.reply([
+          'Текущие уведомления:',
+          `• Лиды: ${current.leads ? 'включены ✅' : 'выключены ❌'}`,
+          `• Активность: ${current.activity ? 'включена ✅' : 'выключена ❌'}`,
+          '',
+          'Использование:',
+          '/alerts leads on|off',
+          '/alerts activity on|off'
+        ].join('\n'));
         return;
       }
-      await setAlertsMode(BOT_CLIENT_ID, tgUserId, requested);
-      await ctx.reply(`Режим уведомлений обновлён: ${requested}`);
+
+      const legacy = normalizeAlertsMode(arg1);
+      if (legacy) {
+        const patch = legacy === 'off'
+          ? { leads: false, activity: false }
+          : legacy === 'basic'
+            ? { leads: true, activity: false }
+            : { leads: true, activity: true };
+        const result = await setAlertsConfig(BOT_CLIENT_ID, tgUserId, patch);
+        const a = result.alerts || patch;
+        await ctx.reply(`Обновлено.\n• Лиды: ${a.leads ? '✅' : '❌'}\n• Активность: ${a.activity ? '✅' : '❌'}`);
+        return;
+      }
+
+      if (!['leads', 'activity'].includes(arg1) || !['on', 'off'].includes(arg2)) {
+        await ctx.reply('Неверный формат.\nИспользуйте: /alerts leads on|off или /alerts activity on|off');
+        return;
+      }
+      const patch = arg1 === 'leads'
+        ? { leads: arg2 === 'on' }
+        : { activity: arg2 === 'on' };
+      const result = await setAlertsConfig(BOT_CLIENT_ID, tgUserId, patch);
+      const a = result.alerts || { ...current, ...patch };
+      await ctx.reply(`Обновлено.\n• Лиды: ${a.leads ? '✅' : '❌'}\n• Активность: ${a.activity ? '✅' : '❌'}`);
     } catch (error) {
       console.warn('telegram /alerts failed:', error?.message || error);
       await ctx.reply('Не удалось обновить режим уведомлений.');
@@ -489,34 +551,6 @@ export async function startTelegramBot() {
     }
   });
 
-  bot.command('leads', async (ctx) => {
-    try {
-      const tgUserId = String(ctx?.from?.id || '').trim();
-      if (!isAdminTgUser(tgUserId)) {
-        await ctx.reply('Эта команда доступна только администратору.');
-        return;
-      }
-      const leads = await getRecentLeads(BOT_CLIENT_ID, 5);
-      if (!leads.length) {
-        await ctx.reply('Пока нет заявок.');
-        return;
-      }
-      const lines = ['Последние заявки:'];
-      leads.forEach((lead, idx) => {
-        const dt = lead?.created_at ? new Date(lead.created_at).toLocaleString('ru-RU') : '—';
-        const name = String(lead?.name || 'Без имени').trim();
-        const source = String(lead?.source || '—').trim();
-        const propertyId = String(lead?.property_id || '').trim();
-        lines.push(`${idx + 1}. ${name} (${dt})`);
-        lines.push(`   source: ${source}${propertyId ? ` • объект: ${propertyId}` : ''}`);
-      });
-      await ctx.reply(lines.join('\n'));
-    } catch (error) {
-      console.warn('telegram /leads failed:', error?.message || error);
-      await ctx.reply('Не удалось получить заявки.');
-    }
-  });
-
   bot.action('menu_stats', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch {}
     try {
@@ -531,53 +565,37 @@ export async function startTelegramBot() {
       ].join('\n'));
     } catch {}
   });
-  bot.action('menu_leads', async (ctx) => {
+  bot.action('toggle_alerts_leads', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch {}
     try {
       const tgUserId = String(ctx?.from?.id || '').trim();
       if (!isAdminTgUser(tgUserId)) return;
-      const leads = await getRecentLeads(BOT_CLIENT_ID, 5);
-      if (!leads.length) {
-        await ctx.reply('Пока нет заявок.');
-        return;
-      }
-      const lines = ['Последние заявки:'];
-      leads.forEach((lead, idx) => {
-        const dt = lead?.created_at ? new Date(lead.created_at).toLocaleString('ru-RU') : '—';
-        const name = String(lead?.name || 'Без имени').trim();
-        const source = String(lead?.source || '—').trim();
-        const propertyId = String(lead?.property_id || '').trim();
-        lines.push(`${idx + 1}. ${name} (${dt})`);
-        lines.push(`   source: ${source}${propertyId ? ` • объект: ${propertyId}` : ''}`);
-      });
-      await ctx.reply(lines.join('\n'));
+      const current = await getAlertsConfig(BOT_CLIENT_ID, tgUserId);
+      const result = await setAlertsConfig(BOT_CLIENT_ID, tgUserId, { leads: !current.leads });
+      const alerts = result.alerts || { ...current, leads: !current.leads };
+      await ctx.reply(`Уведомления лидов: ${alerts.leads ? 'включены ✅' : 'выключены ❌'}`);
+      await ctx.reply(buildAdminMenuText(alerts), { reply_markup: getAdminMenuKeyboard(miniAppUrl, alerts) });
     } catch {}
   });
-  bot.action('alerts_full', async (ctx) => {
+  bot.action('toggle_alerts_activity', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch {}
     try {
       const tgUserId = String(ctx?.from?.id || '').trim();
       if (!isAdminTgUser(tgUserId)) return;
-      await setAlertsMode(BOT_CLIENT_ID, tgUserId, 'full');
-      await ctx.reply('Режим уведомлений: full');
+      const current = await getAlertsConfig(BOT_CLIENT_ID, tgUserId);
+      const result = await setAlertsConfig(BOT_CLIENT_ID, tgUserId, { activity: !current.activity });
+      const alerts = result.alerts || { ...current, activity: !current.activity };
+      await ctx.reply(`Уведомления активности: ${alerts.activity ? 'включены ✅' : 'выключены ❌'}`);
+      await ctx.reply(buildAdminMenuText(alerts), { reply_markup: getAdminMenuKeyboard(miniAppUrl, alerts) });
     } catch {}
   });
-  bot.action('alerts_basic', async (ctx) => {
+  bot.action('menu_refresh', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch {}
     try {
       const tgUserId = String(ctx?.from?.id || '').trim();
       if (!isAdminTgUser(tgUserId)) return;
-      await setAlertsMode(BOT_CLIENT_ID, tgUserId, 'basic');
-      await ctx.reply('Режим уведомлений: basic');
-    } catch {}
-  });
-  bot.action('alerts_off', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch {}
-    try {
-      const tgUserId = String(ctx?.from?.id || '').trim();
-      if (!isAdminTgUser(tgUserId)) return;
-      await setAlertsMode(BOT_CLIENT_ID, tgUserId, 'off');
-      await ctx.reply('Режим уведомлений: off');
+      const alerts = await getAlertsConfig(BOT_CLIENT_ID, tgUserId);
+      await ctx.reply(buildAdminMenuText(alerts), { reply_markup: getAdminMenuKeyboard(miniAppUrl, alerts) });
     } catch {}
   });
 
@@ -744,8 +762,9 @@ export async function startTelegramBot() {
     if (lower === 'меню') {
       const tgUserId = String(ctx?.from?.id || '').trim();
       const isAdmin = isAdminTgUser(tgUserId);
-      const replyText = isAdmin ? buildAdminMenuText() : buildGuestMenuText();
-      const keyboard = isAdmin ? getAdminMenuKeyboard(miniAppUrl) : getOpenCatalogKeyboard(miniAppUrl);
+      const alerts = isAdmin ? await getAlertsConfig(BOT_CLIENT_ID, tgUserId) : null;
+      const replyText = isAdmin ? buildAdminMenuText(alerts) : buildGuestMenuText();
+      const keyboard = isAdmin ? getAdminMenuKeyboard(miniAppUrl, alerts) : getOpenCatalogKeyboard(miniAppUrl);
       await ctx.reply(replyText, keyboard ? { reply_markup: keyboard } : undefined);
       return;
     }
