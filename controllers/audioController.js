@@ -583,7 +583,7 @@ const applyHardGateByInsights = (properties = [], insights = {}) => {
         || insightDistrict.includes(propDistrict);
     });
   }
-  if (hasRcOnlySignal(insights)) {
+  if (insights?.rcOnly === true || insights?.residentialComplexOnly === true || hasRcOnlySignal(insights)) {
     list = list.filter((p) => getPropertyComplex(p).length > 0);
   }
   const rcNeedle = String(insights?.residentialComplex || '').trim().toLowerCase();
@@ -591,6 +591,47 @@ const applyHardGateByInsights = (properties = [], insights = {}) => {
     list = list.filter((p) => getPropertyComplex(p).toLowerCase().includes(rcNeedle));
   }
   return list;
+};
+
+const applyResidentialComplexFallbackFromTranscript = (transcription = '', insights = {}) => {
+  const source = String(transcription || '').trim();
+  if (!source || !insights || typeof insights !== 'object') return { applied: false, rcOnly: false, complex: null };
+  let applied = false;
+  let rcOnlyApplied = false;
+  let complexApplied = null;
+
+  const lower = source.toLowerCase();
+  const rcOnlyRe = /(только\s*жк|лишь\s*жк|исключительно\s*жк|в\s*жк|жил(ом|ого)?\s+комплекс(е|ах)?)/i;
+  const hasRcOnly = rcOnlyRe.test(lower);
+  if (hasRcOnly && insights.rcOnly !== true) {
+    insights.rcOnly = true;
+    insights.residentialComplexOnly = true;
+    applied = true;
+    rcOnlyApplied = true;
+  }
+
+  if (!String(insights.residentialComplex || '').trim()) {
+    let complexName = null;
+    const quoted = source.match(/\bжк\s*[«"']([^»"']{2,60})[»"']/i);
+    if (quoted && quoted[1]) {
+      complexName = String(quoted[1]).trim();
+    } else {
+      const plain = source.match(/\bжк\s+([a-zа-яё0-9][a-zа-яё0-9\-\s]{1,48})(?=$|[,.!?;:]|\s+(?:в|на|для|до|котор|где)\b)/i);
+      if (plain && plain[1]) {
+        complexName = String(plain[1]).trim();
+      }
+    }
+    if (complexName) {
+      const cleaned = complexName.replace(/\s{2,}/g, ' ').replace(/^[«"'`]+|[»"'`]+$/g, '').trim();
+      if (cleaned.length >= 2) {
+        insights.residentialComplex = cleaned;
+        applied = true;
+        complexApplied = cleaned;
+      }
+    }
+  }
+
+  return { applied, rcOnly: rcOnlyApplied, complex: complexApplied };
 };
 
 const getPropertyFeaturesIndex = (property = {}) => {
@@ -2918,6 +2959,15 @@ const transcribeAndRespond = async (req, res) => {
         lastUpdatedAt: new Date().toISOString()
       };
     }
+    const rcFallback = applyResidentialComplexFallbackFromTranscript(transcription, session.insights);
+    if (rcFallback.applied) {
+      extractionReport.fallbackUsed = true;
+      extractionReport.updatesApplied = true;
+      try {
+        console.log(`[RC_FALLBACK] sid=${String(sessionId || '').slice(-8) || 'unknown'} rcOnly=${rcFallback.rcOnly ? 1 : 0} complex=${rcFallback.complex || 'null'}`);
+      } catch {}
+    }
+
     updateExtractionMetrics(session, extractionReport);
 
     // 🔎 Детектор намерения/вариантов
