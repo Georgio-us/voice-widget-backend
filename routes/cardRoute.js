@@ -29,6 +29,12 @@ const normalizeDistrictValue = (value) => {
   return DISTRICT_ALIASES.get(key) || key;
 };
 const hasToken = (value, token) => normalizeText(value).includes(normalizeText(token));
+const isTrue = (value) => value === true || value === 'true' || value === 1 || value === '1';
+const getFeatureComplex = (property) => {
+  const direct = property?.features?.complex;
+  const fromDisplay = property?.features?.display_specs?.complex;
+  return String(direct || fromDisplay || '').trim();
+};
 
 /**
  * Нормализация объекта из БД (Postgres)
@@ -328,7 +334,7 @@ router.get('/search', async (req, res) => {
     }
 
     if (onlyExclusive) {
-      list = list.filter((p) => hasToken(p.title, 'эксклюзив') || hasToken(p.description, 'эксклюзив') || hasToken(p.title, 'exclusive') || hasToken(p.description, 'exclusive'));
+      list = list.filter((p) => isTrue(p?.features?.exclusive));
     }
 
     if (onlyCenter) {
@@ -336,22 +342,19 @@ router.get('/search', async (req, res) => {
     }
 
     if (onlyParking) {
-      list = list.filter((p) => hasToken(p.title, 'паркинг') || hasToken(p.description, 'паркинг') || hasToken(p.title, 'parking') || hasToken(p.description, 'parking'));
+      list = list.filter((p) => isTrue(p?.features?.parking));
     }
 
     if (onlyBalconyLoggia) {
-      list = list.filter((p) => p.balcony === true || hasToken(p.title, 'балкон') || hasToken(p.description, 'балкон') || hasToken(p.title, 'лодж') || hasToken(p.description, 'лодж'));
+      list = list.filter((p) => isTrue(p?.balcony) || isTrue(p?.features?.balcony) || isTrue(p?.features?.loggia));
     }
 
     if (onlyRc) {
-      list = list.filter((p) => {
-        const complex = normalizeText(p?.features?.complex);
-        return !!complex || hasToken(p.title, 'жк') || hasToken(p.description, 'жк');
-      });
+      list = list.filter((p) => normalizeText(getFeatureComplex(p)).length > 0);
     }
 
     if (rcNeedle) {
-      list = list.filter((p) => hasToken(p?.features?.complex, rcNeedle) || hasToken(p.title, rcNeedle) || hasToken(p.description, rcNeedle));
+      list = list.filter((p) => hasToken(getFeatureComplex(p), rcNeedle));
     }
 
     res.json({ cards: list.slice(0, Number(limit) || 10) });
