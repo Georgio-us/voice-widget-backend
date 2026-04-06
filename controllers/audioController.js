@@ -460,7 +460,7 @@ const normalizeDistrict = (val) => {
   const map = {
     // Odesa districts
     'одесса': 'odesa', 'одеса': 'odesa', 'odessa': 'odesa', 'odesa': 'odesa',
-    'приморский': 'prymorskyi', 'приморський': 'prymorskyi', 'prymorskyi': 'prymorskyi', 'primorsky': 'prymorskyi',
+    'приморский': 'prymorskyi', 'проморский': 'prymorskyi', 'приморський': 'prymorskyi', 'проморський': 'prymorskyi', 'prymorskyi': 'prymorskyi', 'primorsky': 'prymorskyi', 'promorsky': 'prymorskyi',
     'киевский': 'kyivskyi', 'київський': 'kyivskyi', 'kyivskyi': 'kyivskyi', 'kievskiy': 'kyivskyi',
     'малиновский': 'khadzhibeyskyi', 'малиновський': 'khadzhibeyskyi', 'хаджибейский': 'khadzhibeyskyi', 'khadzhibeyskyi': 'khadzhibeyskyi',
     'суворовский': 'peresypskyi', 'суворовський': 'peresypskyi', 'пересыпский': 'peresypskyi', 'пересипський': 'peresypskyi', 'peresypskyi': 'peresypskyi',
