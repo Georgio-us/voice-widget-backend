@@ -835,7 +835,6 @@ const scoreProperty = (p, insights, mode = 'relaxed') => {
   const price = Number(p?.priceEUR);
   if (budgetCap != null && Number.isFinite(budgetCap) && Number.isFinite(price) && price > 0) {
     const budgetScore = scoreByRelativeDistance(price, budgetCap);
-    if (strictMode && (budgetScore == null || budgetScore <= 0)) return 0;
     score += SCORE_WEIGHTS.budget * (budgetScore == null ? 0 : budgetScore);
   }
 
@@ -855,7 +854,6 @@ const scoreProperty = (p, insights, mode = 'relaxed') => {
   const actualArea = parseFloatLoose(p?.area_m2);
   if (actualArea != null && expectedArea != null && expectedArea > 0) {
     const areaScore = scoreByRelativeDistance(actualArea, expectedArea);
-    if (strictMode && (areaScore == null || areaScore <= 0)) return 0;
     score += SCORE_WEIGHTS.area * (areaScore == null ? 0 : areaScore);
   }
 
