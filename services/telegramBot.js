@@ -123,6 +123,32 @@ function formatPriceLabel(raw) {
   return text || 'Price on request';
 }
 
+function formatPropertyTypeRu(rawType) {
+  const type = String(rawType || '').trim().toLowerCase();
+  if (!type) return 'Объект';
+  if (['apartment', 'flat'].includes(type)) return 'Квартира';
+  if (type === 'house') return 'Дом';
+  if (type === 'commercial') return 'Коммерция';
+  if (type === 'land') return 'Земля';
+  if (type === 'parking') return 'Паркинг';
+  return String(rawType || '').trim() || 'Объект';
+}
+
+function formatRoomsRu(rawRooms) {
+  const n = Number(rawRooms);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const v = Math.round(n);
+  const suffix = v === 1 ? 'комната' : (v >= 2 && v <= 4 ? 'комнаты' : 'комнат');
+  return `${v} ${suffix}`;
+}
+
+function formatAreaM2(rawArea) {
+  const n = Number(rawArea);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  const text = Number.isInteger(n) ? String(n) : String(n).replace(/\.0+$/, '').replace('.', ',');
+  return `${text} м²`;
+}
+
 function isValidPublicImageUrl(url) {
   const value = String(url || '').trim();
   if (!/^https:\/\//i.test(value)) return false;
@@ -139,9 +165,12 @@ async function getPropertyForInlineShare(propId) {
     id: normalizePropId(raw.external_id || raw.id),
     title: String(raw.title || '').trim(),
     propertyType: String(raw.property_type || 'property').trim(),
+    propertyTypeLabel: formatPropertyTypeRu(raw.property_type || 'property'),
     city: String(geo?.city || raw.location_city || '').trim(),
     district: String(geo?.district || raw.location_district || raw.location_neighborhood || '').trim(),
     neighborhood: String(geo?.neighborhood || raw.location_neighborhood || '').trim(),
+    rooms: Number(raw.specs_rooms ?? raw.rooms ?? 0) || null,
+    areaM2: Number(raw.specs_area_m2 ?? raw.area_m2 ?? raw.area ?? 0) || null,
     priceLabel: formatPriceLabel(raw.price_amount),
     image: images[0] || ''
   };
@@ -248,14 +277,9 @@ export async function startTelegramBot() {
         const first = await getPropertyForInlineShare(ids[0]);
         const total = ids.length;
         const heading = `Подборка из ${total} объектов`;
-        const district = first?.district || first?.neighborhood || '';
-        const firstLine = first
-          ? `🏙 ${first.propertyType} ${district ? `• ${district}` : ''}`.trim()
-          : '🏙 Объекты недвижимости';
         const messageText = [
-          'Здравствуйте! Делюсь подборкой, которая может быть вам интересна.',
-          `📌 ${heading}`,
-          firstLine
+          `Подобрал для вас подборку из ${total} объектов.`,
+          'Откройте карточки — внутри все детали и фото.'
         ].join('\n');
         const miniAppDeepLink = buildMiniAppSelectionDeepLink(selectionToken);
         const imageUrl = isValidPublicImageUrl(first?.image) ? first.image : '';
@@ -274,7 +298,7 @@ export async function startTelegramBot() {
               photo_url: imageUrl,
               thumbnail_url: imageUrl,
               title: `🏘 ${heading}`,
-              description: district ? `${district} • ${total} объектов` : `${total} объектов`,
+              description: `${total} объектов`,
               caption: messageText,
               ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {})
             }
@@ -282,7 +306,7 @@ export async function startTelegramBot() {
               type: 'article',
               id: `share_sel_article_${selectionToken.slice(0, 24)}_${Date.now()}`,
               title: `🏘 ${heading}`,
-              description: district ? `${district} • ${total} объектов` : `${total} объектов`,
+              description: `${total} объектов`,
               input_message_content: {
                 message_text: messageText
               },
@@ -309,13 +333,16 @@ export async function startTelegramBot() {
         return;
       }
 
-      const district = property.district || property.neighborhood || 'Odesa';
-      const heading = `${property.propertyType} in ${district}`;
+      const district = property.district || property.neighborhood || '—';
+      const roomsLabel = formatRoomsRu(property.rooms);
+      const typeWithRooms = roomsLabel ? `${property.propertyTypeLabel}, ${roomsLabel}` : property.propertyTypeLabel;
+      const heading = typeWithRooms;
       const messageText = [
-        'Здравствуйте! Делюсь подборкой, которая может быть вам интересна.',
-        `🏙 ${heading}`,
-        `💰 ${property.priceLabel}`,
-        `📍 ${district}`
+        'Подобрал объект, который может вам подойти.',
+        `Тип: ${typeWithRooms}`,
+        `Цена: ${property.priceLabel || '—'}`,
+        `Площадь: ${formatAreaM2(property.areaM2)}`,
+        `Район: ${district || '—'}`
       ].join('\n');
 
       const miniAppDeepLink = buildMiniAppDeepLink(property.id);
