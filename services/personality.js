@@ -69,7 +69,7 @@ RESPONSE STRUCTURE (MANDATORY):
     "operation": "buy" | "rent" | null,
     "budget": number | null,
     "budgetMax": number | null,
-    "type": "apartment" | "house" | "land" | "commercial" | "parking" | null,
+    "type": "apartment" | "house" | "land" | "commercial" | null,
     "location": string | null,
     "rooms": number | null,
     "area": number | null,

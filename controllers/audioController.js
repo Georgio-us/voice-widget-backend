@@ -32,7 +32,7 @@ const INSIGHTS_RESPONSE_SCHEMA = {
           operation: { type: ['string', 'null'], enum: ['buy', 'rent', null] },
           budget: { type: ['number', 'string', 'null'] },
           budgetMax: { type: ['number', 'string', 'null'] },
-          type: { type: ['string', 'null'], enum: ['apartment', 'house', 'land', 'commercial', 'parking', null] },
+          type: { type: ['string', 'null'], enum: ['apartment', 'house', 'land', 'commercial', null] },
           location: { type: ['string', 'null'] },
           rooms: { type: ['number', 'string', 'null'] },
           area: { type: ['number', 'string', 'null'] },
@@ -504,7 +504,6 @@ const normalizeTypeForProperty = (value) => {
   if (/(house|villa|home|townhouse|дом|вилл|таунхаус)/i.test(raw)) return 'house';
   if (/(land|plot|участок|земля)/i.test(raw)) return 'land';
   if (/(commercial|office|retail|warehouse|коммер|офис|склад|нежил)/i.test(raw)) return 'commercial';
-  if (/(parking|гараж|паркинг|паркомест)/i.test(raw)) return 'parking';
   return null;
 };
 
@@ -545,6 +544,53 @@ const normalizeFeaturesArray = (value) => {
     .split(/[,\n;|]/)
     .map((v) => String(v || '').trim().toLowerCase())
     .filter(Boolean);
+};
+
+const getPropertyComplex = (property = {}) =>
+  String(property?.features?.complex || property?.features?.display_specs?.complex || '').trim();
+
+const hasRcOnlySignal = (insights = {}) => {
+  const rc = String(insights?.residentialComplex || '').trim();
+  if (rc) return true;
+  const parts = [];
+  if (Array.isArray(insights?.features)) parts.push(...insights.features);
+  else if (insights?.features != null) parts.push(insights.features);
+  if (insights?.details != null) parts.push(insights.details);
+  if (insights?.preferences != null) parts.push(insights.preferences);
+  if (insights?.location != null) parts.push(insights.location);
+  const text = parts.map((v) => String(v || '').toLowerCase()).join(' ');
+  if (!text) return false;
+  return /(только\s*жк|лишь\s*жк|в\s*жк|жил(ом|ого)?\s+комплекс|жк|residential\s+complex)/i.test(text);
+};
+
+const applyHardGateByInsights = (properties = [], insights = {}) => {
+  let list = Array.isArray(properties) ? properties.slice() : [];
+  const expectedOperation = normalizeOperationForProperty(insights?.operation);
+  if (expectedOperation) {
+    list = list.filter((p) => normalizeOperationForProperty(p?.operation) === expectedOperation);
+  }
+  const expectedType = normalizeTypeForProperty(insights?.type);
+  if (expectedType) {
+    list = list.filter((p) => normalizeTypeForProperty(p?.property_type) === expectedType);
+  }
+  const insightDistrict = normalizeDistrict(insights?.location);
+  if (insightDistrict && insightDistrict !== 'odesa') {
+    list = list.filter((p) => {
+      const propDistrict = normalizeDistrict(p?.district || p?.neighborhood || p?.city);
+      if (!propDistrict) return false;
+      return propDistrict === insightDistrict
+        || propDistrict.includes(insightDistrict)
+        || insightDistrict.includes(propDistrict);
+    });
+  }
+  if (hasRcOnlySignal(insights)) {
+    list = list.filter((p) => getPropertyComplex(p).length > 0);
+  }
+  const rcNeedle = String(insights?.residentialComplex || '').trim().toLowerCase();
+  if (rcNeedle) {
+    list = list.filter((p) => getPropertyComplex(p).toLowerCase().includes(rcNeedle));
+  }
+  return list;
 };
 
 const getPropertyFeaturesIndex = (property = {}) => {
@@ -754,7 +800,8 @@ const getAllNormalizedProperties = async () => {
 };
 
 const rankPropertiesByInsights = (properties, insights) => {
-  const scored = properties.map((p) => {
+  const gated = applyHardGateByInsights(properties, insights);
+  const scored = gated.map((p) => {
     const relaxedScore = scoreProperty(p, insights, 'relaxed');
     const strictScore = scoreProperty(p, insights, 'strict');
     return { p, relaxedScore, strictScore, tier: resolveTierByScore(relaxedScore) };
@@ -1574,8 +1621,7 @@ const applyMetaInsightsToSession = (session, meta) => {
     if (/(house|villa|home|дом|вилл)/i.test(raw)) return 'house';
     if (/(land|plot|участок|земля)/i.test(raw)) return 'land';
     if (/(commercial|office|retail|warehouse|коммер|офис|склад|нежил)/i.test(raw)) return 'commercial';
-    if (/(parking|гараж|паркинг|паркомест)/i.test(raw)) return 'parking';
-    if (raw === 'apartment' || raw === 'house' || raw === 'land' || raw === 'commercial' || raw === 'parking') return raw;
+    if (raw === 'apartment' || raw === 'house' || raw === 'land' || raw === 'commercial') return raw;
     return null;
   };
 
