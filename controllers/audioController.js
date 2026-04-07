@@ -464,6 +464,10 @@ const normalizeDistrict = (val) => {
     'киевский': 'kyivskyi', 'київський': 'kyivskyi', 'kyivskyi': 'kyivskyi', 'kievskiy': 'kyivskyi',
     'малиновский': 'khadzhibeyskyi', 'малиновський': 'khadzhibeyskyi', 'хаджибейский': 'khadzhibeyskyi', 'khadzhibeyskyi': 'khadzhibeyskyi',
     'суворовский': 'peresypskyi', 'суворовський': 'peresypskyi', 'пересыпский': 'peresypskyi', 'пересипський': 'peresypskyi', 'peresypskyi': 'peresypskyi',
+    // Greater Odesa localities -> base district buckets
+    'лиманка': 'kyivskyi', 'limanka': 'kyivskyi',
+    'крыжановка': 'peresypskyi', 'крижанівка': 'peresypskyi', 'kryzhanivka': 'peresypskyi', 'kryzhanovka': 'peresypskyi',
+    'авангард': 'khadzhibeyskyi', 'avangard': 'khadzhibeyskyi',
     // Odesa micro-areas / landmarks
     'аркадия': 'arcadia', 'аркадія': 'arcadia', 'arcadia': 'arcadia',
     'большой фонтан': 'fontan', 'великий фонтан': 'fontan', 'фонтан': 'fontan', 'fontan': 'fontan',

@@ -22,6 +22,15 @@ const DISTRICT_ALIASES = new Map([
   ['malinovsky', 'малиновский'],
   ['malinovskiy', 'малиновский'],
   ['малиновский', 'малиновский'],
+  // Greater Odesa localities mapped to base city districts
+  ['лиманка', 'киевский'],
+  ['limanka', 'киевский'],
+  ['крыжановка', 'суворовский'],
+  ['кріжанівка', 'суворовский'],
+  ['kryzhanivka', 'суворовский'],
+  ['kryzhanovka', 'суворовский'],
+  ['авангард', 'малиновский'],
+  ['avangard', 'малиновский'],
   ['tairovo', 'киевский'],
   ['таирово', 'киевский']
 ]);
