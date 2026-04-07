@@ -480,6 +480,29 @@ const normalizeDistrict = (val) => {
   return map[s] || s;
 };
 
+const splitLocationTargets = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(/\s*(?:,|\/|\\|\||\s+или\s+|\s+либо\s+|;)\s*/i)
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+};
+
+const getNormalizedLocationTargets = (locationValue) => {
+  const parts = splitLocationTargets(locationValue);
+  const targets = new Set();
+  parts.forEach((part) => {
+    const normalized = normalizeDistrict(part);
+    if (normalized) targets.add(normalized);
+    // Arcadia/center are typically queries inside Prymorsky district.
+    if (normalized === 'arcadia' || normalized === 'fontan') {
+      targets.add('prymorskyi');
+    }
+  });
+  return Array.from(targets).filter((v) => v && v !== 'odesa');
+};
+
 const hasHardFilters = (insights = {}) => {
   return Boolean(
     insights?.operation ||
@@ -735,14 +758,20 @@ const applyHardGateByInsights = (properties = [], insights = {}) => {
   if (expectedType) {
     list = list.filter((p) => normalizeTypeForProperty(p?.property_type) === expectedType);
   }
-  const insightDistrict = normalizeDistrict(insights?.location);
-  if (insightDistrict && insightDistrict !== 'odesa') {
+  const insightDistrictTargets = getNormalizedLocationTargets(insights?.location);
+  if (insightDistrictTargets.length) {
     list = list.filter((p) => {
-      const propDistrict = normalizeDistrict(p?.district || p?.neighborhood || p?.city);
-      if (!propDistrict) return false;
-      return propDistrict === insightDistrict
-        || propDistrict.includes(insightDistrict)
-        || insightDistrict.includes(propDistrict);
+      const propParts = [
+        normalizeDistrict(p?.district),
+        normalizeDistrict(p?.neighborhood),
+        normalizeDistrict(p?.city)
+      ].filter(Boolean);
+      if (!propParts.length) return false;
+      return insightDistrictTargets.some((target) => propParts.some((propPart) => (
+        propPart === target
+        || propPart.includes(target)
+        || target.includes(propPart)
+      )));
     });
   }
   if (insights?.rcOnly === true || insights?.residentialComplexOnly === true || hasRcOnlySignal(insights)) {
