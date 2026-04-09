@@ -3,8 +3,10 @@ import {
   getAllProperties, 
   getPropertyByExternalId 
 } from '../services/propertiesRepository.js';
+import { listResidentialComplexes } from '../services/residentialComplexesRepository.js';
 
 const router = express.Router();
+const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
 
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
 const DISTRICT_ALIASES = new Map([
@@ -594,6 +596,23 @@ router.get('/search', async (req, res) => {
   } catch (err) {
     console.error('❌ Ошибка в /api/cards/search:', err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Получить карточку по external_id
+router.get('/residential-complexes', async (req, res) => {
+  try {
+    if (!SERVICE_CLIENT_ID) {
+      return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
+    }
+    const q = String(req.query?.q ?? '').trim();
+    const limitRaw = Number.parseInt(String(req.query?.limit ?? '50').trim(), 10);
+    const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
+    const items = await listResidentialComplexes(SERVICE_CLIENT_ID, { q, limit });
+    return res.json({ ok: true, items });
+  } catch (error) {
+    console.error('GET /api/cards/residential-complexes:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
 });
 
