@@ -628,8 +628,8 @@ export async function startTelegramBot() {
         const total = ids.length;
         const heading = `Подборка из ${total} объектов`;
         const messageText = [
-          `Подобрал для вас подборку из ${total} объектов.`,
-          'Откройте карточки — внутри все детали и фото.'
+          `🏘 Подобрал для вас подборку из ${total} объектов.`,
+          '📸 Откройте карточки — внутри все детали и фото.'
         ].join('\n');
         const miniAppDeepLink = buildMiniAppSelectionDeepLink(selectionToken);
         const imageUrl = isValidPublicImageUrl(first?.image) ? first.image : '';
@@ -648,7 +648,7 @@ export async function startTelegramBot() {
               photo_url: imageUrl,
               thumbnail_url: imageUrl,
               title: `🏘 ${heading}`,
-              description: `${total} объектов`,
+              description: `🏠 ${total} объектов`,
               caption: messageText,
               ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {})
             }
@@ -656,7 +656,7 @@ export async function startTelegramBot() {
               type: 'article',
               id: `share_sel_article_${selectionToken.slice(0, 24)}_${Date.now()}`,
               title: `🏘 ${heading}`,
-              description: `${total} объектов`,
+              description: `🏠 ${total} объектов`,
               input_message_content: {
                 message_text: messageText
               },
@@ -688,11 +688,11 @@ export async function startTelegramBot() {
       const typeWithRooms = roomsLabel ? `${property.propertyTypeLabel}, ${roomsLabel}` : property.propertyTypeLabel;
       const heading = typeWithRooms;
       const messageText = [
-        'Подобрал объект, который может вам подойти.',
-        `Тип: ${typeWithRooms}`,
-        `Цена: ${property.priceLabel || '—'}`,
-        `Площадь: ${formatAreaM2(property.areaM2)}`,
-        `Район: ${district || '—'}`
+        '🏡 Подобрал объект, который может вам подойти.',
+        `🏷 Тип: ${typeWithRooms}`,
+        `💰 Цена: ${property.priceLabel || '—'}`,
+        `📐 Площадь: ${formatAreaM2(property.areaM2)}`,
+        `📍 Район: ${district || '—'}`
       ].join('\n');
 
       const miniAppDeepLink = buildMiniAppDeepLink(property.id);
@@ -712,7 +712,7 @@ export async function startTelegramBot() {
             photo_url: imageUrl,
             thumbnail_url: imageUrl,
             title: `🏙 ${heading}`,
-            description: `${property.priceLabel} • ${district}`,
+            description: `💰 ${property.priceLabel} • 📍 ${district}`,
             caption: messageText,
             ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {})
           }
@@ -720,7 +720,7 @@ export async function startTelegramBot() {
             type: 'article',
             id: `share_article_${property.id}_${Date.now()}`,
             title: `🏙 ${heading}`,
-            description: `${property.priceLabel} • ${district}`,
+            description: `💰 ${property.priceLabel} • 📍 ${district}`,
             input_message_content: {
               message_text: messageText
             },
