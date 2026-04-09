@@ -792,7 +792,7 @@ const applyResidentialComplexFallbackFromTranscript = (transcription = '', insig
   let complexApplied = null;
 
   const lower = source.toLowerCase();
-  const rcOnlyRe = /(?:только\s*[жз]к|лишь\s*[жз]к|исключительно\s*[жз]к|(?:^|\s)(?:[жз]к|[жз]\/к)(?:\s|$)|в\s*[жз]к|жил(?:ой|ого|ом|ые|ых)?\s+комплекс(?:ы|а|е|ах)?|в\s+жил(?:ом|ых)\s+комплекс(?:е|ах)?)/i;
+  const rcOnlyRe = /(?:^|\s)(?:[жз]к|[жз]\/к)(?:\s|$)|(?:только|лишь|исключительно)\s+(?:в\s+)?(?:[жз]к|[жз]\/к|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)|\bв\s*[жз]к\b|\bжил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?\b|\bв\s+жил(?:ом|ых|ой)\s+комплекс(?:е|ах|ов)?\b/i;
   const hasRcOnly = rcOnlyRe.test(lower);
   if (hasRcOnly && insights.rcOnly !== true) {
     insights.rcOnly = true;
@@ -803,11 +803,11 @@ const applyResidentialComplexFallbackFromTranscript = (transcription = '', insig
 
   if (!String(insights.residentialComplex || '').trim()) {
     let complexName = null;
-    const quoted = source.match(/\b(?:жк|зк)\s*[«"']([^»"']{2,60})[»"']/i);
+    const quoted = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s*[«"']([^»"']{2,60})[»"']/i);
     if (quoted && quoted[1]) {
       complexName = String(quoted[1]).trim();
     } else {
-      const plain = source.match(/\b(?:жк|зк)\s+([a-zа-яё0-9][a-zа-яё0-9\-\s]{1,48})(?=$|[,.!?;:]|\s+(?:в|на|для|до|котор|где)\b)/i);
+      const plain = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s+([a-zа-яё0-9][a-zа-яё0-9\-\s]{1,48})(?=$|[,.!?;:]|\s+(?:в|на|для|до|котор|где)\b)/i);
       if (plain && plain[1]) {
         complexName = String(plain[1]).trim();
       }
