@@ -8,24 +8,11 @@ import {
   getStats,
   handleInteraction
 } from '../controllers/audioController.js';
+import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 
 const router = express.Router();
 
 const normalizeTgId = (value) => String(value || '').trim();
-const resolveViewerAccess = (tgUserIdRaw) => {
-  const tgUserId = normalizeTgId(tgUserIdRaw);
-  const superAdminId = normalizeTgId(process.env.SUPER_ADMIN_ID);
-  const ownerId = normalizeTgId(process.env.OWNER_TG_ID);
-  const isSuperAdmin = !!(tgUserId && superAdminId && tgUserId === superAdminId);
-  const isOwner = !!(tgUserId && ownerId && tgUserId === ownerId);
-  const isAdmin = isSuperAdmin || isOwner;
-  return {
-    accessRole: isAdmin ? (isSuperAdmin ? 'super_admin' : 'owner') : 'user',
-    isAdmin,
-    isSuperAdmin,
-    isOwner
-  };
-};
 
 // 🚀 Memory storage для максимальной скорости
 const storage = multer.memoryStorage();
@@ -153,10 +140,10 @@ router.post('/upload',
 router.get('/session/:sessionId', getSessionInfo);
 
 // 🔐 Получить роль доступа для UI (admin/wishlist switch in header)
-router.get('/access', (req, res) => {
+router.get('/access', async (req, res) => {
   try {
     const tgUserId = normalizeTgId(req.query?.tgUserId);
-    const access = resolveViewerAccess(tgUserId);
+    const access = await resolveViewerAccessByTgId(tgUserId);
     res.json({
       ok: true,
       tgUserId: tgUserId || null,

@@ -3,7 +3,6 @@ import {
   buildFrontendRedirect,
   buildOlxAuthorizeUrl,
   exchangeCodeForTokens,
-  isAdminTgUser,
   resolveClientId,
   verifyStateToken
 } from '../services/olxOAuthService.js';
@@ -12,6 +11,7 @@ import {
   upsertOlxIntegration
 } from '../services/olxIntegrationRepository.js';
 import { syncOlxAdvertsForAdmin } from '../services/olxImportService.js';
+import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 
 const router = express.Router();
 
@@ -25,16 +25,20 @@ const pickOlxUserId = (payload = {}) =>
     payload?.olx_user_id
   ) || null;
 
+const ensurePaidAdminAccess = async (tgUserId) => {
+  const access = await resolveViewerAccessByTgId(tgUserId);
+  if (access.isAdmin) return { ok: true, access };
+  if (access.isOwnerIdentity === true) {
+    return { ok: false, status: 403, body: { ok: false, error: 'SUBSCRIPTION_REQUIRED', subscription: access.subscription || null } };
+  }
+  return { ok: false, status: 403, body: { ok: false, error: 'FORBIDDEN' } };
+};
+
 router.get('/connect', async (req, res) => {
   try {
     const tgUserId = normalize(req.query?.tgUserId);
-    if (!isAdminTgUser(tgUserId)) {
-      return res.status(403).json({
-        ok: false,
-        error: 'FORBIDDEN',
-        message: 'Only owner/super-admin can connect OLX'
-      });
-    }
+    const accessCheck = await ensurePaidAdminAccess(tgUserId);
+    if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
 
     const clientId = resolveClientId(req.query?.clientId);
     const returnTo = normalize(req.query?.returnTo);
@@ -84,11 +88,12 @@ router.get('/callback', async (req, res) => {
     return res.redirect(redirectUrl);
   }
 
-  if (!isAdminTgUser(tgUserId)) {
+  const callbackAccess = await ensurePaidAdminAccess(tgUserId);
+  if (!callbackAccess.ok) {
     const redirectUrl = buildFrontendRedirect({
       returnTo,
       status: 'failed',
-      reason: 'forbidden'
+      reason: callbackAccess.body?.error || 'forbidden'
     });
     return res.redirect(redirectUrl);
   }
@@ -132,12 +137,8 @@ router.get('/callback', async (req, res) => {
 router.get('/status', async (req, res) => {
   try {
     const tgUserId = normalize(req.query?.tgUserId);
-    if (!isAdminTgUser(tgUserId)) {
-      return res.status(403).json({
-        ok: false,
-        error: 'FORBIDDEN'
-      });
-    }
+    const accessCheck = await ensurePaidAdminAccess(tgUserId);
+    if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
     const clientId = resolveClientId(req.query?.clientId);
     const status = await getOlxIntegrationStatus({ clientId, tgUserId });
     return res.json({
@@ -156,12 +157,8 @@ router.get('/status', async (req, res) => {
 router.post('/sync', async (req, res) => {
   try {
     const tgUserId = normalize(req.query?.tgUserId || req.body?.tgUserId);
-    if (!isAdminTgUser(tgUserId)) {
-      return res.status(403).json({
-        ok: false,
-        error: 'FORBIDDEN'
-      });
-    }
+    const accessCheck = await ensurePaidAdminAccess(tgUserId);
+    if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
 
     const clientId = resolveClientId(req.query?.clientId || req.body?.clientId);
     const result = await syncOlxAdvertsForAdmin({ clientId, tgUserId });

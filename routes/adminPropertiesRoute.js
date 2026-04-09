@@ -8,6 +8,7 @@ import {
   getPropertyByExternalId,
   updateManualPropertyByExternalId
 } from '../services/propertiesRepository.js';
+import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 
 const router = express.Router();
 
@@ -20,21 +21,6 @@ const IMAGE_WARN_SIZE_MB = (() => {
 })();
 const IMAGE_WARN_SIZE_BYTES = IMAGE_WARN_SIZE_MB * 1024 * 1024;
 const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
-
-const normalizeId = (v) => String(v || '').trim();
-const resolveAccess = (tgUserIdRaw) => {
-  const tgUserId = normalizeId(tgUserIdRaw);
-  const superAdminId = normalizeId(process.env.SUPER_ADMIN_ID);
-  const ownerId = normalizeId(process.env.OWNER_TG_ID);
-  const isSuperAdmin = !!(tgUserId && superAdminId && tgUserId === superAdminId);
-  const isOwner = !!(tgUserId && ownerId && tgUserId === ownerId);
-  return {
-    tgUserId,
-    isAdmin: isSuperAdmin || isOwner,
-    isOwner,
-    isSuperAdmin
-  };
-};
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -59,21 +45,33 @@ const uploadImages = (req, res, next) => {
   });
 };
 
-const requireAdmin = (req, res, next) => {
-  const fromBody = req.body?.tgUserId;
-  const fromQuery = req.query?.tgUserId;
-  const access = resolveAccess(fromBody || fromQuery);
-  const isDev = String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
-  const devAdminFlag = String(req.body?.devAdmin || req.query?.devAdmin || '').trim() === '1';
-  if (!access.isAdmin && isDev && devAdminFlag) {
-    req.viewerAccess = { ...access, isAdmin: true, devBypass: true };
-    return next();
+const requireAdmin = async (req, res, next) => {
+  try {
+    const fromBody = req.body?.tgUserId;
+    const fromQuery = req.query?.tgUserId;
+    const access = await resolveViewerAccessByTgId(fromBody || fromQuery);
+    const isDev = String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
+    const devAdminFlag = String(req.body?.devAdmin || req.query?.devAdmin || '').trim() === '1';
+    if (!access.isAdmin && isDev && devAdminFlag) {
+      req.viewerAccess = { ...access, isAdmin: true, devBypass: true };
+      return next();
+    }
+    if (!access.isAdmin) {
+      if (access.isOwnerIdentity === true) {
+        return res.status(403).json({
+          ok: false,
+          error: 'SUBSCRIPTION_REQUIRED',
+          subscription: access.subscription || null
+        });
+      }
+      return res.status(403).json({ ok: false, error: 'FORBIDDEN_ADMIN_ONLY' });
+    }
+    req.viewerAccess = access;
+    next();
+  } catch (error) {
+    console.error('❌ requireAdmin access check failed:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
-  if (!access.isAdmin) {
-    return res.status(403).json({ ok: false, error: 'FORBIDDEN_ADMIN_ONLY' });
-  }
-  req.viewerAccess = access;
-  next();
 };
 
 const parseIntSafe = (value) => {
