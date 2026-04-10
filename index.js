@@ -28,7 +28,7 @@ import olxRouter from './routes/olxRoute.js';
 import adminPropertiesRouter from './routes/adminPropertiesRoute.js';
 import adminResidentialComplexesRouter from './routes/adminResidentialComplexesRoute.js';
 import adminSubscriptionsRouter from './routes/adminSubscriptionsRoute.js';
-import { startTelegramBot, stopTelegramBot } from './services/telegramBot.js';
+import { startTelegramBot, stopTelegramBot, telegramWebhookExpressHandler } from './services/telegramBot.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -137,6 +137,7 @@ app.use('/api/olx', olxRouter);
 app.use('/api/admin', adminPropertiesRouter);
 app.use('/api/admin', adminResidentialComplexesRouter);
 app.use('/api/admin', adminSubscriptionsRouter);
+app.post('/api/telegram/webhook', telegramWebhookExpressHandler);
 
 // 🔍 Корневой маршрут с информацией об API
 app.get('/', (req, res) => {

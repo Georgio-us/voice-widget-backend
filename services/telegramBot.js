@@ -16,6 +16,67 @@ const VIA_LOGO_FALLBACK = String(process.env.VIA_LOGO_FALLBACK || '').trim();
 const BOT_CLIENT_ID = String(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID || 'demo').trim() || 'demo';
 
 let botInstance = null;
+let botTransportMode = null; // 'webhook' | 'polling'
+
+const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+const TELEGRAM_WEBHOOK_PATH = '/api/telegram/webhook';
+
+const normalize = (value) => String(value || '').trim();
+
+function resolveBackendOrigin() {
+  const explicitWebhookUrl = normalize(process.env.TELEGRAM_WEBHOOK_URL);
+  if (explicitWebhookUrl) {
+    try {
+      const u = new URL(explicitWebhookUrl);
+      return `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
+    } catch {}
+  }
+
+  const fromOlxRedirect = normalize(process.env.OLX_REDIRECT_URI);
+  if (fromOlxRedirect) {
+    try {
+      return new URL(fromOlxRedirect).origin;
+    } catch {}
+  }
+
+  const staticUrl = normalize(process.env.RAILWAY_STATIC_URL);
+  if (staticUrl) {
+    if (/^https?:\/\//i.test(staticUrl)) return staticUrl.replace(/\/+$/, '');
+    return `https://${staticUrl.replace(/\/+$/, '')}`;
+  }
+
+  const publicDomain = normalize(process.env.RAILWAY_PUBLIC_DOMAIN);
+  if (publicDomain) {
+    const host = publicDomain.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    if (host) return `https://${host}`;
+  }
+
+  return '';
+}
+
+function buildWebhookSecret(token) {
+  const provided = normalize(process.env.TELEGRAM_WEBHOOK_SECRET);
+  if (provided) return provided;
+  const seed = normalize(process.env.OLX_STATE_SECRET) || normalize(process.env.CLIENT_ID) || 'via-webhook';
+  const safeTail = normalize(token).slice(-16).replace(/[^a-zA-Z0-9]/g, '');
+  return `via_${seed.slice(0, 16)}_${safeTail}`;
+}
+
+async function configureWebhookTransport(bot, token) {
+  const originOrUrl = resolveBackendOrigin();
+  if (!originOrUrl) {
+    throw new Error('WEBHOOK_ORIGIN_NOT_RESOLVED');
+  }
+  const webhookUrl = /^https?:\/\//i.test(originOrUrl) && originOrUrl.includes('/api/telegram/webhook')
+    ? originOrUrl
+    : `${originOrUrl.replace(/\/+$/, '')}${TELEGRAM_WEBHOOK_PATH}`;
+  const secretToken = buildWebhookSecret(token);
+  await bot.telegram.setWebhook(webhookUrl, {
+    secret_token: secretToken,
+    allowed_updates: ['message', 'callback_query', 'inline_query']
+  });
+  return { webhookUrl, secretToken };
+}
 
 function normalizePropId(raw) {
   return String(raw || '')
@@ -771,10 +832,33 @@ export async function startTelegramBot() {
     await ctx.reply('Нажмите «Открыть каталог» или используйте /menu.');
   });
 
-  await bot.launch();
-  botInstance = bot;
+  try {
+    if (isProd) {
+      const { webhookUrl, secretToken } = await configureWebhookTransport(bot, token);
+      botInstance = bot;
+      botTransportMode = 'webhook';
+      botInstance.__webhookPath = TELEGRAM_WEBHOOK_PATH;
+      botInstance.__webhookSecret = secretToken;
+      botInstance.__webhookUrl = webhookUrl;
+      console.log(`🤖 Telegram interactive bot запущен (webhook): ${webhookUrl}`);
+      return botInstance;
+    }
 
-  console.log('🤖 Telegram interactive bot запущен');
+    await bot.telegram.deleteWebhook({ drop_pending_updates: false }).catch(() => {});
+    await bot.launch();
+    botInstance = bot;
+    botTransportMode = 'polling';
+    console.log('🤖 Telegram interactive bot запущен (polling)');
+    return botInstance;
+  } catch (error) {
+    console.warn(`⚠️ Webhook setup failed, fallback to polling: ${error?.message || error}`);
+    await bot.telegram.deleteWebhook({ drop_pending_updates: false }).catch(() => {});
+    await bot.launch();
+    botInstance = bot;
+    botTransportMode = 'polling';
+    console.log('🤖 Telegram interactive bot запущен (polling fallback)');
+  }
+
   return botInstance;
 }
 
@@ -783,7 +867,34 @@ export function stopTelegramBot(signal = 'SIGTERM') {
     return;
   }
 
-  botInstance.stop(signal);
-  console.log(`🤖 Telegram interactive bot остановлен (${signal})`);
+  if (botTransportMode === 'polling') {
+    botInstance.stop(signal);
+  }
+  console.log(`🤖 Telegram interactive bot остановлен (${signal}) mode=${botTransportMode || 'unknown'}`);
   botInstance = null;
+  botTransportMode = null;
+}
+
+export async function telegramWebhookExpressHandler(req, res) {
+  try {
+    if (!botInstance) {
+      return res.status(503).json({ ok: false, error: 'BOT_NOT_READY' });
+    }
+    const expectedSecret = String(botInstance.__webhookSecret || '').trim();
+    const incomingSecret = String(req.headers?.['x-telegram-bot-api-secret-token'] || '').trim();
+    if (expectedSecret && incomingSecret !== expectedSecret) {
+      return res.status(401).json({ ok: false, error: 'INVALID_WEBHOOK_SECRET' });
+    }
+    const update = req.body;
+    if (!update || typeof update !== 'object') {
+      return res.status(400).json({ ok: false, error: 'INVALID_UPDATE_BODY' });
+    }
+    await botInstance.handleUpdate(update, res);
+    if (!res.headersSent) return res.status(200).json({ ok: true });
+    return undefined;
+  } catch (error) {
+    console.warn('telegram webhook handler failed:', error?.message || error);
+    if (!res.headersSent) return res.status(200).json({ ok: true });
+    return undefined;
+  }
 }
