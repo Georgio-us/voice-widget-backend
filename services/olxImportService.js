@@ -14,6 +14,15 @@ const DATA_OLX_DIR = path.join(__dirname, '..', 'data', 'olx');
 
 const normalize = (value) => String(value || '').trim();
 
+const normalizeResidentialComplexName = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  let normalized = raw.replace(/\s+/g, ' ').trim();
+  // OLX OCR/ASR typo fallback observed in production: "Зодотая Эра" -> "Золотая Эра"
+  normalized = normalized.replace(/\bзодот(ая|ой|ую|ые|ых)?\b/gi, 'золот$1');
+  return normalized;
+};
+
 const normalizeComplexName = (value) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -383,6 +392,17 @@ const resolveNeighborhood = (attrsIndex) => {
   return fromAttrs || null;
 };
 
+const inferDistrictFromText = (value) => {
+  const text = String(value || '').toLowerCase();
+  if (!text) return null;
+  if (/(котовск|котовськ|пос[её]лок\s+котовск|сел(?:ище)?\s+котовськ|сузоров|суворов)/i.test(text)) return 'Суворовский';
+  if (/(лиманк|limanka|таиров|таїров|tairov|киевск|kyivsk|kievsk)/i.test(text)) return 'Киевский';
+  if (/(крыжанов|крижанів|kryzhan|фонтанк|fontanka)/i.test(text)) return 'Суворовский';
+  if (/(авангард|avangard|малиновск|malinovsk|хаджиб)/i.test(text)) return 'Малиновский';
+  if (/(приморск|primorsk|аркади|arcad|француз|центр)/i.test(text)) return 'Приморский';
+  return null;
+};
+
 const resolveCityName = (location = {}) => {
   const cityId = location?.city_id;
   const byId = cityId != null
@@ -478,13 +498,22 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
   const floor = parseFloor(attrsIndex);
   const bathrooms = parseBathrooms(attrsIndex);
   const buildingFloors = parseBuildingFloors(attrsIndex);
-  const districtName = resolveDistrictName(location, attrsIndex);
+  let districtName = resolveDistrictName(location, attrsIndex);
   const neighborhood = resolveNeighborhood(attrsIndex);
   const cityLabel = resolveCityName(location);
   const { hasBalcony, hasParking } = parseComfortFlags(attrsIndex, advert);
 
-  const zkh = getAttrText(attrsIndex, ['zkh']);
+  const zkh = normalizeResidentialComplexName(getAttrText(attrsIndex, ['zkh']));
   const street = getAttrText(attrsIndex, ['street_address']) || normalize(location?.street) || null;
+  if (!districtName) {
+    const districtFallbackText = [
+      neighborhood,
+      street,
+      normalize(advert?.title),
+      normalize(advert?.description)
+    ].filter(Boolean).join(' ');
+    districtName = inferDistrictFromText(districtFallbackText) || null;
+  }
   const kitchenArea = toNumber(getAttrText(attrsIndex, ['kitchen_area']));
   const heating = getAttrText(attrsIndex, ['heating']);
   const repair = parseRepair(attrsIndex);
