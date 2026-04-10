@@ -9,6 +9,7 @@ const PLAN_DURATION = {
   year_365: 365,
   lifetime: 0
 };
+const SUPPORTED_PLANS = ['trial_7', 'month_30', 'year_365', 'lifetime'];
 
 export function hashActivationKey(rawKey) {
   const key = String(rawKey || '').trim();
@@ -40,7 +41,7 @@ export async function createActivationKey({
   issuedByTgId = null
 } = {}) {
   const safePlan = String(plan || '').trim().toLowerCase();
-  if (!['trial_7', 'month_30', 'year_365', 'lifetime'].includes(safePlan)) {
+  if (!SUPPORTED_PLANS.includes(safePlan)) {
     throw new Error('INVALID_PLAN');
   }
   const resolvedDuration =
@@ -84,6 +85,31 @@ export async function createActivationKey({
     keyLast4,
     record: row
   };
+}
+
+export async function getActivationKeyStatsByPlan() {
+  const defaults = Object.fromEntries(
+    SUPPORTED_PLANS.map((plan) => [plan, { generated: 0, used: 0 }])
+  );
+  const { rows } = await pool.query(
+    `
+      SELECT
+        plan,
+        COUNT(*)::int AS generated_count,
+        COALESCE(SUM(redemptions_count), 0)::int AS used_count
+      FROM license_keys
+      GROUP BY plan
+    `
+  );
+  for (const row of rows || []) {
+    const plan = String(row?.plan || '').trim().toLowerCase();
+    if (!Object.prototype.hasOwnProperty.call(defaults, plan)) continue;
+    defaults[plan] = {
+      generated: Number.isFinite(Number(row?.generated_count)) ? Number(row.generated_count) : 0,
+      used: Number.isFinite(Number(row?.used_count)) ? Number(row.used_count) : 0
+    };
+  }
+  return defaults;
 }
 
 export async function redeemActivationKey({ activationKey, ownerTgId, activatedByTgId = null } = {}) {
@@ -211,4 +237,3 @@ export async function redeemActivationKey({ activationKey, ownerTgId, activatedB
     client.release();
   }
 }
-

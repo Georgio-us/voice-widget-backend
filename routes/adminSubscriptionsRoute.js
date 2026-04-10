@@ -1,6 +1,6 @@
 import express from 'express';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
-import { createActivationKey, redeemActivationKey } from '../services/subscriptionService.js';
+import { createActivationKey, redeemActivationKey, getActivationKeyStatsByPlan } from '../services/subscriptionService.js';
 
 const router = express.Router();
 
@@ -122,5 +122,14 @@ router.post('/subscriptions/keys/create', requireSuperAdmin, async (req, res) =>
   }
 });
 
-export default router;
+router.get('/subscriptions/keys/stats', requireSuperAdmin, async (req, res) => {
+  try {
+    const stats = await getActivationKeyStatsByPlan();
+    return res.json({ ok: true, stats });
+  } catch (error) {
+    console.error('❌ GET /api/admin/subscriptions/keys/stats error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
 
+export default router;
