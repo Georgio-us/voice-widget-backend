@@ -14,6 +14,12 @@ const DATA_OLX_DIR = path.join(__dirname, '..', 'data', 'olx');
 
 const normalize = (value) => String(value || '').trim();
 
+const normalizeComplexName = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.replace(/\s+/g, ' ').slice(0, 200).trim();
+};
+
 const toNumber = (value) => {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -657,6 +663,41 @@ async function upsertPropertyFromOlx(mapped) {
   return result.rows?.[0] || null;
 }
 
+async function upsertImportedResidentialComplexes({
+  clientId,
+  createdByTgUserId,
+  names = []
+}) {
+  const safeClientId = normalize(clientId);
+  if (!safeClientId) return 0;
+  const uniqueNames = [...new Set(
+    (Array.isArray(names) ? names : [])
+      .map((item) => normalizeComplexName(item))
+      .filter(Boolean)
+  )];
+  if (!uniqueNames.length) return 0;
+
+  const tgStr = createdByTgUserId != null && String(createdByTgUserId).trim()
+    ? String(createdByTgUserId).trim()
+    : '';
+  const tgNum = /^\d{1,19}$/.test(tgStr) ? tgStr : null;
+
+  const inserted = await pool.query(
+    `
+    INSERT INTO client_residential_complexes (client_id, name, created_by_tg_user_id)
+    SELECT $1, item.name, $2
+    FROM (
+      SELECT DISTINCT btrim(regexp_replace(unnest($3::text[]), E'\\s+', ' ', 'g')) AS name
+    ) AS item
+    WHERE item.name <> ''
+    ON CONFLICT (client_id, name_normalized) DO NOTHING
+    `,
+    [safeClientId, tgNum, uniqueNames]
+  );
+
+  return Number(inserted?.rowCount || 0);
+}
+
 async function fetchAdvertsPage(accessToken, { offset = 0, limit = 100 } = {}) {
   const url = new URL(`${OLX_PARTNER_BASE()}/adverts`);
   url.searchParams.set('offset', String(offset));
@@ -754,16 +795,28 @@ export async function syncOlxAdvertsForAdmin({
   }
 
   let imported = 0;
+  const importedComplexNames = new Set();
   for (const advert of adverts) {
     const mapped = normalizeOlxAdvert(advert, clientId);
     if (!mapped?.externalId || mapped.externalId === 'OLX_') continue;
     await upsertPropertyFromOlx(mapped);
+    if (mapped?.isActive) {
+      const complex = normalizeComplexName(mapped?.zkh || mapped?.features?.complex);
+      if (complex) importedComplexNames.add(complex);
+    }
     imported += 1;
   }
+
+  const residentialComplexesUpserted = await upsertImportedResidentialComplexes({
+    clientId,
+    createdByTgUserId: tgUserId,
+    names: Array.from(importedComplexNames)
+  });
 
   return {
     totalFetched: adverts.length,
     imported,
-    skipped: Math.max(0, adverts.length - imported)
+    skipped: Math.max(0, adverts.length - imported),
+    residentialComplexesUpserted
   };
 }
