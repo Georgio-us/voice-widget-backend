@@ -37,11 +37,15 @@ Required:
 - `TELEGRAM_BOT_USERNAME` (without `@`)
 - `OWNER_TG_ID`
 - `SUPER_ADMIN_ID`
+- `SUBSCRIPTION_KEY_PEPPER` (secret salt for activation key hash verification)
 
 Optional:
 - `BOT_CLIENT_ID` (default: `demo`)
 - `VIA_LOGO_FALLBACK`
 - `OLX_SCOPES` (space-separated OAuth scopes required by OLX API)
+- `TELEGRAM_WEBAPP_BOT_TOKEN` (explicit override for WebApp `initData` verification token)
+- `TELEGRAM_INITDATA_ENFORCE_ADMIN` (strict Telegram signature check for admin access, recommended `1`)
+- `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID` (legacy fallback via plain `tgUserId`, recommended `0`)
 
 ### Frontend (`Voice-Widget-Frontend`)
 
@@ -65,6 +69,46 @@ What it does:
 - extends `properties` with `price_period`, `geo`, `features`, `media`
 - backfills JSONB fields from legacy columns
 - creates indexes
+
+## 4.1) Telegram/Auth Variables Explained (important)
+
+### Which Telegram token is used where
+
+- `TELEGRAM_INTERACTIVE_TOKEN`
+  - Interactive bot token (Mini App bot).
+  - Used for Telegram WebApp identity (`initData`) verification.
+  - This is the main token for role detection in Mini App.
+
+- `TELEGRAM_BOT_TOKEN`
+  - Notification bot token (alerts/messages).
+  - Not used as primary WebApp identity token anymore.
+
+- `TELEGRAM_WEBAPP_BOT_TOKEN` (optional)
+  - Explicitly forces which token must be used for WebApp `initData` verification.
+  - If set, it has highest priority.
+
+Verification token priority in backend:
+1. `TELEGRAM_WEBAPP_BOT_TOKEN`
+2. `TELEGRAM_INTERACTIVE_TOKEN`
+3. `TELEGRAM_BOT_TOKEN`
+
+### Access mode flags
+
+- `TELEGRAM_INITDATA_ENFORCE_ADMIN=1`
+  - Strict protection enabled.
+  - Admin/owner/super-admin access is granted only if Telegram signature is valid.
+
+- `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID=0`
+  - Plain `tgUserId` fallback disabled.
+  - Recommended for production.
+
+### Safe rollback (no code revert)
+
+If strict mode causes emergency access issues, temporarily switch to:
+- `TELEGRAM_INITDATA_ENFORCE_ADMIN=0`
+- `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID=1`
+
+Then redeploy backend. This restores legacy behavior.
 
 ## 5) Import Properties
 
@@ -96,6 +140,9 @@ Examples:
 3. Lead submit works (header + card)
 4. Telegram admin role icon and menu are correct
 5. Share flows work (regular share + Telegram inline)
+6. With strict mode enabled:
+   - owner/super-admin still see admin panel
+   - guest user cannot access admin APIs
 
 ## 8) SQL Verification Snippets
 
@@ -137,6 +184,9 @@ ORDER BY indexname;
 ### Admin icon is missing
 - Check `OWNER_TG_ID` / `SUPER_ADMIN_ID` in backend ENV.
 - Ensure app is opened via Telegram WebApp (local browser is treated as regular user).
+- If strict mode is enabled, verify `TELEGRAM_INTERACTIVE_TOKEN` is correct for this Mini App bot.
+- Check auth flags:
+  - prod target: `TELEGRAM_INITDATA_ENFORCE_ADMIN=1`, `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID=0`
 
 ### CORS failure
 - Ensure `FRONTEND_URL` is exact origin of frontend.
@@ -145,4 +195,3 @@ ORDER BY indexname;
 
 - Keep this file updated when onboarding flow changes.
 - Do not put tokens, passwords, or private IDs into this document.
-
