@@ -22,6 +22,18 @@ const TELEGRAM_ALLOW_LEGACY_TGID = parseBool(
   !TELEGRAM_ENFORCE_ADMIN_INITDATA
 );
 
+const resolveTelegramWebAppBotToken = () => {
+  // Priority for WebApp signature verification:
+  // 1) explicit dedicated token
+  // 2) interactive bot token (current project setup)
+  // 3) generic bot token (legacy fallback)
+  return normalize(
+    process.env.TELEGRAM_WEBAPP_BOT_TOKEN ||
+    process.env.TELEGRAM_INTERACTIVE_TOKEN ||
+    process.env.TELEGRAM_BOT_TOKEN
+  );
+};
+
 const AuthError = class extends Error {
   constructor(code, message = code) {
     super(message);
@@ -59,7 +71,7 @@ const verifyTelegramInitData = (initDataRaw) => {
     return { ok: false, code: 'TELEGRAM_INITDATA_REQUIRED' };
   }
 
-  const botToken = normalize(process.env.TELEGRAM_BOT_TOKEN);
+  const botToken = resolveTelegramWebAppBotToken();
   if (!botToken) {
     return { ok: false, code: 'TELEGRAM_BOT_TOKEN_REQUIRED' };
   }
@@ -167,4 +179,3 @@ export const toHttpAuthError = (error) => {
   }
   return null;
 };
-
