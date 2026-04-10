@@ -1745,6 +1745,17 @@ const applyMetaInsightsToSession = (session, meta) => {
     if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
     const raw = String(value).trim().toLowerCase();
     if (!raw) return null;
+    const normalizeNum = (v) => Number(String(v).replace(',', '.'));
+    const thousandBefore = raw.match(/(?:тыс|тысяч|thousand)\s*(\d+(?:[.,]\d+)?)/i);
+    if (thousandBefore) {
+      const n = normalizeNum(thousandBefore[1]);
+      if (Number.isFinite(n)) return Math.round(n * 1000);
+    }
+    const thousandAfter = raw.match(/(\d+(?:[.,]\d+)?)\s*(?:тыс|тысяч|thousand)\b/i);
+    if (thousandAfter) {
+      const n = normalizeNum(thousandAfter[1]);
+      if (Number.isFinite(n)) return Math.round(n * 1000);
+    }
     const compact = raw.replace(/\s+/g, '');
     const match = compact.match(/^(\d+(?:[.,]\d+)?)(k|к|тыс|тысяч|m|м|млн|million|миллион|миллиона|миллионов)?$/i);
     if (match) {

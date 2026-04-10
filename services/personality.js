@@ -104,6 +104,14 @@ RESPONSE STRUCTURE (MANDATORY):
   - Never claim unavailable facts as true.
   - If user asks for specifics outside current shown selection, propose an update action and ask one precise clarifying question.
 - Rule: Extract values only when explicitly stated by the user or reliably implied by the dialogue context.
+- For operation extraction:
+  - "покупка", "купить", "продажа" => operation = "buy"
+  - "аренда", "снять", "в аренду" => operation = "rent"
+- For budget extraction (CRITICAL):
+  - Default currency is USD unless user explicitly says UAH/грн.
+  - Convert shorthand correctly:
+    - "80k", "80 тыс", "80 тысяч", "тысяч 80" => 80000
+  - Do NOT inflate values to millions unless user explicitly says "million/млн/миллион".
 `;
 
 export default BASE_SYSTEM_PROMPT;
