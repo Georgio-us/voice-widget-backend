@@ -63,12 +63,16 @@ Run the foundation SQL once on the target DB:
 
 - `sql/001_stage1_foundation.sql`
 - `sql/002_olx_integrations.sql`
+- `sql/003_client_residential_complexes.sql`
+- `sql/004_specs_area_m2_decimal.sql`
+- `sql/005_subscriptions.sql`
 
 What it does:
 - creates `users` table
 - extends `properties` with `price_period`, `geo`, `features`, `media`
 - backfills JSONB fields from legacy columns
 - creates indexes
+- creates subscription schema (`owner_subscriptions`, `license_keys`, `license_redemptions`)
 
 ## 4.1) Telegram/Auth Variables Explained (important)
 
@@ -128,7 +132,7 @@ Examples:
 
 1. Update backend ENV
 2. Update frontend ENV
-3. Run SQL foundation script (if new DB)
+3. Run SQL scripts in order (if new DB): `001 -> 002 -> 003 -> 004 -> 005`
 4. Import properties
 5. Redeploy backend
 6. Redeploy frontend
@@ -174,6 +178,35 @@ SELECT indexname
 FROM pg_indexes
 WHERE tablename IN ('users', 'properties')
 ORDER BY indexname;
+```
+
+Check subscription tables:
+
+```sql
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
+  AND table_name IN ('owner_subscriptions', 'license_keys', 'license_redemptions')
+ORDER BY table_name;
+```
+
+Check subscription enums:
+
+```sql
+SELECT typname
+FROM pg_type
+WHERE typname IN ('subscription_plan', 'subscription_status', 'activation_source')
+ORDER BY typname;
+```
+
+Optional: clear generated keys for a freshly cloned client DB (keep table structure):
+
+```sql
+BEGIN;
+TRUNCATE TABLE license_redemptions RESTART IDENTITY;
+TRUNCATE TABLE license_keys RESTART IDENTITY;
+TRUNCATE TABLE owner_subscriptions RESTART IDENTITY;
+COMMIT;
 ```
 
 ## 9) Common Issues
