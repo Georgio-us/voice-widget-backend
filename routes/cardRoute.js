@@ -9,6 +9,13 @@ const router = express.Router();
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
 
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
+const normalizeOperationValue = (value) => {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  if (/(buy|sale|sell|purchase|покуп|купить|продаж)/i.test(raw)) return 'sale';
+  if (/(rent|lease|аренд|снять)/i.test(raw)) return 'rent';
+  return raw;
+};
 const DISTRICT_ALIASES = new Map([
   ['primorsky', 'приморский'],
   ['primorskiy', 'приморский'],
@@ -358,7 +365,7 @@ const normalizeProperty = (p) => {
 
   // ---------- operation / property_type / furnished ----------
   // trim, чтобы убрать " sale " / " apartment " из XLSX
-  const operation = toText(p.operation);
+  const operation = normalizeOperationValue(toText(p.operation));
   const property_type = toText(p.property_type);
   const furnished = toBool(p.furnished);
 
@@ -489,8 +496,8 @@ router.get('/search', async (req, res) => {
     }
 
     if (operation) {
-      const want = normalizeText(operation);
-      list = list.filter((p) => normalizeText(p.operation) === want);
+      const want = normalizeOperationValue(operation);
+      list = list.filter((p) => normalizeOperationValue(p.operation) === want);
     }
 
     const roomsStr = String(rooms || '').trim();
