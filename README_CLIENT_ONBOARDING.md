@@ -148,6 +148,29 @@ Examples:
    - owner/super-admin still see admin panel
    - guest user cannot access admin APIs
 
+## 7.1) Local Smoke Commands (non-blocking option)
+
+Backend:
+
+```bash
+cd Voice-Widget-Backend
+npm run smoke
+```
+
+Frontend:
+
+```bash
+cd Voice-Widget-Frontend
+npm run smoke
+```
+
+Soft mode (does not fail process, prints warnings/errors only):
+
+```bash
+cd Voice-Widget-Backend && npm run smoke:soft
+cd Voice-Widget-Frontend && npm run smoke:soft
+```
+
 ## 8) SQL Verification Snippets
 
 Check new columns:
