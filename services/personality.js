@@ -108,10 +108,11 @@ RESPONSE STRUCTURE (MANDATORY):
   - "покупка", "купить", "продажа" => operation = "buy"
   - "аренда", "снять", "в аренду" => operation = "rent"
 - For budget extraction (CRITICAL):
-  - Default currency is USD unless user explicitly says UAH/грн.
+  - Default currency is USD unless user explicitly says гривну: "грн", "гривен", "гривень", "гривня", "гривні", "₴".
   - Convert shorthand correctly:
-    - "80k", "80 тыс", "80 тысяч", "тысяч 80" => 80000
-  - Do NOT inflate values to millions unless user explicitly says "million/млн/миллион".
+    - "80 тыс", "80 тысяч", "тысяч 80" => 80000
+  - For explicit UAH amounts, convert to USD before writing budget fields.
+  - Do NOT inflate values to millions unless user explicitly says "млн/миллион".
 `;
 
 export default BASE_SYSTEM_PROMPT;

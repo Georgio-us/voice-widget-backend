@@ -1745,31 +1745,39 @@ const applyMetaInsightsToSession = (session, meta) => {
     if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
     const raw = String(value).trim().toLowerCase();
     if (!raw) return null;
+    const isUAH = /\b(грн|гривн|гривня|гривні|гривен|гривень)\b/.test(raw) || /₴/.test(raw);
+    const uahToUsdRate = Number(process.env.UAH_TO_USD_RATE || process.env.UAH_TO_USD || 0.024);
+    const toUsdIfNeeded = (amount) => {
+      if (!Number.isFinite(amount)) return null;
+      if (!isUAH) return Math.round(amount);
+      const rate = Number.isFinite(uahToUsdRate) && uahToUsdRate > 0 ? uahToUsdRate : 0.024;
+      return Math.round(amount * rate);
+    };
     const normalizeNum = (v) => Number(String(v).replace(',', '.'));
-    const thousandBefore = raw.match(/(?:тыс|тысяч|thousand)\s*(\d+(?:[.,]\d+)?)/i);
+    const thousandBefore = raw.match(/(?:тыс|тысяч)\s*(\d+(?:[.,]\d+)?)/i);
     if (thousandBefore) {
       const n = normalizeNum(thousandBefore[1]);
-      if (Number.isFinite(n)) return Math.round(n * 1000);
+      if (Number.isFinite(n)) return toUsdIfNeeded(n * 1000);
     }
-    const thousandAfter = raw.match(/(\d+(?:[.,]\d+)?)\s*(?:тыс|тысяч|thousand)\b/i);
+    const thousandAfter = raw.match(/(\d+(?:[.,]\d+)?)\s*(?:тыс|тысяч)\b/i);
     if (thousandAfter) {
       const n = normalizeNum(thousandAfter[1]);
-      if (Number.isFinite(n)) return Math.round(n * 1000);
+      if (Number.isFinite(n)) return toUsdIfNeeded(n * 1000);
     }
     const compact = raw.replace(/\s+/g, '');
-    const match = compact.match(/^(\d+(?:[.,]\d+)?)(k|к|тыс|тысяч|m|м|млн|million|миллион|миллиона|миллионов)?$/i);
+    const match = compact.match(/^(\d+(?:[.,]\d+)?)(k|к|тыс|тысяч|м|млн|миллион|миллиона|миллионов)?$/i);
     if (match) {
       const base = Number(String(match[1]).replace(',', '.'));
       if (!Number.isFinite(base)) return null;
       const suffix = String(match[2] || '').toLowerCase();
-      if (['k', 'к', 'тыс', 'тысяч'].includes(suffix)) return Math.round(base * 1000);
-      if (['m', 'м', 'млн', 'million', 'миллион', 'миллиона', 'миллионов'].includes(suffix)) return Math.round(base * 1000000);
-      return Math.round(base);
+      if (['k', 'к', 'тыс', 'тысяч'].includes(suffix)) return toUsdIfNeeded(base * 1000);
+      if (['м', 'млн', 'миллион', 'миллиона', 'миллионов'].includes(suffix)) return toUsdIfNeeded(base * 1000000);
+      return toUsdIfNeeded(base);
     }
     const digits = raw.replace(/[^\d]/g, '');
     if (!digits) return null;
     const parsed = Number(digits);
-    return Number.isFinite(parsed) ? parsed : null;
+    return Number.isFinite(parsed) ? toUsdIfNeeded(parsed) : null;
   };
 
   const parseRoomsNumber = (value) => {
