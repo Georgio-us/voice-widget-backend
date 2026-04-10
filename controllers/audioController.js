@@ -5,6 +5,8 @@ import { OpenAI } from 'openai';
 import { getAllProperties } from '../services/propertiesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
+import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
+import { readTelegramIdentityFromRequest } from '../services/telegramInitDataService.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
 import { appendMessage, upsertSessionLog } from '../services/sessionLogger.js';
 import { sendSessionActivityStartToTelegram, updateSessionActivityFinalToTelegram } from '../services/telegramNotifier.js';
@@ -3325,6 +3327,9 @@ const transcribeAndRespond = async (req, res) => {
 
     const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights);
 
+    const viewerAccess = await resolveViewerAccessForDebug(req);
+    const isSuperAdminViewer = viewerAccess?.isSuperAdmin === true;
+
     const responsePayload = {
       response: botResponse,
       transcription,
@@ -3362,8 +3367,15 @@ const transcribeAndRespond = async (req, res) => {
       }
     };
 
+    if (!isSuperAdminViewer) {
+      delete responsePayload.extractionStatus;
+      delete responsePayload.topCandidates;
+      delete responsePayload.tokens;
+      delete responsePayload.timing;
+    }
+
     // Patch (outside roadmap): Browser-visible compact debug (only under exact gate)
-    if (clientDebugEnabled === true) {
+    if (clientDebugEnabled === true && isSuperAdminViewer) {
       const matchRuleId = getLatestMatchRuleId(session);
       const pack = llmContextPackForMainCall || buildLlmContextPack(session, sessionId, 'main');
       const factsIds = Array.isArray(pack?.facts?.factsCardIds) ? pack.facts.factsCardIds.filter(Boolean) : [];
@@ -3978,3 +3990,15 @@ async function handleInteraction(req, res) {
     res.status(500).json({ error: 'internal' });
   }
 }
+const resolveViewerAccessForDebug = async (req) => {
+  try {
+    const identity = readTelegramIdentityFromRequest(req);
+    const verifiedTgUserId = identity?.verified?.ok ? String(identity.verified.tgUserId || '').trim() : '';
+    if (!verifiedTgUserId) {
+      return { accessRole: 'user', isAdmin: false, isSuperAdmin: false, isOwner: false };
+    }
+    return await resolveViewerAccessByTgId(verifiedTgUserId);
+  } catch {
+    return { accessRole: 'user', isAdmin: false, isSuperAdmin: false, isOwner: false };
+  }
+};

@@ -15,6 +15,23 @@ const router = express.Router();
 
 const normalizeTgId = (value) => String(value || '').trim();
 
+const requireSuperAdminDebug = async (req, res, next) => {
+  try {
+    const { tgUserId } = resolveTgUserIdForAccess(req);
+    const access = await resolveViewerAccessByTgId(tgUserId);
+    if (!access?.isSuperAdmin) {
+      return res.status(403).json({ ok: false, error: 'FORBIDDEN_SUPER_ADMIN_ONLY' });
+    }
+    req.viewerAccess = access;
+    return next();
+  } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
+    console.error('❌ requireSuperAdminDebug failed:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+};
+
 // 🚀 Memory storage для максимальной скорости
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -138,7 +155,7 @@ router.post('/upload',
 );
 
 // 📌 Получить информацию о сессии
-router.get('/session/:sessionId', getSessionInfo);
+router.get('/session/:sessionId', requireSuperAdminDebug, getSessionInfo);
 
 // 🔐 Получить роль доступа для UI (admin/wishlist switch in header)
 router.get('/access', async (req, res) => {
@@ -166,7 +183,7 @@ router.get('/access', async (req, res) => {
 router.delete('/session/:sessionId', clearSession);
 
 // 📈 Получить статистику всех сессий
-router.get('/stats', getStats);
+router.get('/stats', requireSuperAdminDebug, getStats);
 
 // 🔁 Взаимодействие с карточками (like/next)
 router.post('/interaction', handleInteraction);
