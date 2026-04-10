@@ -9,6 +9,7 @@ import {
   handleInteraction
 } from '../controllers/audioController.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
+import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
 
 const router = express.Router();
 
@@ -142,7 +143,8 @@ router.get('/session/:sessionId', getSessionInfo);
 // 🔐 Получить роль доступа для UI (admin/wishlist switch in header)
 router.get('/access', async (req, res) => {
   try {
-    const tgUserId = normalizeTgId(req.query?.tgUserId);
+    const { tgUserId: resolvedTgUserId } = resolveTgUserIdForAccess(req);
+    const tgUserId = normalizeTgId(resolvedTgUserId);
     const access = await resolveViewerAccessByTgId(tgUserId);
     res.json({
       ok: true,
@@ -150,6 +152,8 @@ router.get('/access', async (req, res) => {
       ...access
     });
   } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
     console.error('❌ /api/audio/access error:', error);
     res.status(500).json({
       ok: false,

@@ -12,6 +12,7 @@ import {
 } from '../services/olxIntegrationRepository.js';
 import { syncOlxAdvertsForAdmin } from '../services/olxImportService.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
+import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
 
 const router = express.Router();
 
@@ -36,7 +37,7 @@ const ensurePaidAdminAccess = async (tgUserId) => {
 
 router.get('/connect', async (req, res) => {
   try {
-    const tgUserId = normalize(req.query?.tgUserId);
+    const { tgUserId } = resolveTgUserIdForAccess(req);
     const accessCheck = await ensurePaidAdminAccess(tgUserId);
     if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
 
@@ -49,6 +50,8 @@ router.get('/connect', async (req, res) => {
     });
     return res.redirect(authorizeUrl);
   } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
     console.error('❌ /api/olx/connect error:', error);
     return res.status(500).json({
       ok: false,
@@ -136,7 +139,7 @@ router.get('/callback', async (req, res) => {
 
 router.get('/status', async (req, res) => {
   try {
-    const tgUserId = normalize(req.query?.tgUserId);
+    const { tgUserId } = resolveTgUserIdForAccess(req);
     const accessCheck = await ensurePaidAdminAccess(tgUserId);
     if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
     const clientId = resolveClientId(req.query?.clientId);
@@ -146,6 +149,8 @@ router.get('/status', async (req, res) => {
       ...status
     });
   } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
     console.error('❌ /api/olx/status error:', error);
     return res.status(500).json({
       ok: false,
@@ -156,7 +161,7 @@ router.get('/status', async (req, res) => {
 
 router.post('/sync', async (req, res) => {
   try {
-    const tgUserId = normalize(req.query?.tgUserId || req.body?.tgUserId);
+    const { tgUserId } = resolveTgUserIdForAccess(req);
     const accessCheck = await ensurePaidAdminAccess(tgUserId);
     if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
 
@@ -168,6 +173,8 @@ router.post('/sync', async (req, res) => {
       ...result
     });
   } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
     console.error('❌ /api/olx/sync error:', error);
     const message = String(error?.message || '');
     if (message === 'OLX_NOT_CONNECTED') {

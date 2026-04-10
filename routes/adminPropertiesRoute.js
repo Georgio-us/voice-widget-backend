@@ -9,6 +9,7 @@ import {
   updateManualPropertyByExternalId
 } from '../services/propertiesRepository.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
+import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
 
 const router = express.Router();
 
@@ -47,9 +48,8 @@ const uploadImages = (req, res, next) => {
 
 const requireAdmin = async (req, res, next) => {
   try {
-    const fromBody = req.body?.tgUserId;
-    const fromQuery = req.query?.tgUserId;
-    const access = await resolveViewerAccessByTgId(fromBody || fromQuery);
+    const { tgUserId } = resolveTgUserIdForAccess(req);
+    const access = await resolveViewerAccessByTgId(tgUserId);
     const isDev = String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
     const devAdminFlag = String(req.body?.devAdmin || req.query?.devAdmin || '').trim() === '1';
     if (!access.isAdmin && isDev && devAdminFlag) {
@@ -69,6 +69,8 @@ const requireAdmin = async (req, res, next) => {
     req.viewerAccess = access;
     next();
   } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
     console.error('❌ requireAdmin access check failed:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }

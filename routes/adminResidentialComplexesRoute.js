@@ -5,6 +5,7 @@ import {
   deleteResidentialComplex
 } from '../services/residentialComplexesRepository.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
+import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
 
 const router = express.Router();
 
@@ -14,9 +15,8 @@ const normalizeId = (v) => String(v || '').trim();
 
 const requireAdmin = async (req, res, next) => {
   try {
-    const fromBody = req.body?.tgUserId;
-    const fromQuery = req.query?.tgUserId;
-    const access = await resolveViewerAccessByTgId(fromBody || fromQuery);
+    const { tgUserId } = resolveTgUserIdForAccess(req);
+    const access = await resolveViewerAccessByTgId(tgUserId);
     const isDev = String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
     const devAdminFlag = String(req.body?.devAdmin || req.query?.devAdmin || '').trim() === '1';
     if (!access.isAdmin && isDev && devAdminFlag) {
@@ -36,6 +36,8 @@ const requireAdmin = async (req, res, next) => {
     req.viewerAccess = access;
     next();
   } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
     console.error('❌ requireAdmin access check failed:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
@@ -66,9 +68,8 @@ router.post('/residential-complexes', requireAdmin, async (req, res) => {
     if (!name) {
       return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
     }
-    const tgFromBody = req.body?.tgUserId;
     const tgFromAccess = req.viewerAccess?.tgUserId;
-    const createdBy = normalizeId(tgFromBody || tgFromAccess) || null;
+    const createdBy = normalizeId(tgFromAccess) || null;
 
     const { item, existed } = await insertResidentialComplex(
       SERVICE_CLIENT_ID,

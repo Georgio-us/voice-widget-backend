@@ -1,6 +1,7 @@
 import express from 'express';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { createActivationKey, redeemActivationKey, getActivationKeyStatsByPlan } from '../services/subscriptionService.js';
+import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
 
 const router = express.Router();
 
@@ -8,9 +9,8 @@ const normalizeId = (v) => String(v || '').trim();
 
 const requireOwnerOrSuperAdmin = async (req, res, next) => {
   try {
-    const fromBody = req.body?.tgUserId;
-    const fromQuery = req.query?.tgUserId;
-    const access = await resolveViewerAccessByTgId(fromBody || fromQuery);
+    const { tgUserId } = resolveTgUserIdForAccess(req);
+    const access = await resolveViewerAccessByTgId(tgUserId);
     const isDev = String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
     const devAdminFlag = String(req.body?.devAdmin || req.query?.devAdmin || '').trim() === '1';
     if (!access.isOwnerIdentity && !access.isSuperAdmin && isDev && devAdminFlag) {
@@ -23,6 +23,8 @@ const requireOwnerOrSuperAdmin = async (req, res, next) => {
     req.viewerAccess = access;
     next();
   } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
     console.error('❌ requireOwnerOrSuperAdmin failed:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
@@ -30,9 +32,8 @@ const requireOwnerOrSuperAdmin = async (req, res, next) => {
 
 const requireSuperAdmin = async (req, res, next) => {
   try {
-    const fromBody = req.body?.tgUserId;
-    const fromQuery = req.query?.tgUserId;
-    const access = await resolveViewerAccessByTgId(fromBody || fromQuery);
+    const { tgUserId } = resolveTgUserIdForAccess(req);
+    const access = await resolveViewerAccessByTgId(tgUserId);
     const isDev = String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
     const devAdminFlag = String(req.body?.devAdmin || req.query?.devAdmin || '').trim() === '1';
     if (!access.isSuperAdmin && isDev && devAdminFlag) {
@@ -45,6 +46,8 @@ const requireSuperAdmin = async (req, res, next) => {
     req.viewerAccess = access;
     next();
   } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
     console.error('❌ requireSuperAdmin failed:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
