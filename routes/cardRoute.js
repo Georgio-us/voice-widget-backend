@@ -10,6 +10,7 @@ const router = express.Router();
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
 
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
+const hasValue = (value) => value !== null && value !== undefined && String(value).trim() !== '';
 const normalizeOperationValue = (value) => {
   const raw = normalizeText(value);
   if (!raw) return '';
@@ -225,6 +226,8 @@ const normalizeProperty = (p) => {
 
   return {
     id,
+    db_id: toInt(p.id),
+    created_at: p.created_at || null,
     operation,
     property_type,
     price_period: toText(p.price_period),
@@ -448,6 +451,32 @@ router.get('/search', async (req, res) => {
       list = list.filter((p) => hasToken(getFeatureComplex(p), rcNeedle));
     }
 
+    // Strict mode if at least one manual filter is actually set.
+    // Browse mode if query has no filters (except limit).
+    const hasStrictFilters = Boolean(
+      hasValue(city)
+      || hasValue(district)
+      || hasValue(type)
+      || hasValue(operation)
+      || hasValue(roomsStr)
+      || min != null
+      || max != null
+      || areaMin != null
+      || areaMax != null
+      || floorMin != null
+      || floorMax != null
+      || onlyFloorNotFirst
+      || onlyFloorNotLast
+      || onlySmart
+      || onlyArcadia
+      || onlyRc
+      || hasValue(rcNeedle)
+      || onlyExclusive
+      || onlyCenter
+      || onlyParking
+      || onlyBalconyLoggia
+    );
+
     // Unified deterministic scoring for both manual and AI paths.
     // Core constraints above are hard gates; score below is calculated only for soft fields.
     const scoreCtx = buildUnifiedScoreContext({
@@ -464,14 +493,53 @@ router.get('/search', async (req, res) => {
 
     const ranked = list.map((p) => annotatePropertyScoresByContext(p, scoreCtx));
 
-    ranked.sort((a, b) => {
-      const byScore = Number(b.score || 0) - Number(a.score || 0);
-      if (byScore !== 0) return byScore;
-      const pa = Number(a.priceEUR);
-      const pb = Number(b.priceEUR);
-      if (Number.isFinite(pa) && Number.isFinite(pb)) return pa - pb;
-      return String(a.id || '').localeCompare(String(b.id || ''));
-    });
+    if (hasStrictFilters) {
+      // Strict mode sorting:
+      // 1) cheapest first (price ASC)
+      // 2) smaller area first (area ASC)
+      // 3) stable id fallback
+      ranked.sort((a, b) => {
+        const pa = Number(a.priceEUR);
+        const pb = Number(b.priceEUR);
+        const paSafe = Number.isFinite(pa) ? pa : Number.MAX_SAFE_INTEGER;
+        const pbSafe = Number.isFinite(pb) ? pb : Number.MAX_SAFE_INTEGER;
+        if (paSafe !== pbSafe) return paSafe - pbSafe;
+
+        const aa = Number(a.area_m2);
+        const ab = Number(b.area_m2);
+        const aaSafe = Number.isFinite(aa) ? aa : Number.MAX_SAFE_INTEGER;
+        const abSafe = Number.isFinite(ab) ? ab : Number.MAX_SAFE_INTEGER;
+        if (aaSafe !== abSafe) return aaSafe - abSafe;
+
+        return String(a.id || '').localeCompare(String(b.id || ''), undefined, {
+          numeric: true,
+          sensitivity: 'base'
+        });
+      });
+    } else {
+      // Browse mode sorting:
+      // 1) newest first by created_at
+      // 2) then by internal db id DESC
+      // 3) then by external id DESC for deterministic fallback
+      ranked.sort((a, b) => {
+        const ta = Date.parse(String(a.created_at || ''));
+        const tb = Date.parse(String(b.created_at || ''));
+        const taSafe = Number.isFinite(ta) ? ta : -Infinity;
+        const tbSafe = Number.isFinite(tb) ? tb : -Infinity;
+        if (taSafe !== tbSafe) return tbSafe - taSafe;
+
+        const ida = Number(a.db_id);
+        const idb = Number(b.db_id);
+        const idaSafe = Number.isFinite(ida) ? ida : -Infinity;
+        const idbSafe = Number.isFinite(idb) ? idb : -Infinity;
+        if (idaSafe !== idbSafe) return idbSafe - idaSafe;
+
+        return String(b.id || '').localeCompare(String(a.id || ''), undefined, {
+          numeric: true,
+          sensitivity: 'base'
+        });
+      });
+    }
 
     res.json({ cards: ranked.slice(0, Number(limit) || 10) });
   } catch (err) {
