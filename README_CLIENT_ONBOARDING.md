@@ -46,6 +46,8 @@ Optional:
 - `TELEGRAM_WEBAPP_BOT_TOKEN` (explicit override for WebApp `initData` verification token)
 - `TELEGRAM_INITDATA_ENFORCE_ADMIN` (strict Telegram signature check for admin access, recommended `1`)
 - `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID` (legacy fallback via plain `tgUserId`, recommended `0`)
+- `EXIT_ON_UNCAUGHT_EXCEPTION` (default `1`; set `0` only for emergency diagnostics)
+- `EXIT_ON_UNHANDLED_REJECTION` (default `0`; set `1` for strict fail-fast mode)
 
 ### Frontend (`Voice-Widget-Frontend`)
 
@@ -113,6 +115,16 @@ If strict mode causes emergency access issues, temporarily switch to:
 - `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID=1`
 
 Then redeploy backend. This restores legacy behavior.
+
+## 4.2) Crash Policy Flags (important)
+
+- `EXIT_ON_UNCAUGHT_EXCEPTION`
+  - `1` (default): backend exits on `uncaughtException` (fail-fast).
+  - `0`: backend logs error and keeps process alive (diagnostics mode; use carefully).
+
+- `EXIT_ON_UNHANDLED_REJECTION`
+  - `0` (default): backend logs `unhandledRejection` and keeps process alive.
+  - `1`: backend exits on `unhandledRejection` (strict mode).
 
 ## 5) Import Properties
 

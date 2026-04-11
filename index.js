@@ -35,6 +35,15 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+const envBool = (value, fallback = false) => {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  return fallback;
+};
+const EXIT_ON_UNCAUGHT_EXCEPTION = envBool(process.env.EXIT_ON_UNCAUGHT_EXCEPTION, true);
+const EXIT_ON_UNHANDLED_REJECTION = envBool(process.env.EXIT_ON_UNHANDLED_REJECTION, false);
 const normalizeOrigin = (value) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -224,12 +233,22 @@ process.on('SIGINT', () => {
 // 🚨 Обработка необработанных исключений
 process.on('uncaughtException', (err) => {
   console.error('🚨 Необработанное исключение:', err);
-  process.exit(1);
+  if (EXIT_ON_UNCAUGHT_EXCEPTION) {
+    console.error('🚨 Завершение процесса: EXIT_ON_UNCAUGHT_EXCEPTION=1');
+    stopTelegramBot('uncaughtException');
+    process.exit(1);
+  }
+  console.warn('⚠️ Процесс продолжает работу: EXIT_ON_UNCAUGHT_EXCEPTION=0');
 });
 
 process.on('unhandledRejection', (err) => {
   console.error('🚨 Необработанное отклонение промиса:', err);
-  process.exit(1);
+  if (EXIT_ON_UNHANDLED_REJECTION) {
+    console.error('🚨 Завершение процесса: EXIT_ON_UNHANDLED_REJECTION=1');
+    stopTelegramBot('unhandledRejection');
+    process.exit(1);
+  }
+  console.warn('⚠️ Процесс продолжает работу: EXIT_ON_UNHANDLED_REJECTION=0');
 });
 
 // 🚀 Запускаем сервер

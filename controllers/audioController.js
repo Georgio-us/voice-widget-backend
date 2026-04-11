@@ -7,6 +7,7 @@ import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { readTelegramIdentityFromRequest } from '../services/telegramInitDataService.js';
+import { buildScoreContext, annotatePropertyScoresByContext } from '../services/scoringEngine.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
 import { appendMessage, upsertSessionLog } from '../services/sessionLogger.js';
 import { sendSessionActivityStartToTelegram, updateSessionActivityFinalToTelegram } from '../services/telegramNotifier.js';
@@ -520,9 +521,14 @@ const normalizeOperationForProperty = (value) => {
   if (!value) return null;
   const raw = String(value).trim().toLowerCase();
   if (!raw) return null;
-  if (raw === 'buy' || raw === 'sale' || raw === 'sell' || raw === 'purchase') return 'buy';
-  if (raw === 'rent' || raw === 'lease' || raw === 'rental') return 'rent';
+  if (/(buy|sale|sell|purchase|покуп|купить|продаж)/i.test(raw)) return 'buy';
+  if (/(rent|lease|rental|аренд|оренд|снять)/i.test(raw)) return 'rent';
   return null;
+};
+
+const normalizeCardIdValue = (value) => {
+  const raw = String(value ?? '').trim();
+  return raw ? raw.toUpperCase() : '';
 };
 
 const normalizeTypeForProperty = (value) => {
@@ -535,20 +541,6 @@ const normalizeTypeForProperty = (value) => {
   if (/(commercial|office|retail|warehouse|коммер|офис|склад|нежил)/i.test(raw)) return 'commercial';
   return null;
 };
-
-const SCORE_WEIGHTS = Object.freeze({
-  rooms: 34,
-  budget: 20,
-  area: 10,
-  floor: 10,
-  parking: 13,
-  balcony: 13
-});
-
-const SCORE_BANDS = Object.freeze({
-  preferred: 0.10,
-  acceptable: 0.25
-});
 
 const getBudgetCap = (insights = {}) => {
   const fromMax = parseBudgetEUR(insights?.budgetMax);
@@ -577,37 +569,6 @@ const parseFloatLoose = (value) => {
   return Number.isFinite(n) ? n : null;
 };
 
-const clamp01 = (n) => {
-  if (!Number.isFinite(n)) return 0;
-  if (n <= 0) return 0;
-  if (n >= 1) return 1;
-  return n;
-};
-
-const scoreByRelativeDistance = (actual, target, acceptableRatio = SCORE_BANDS.acceptable, preferredRatio = SCORE_BANDS.preferred) => {
-  if (!Number.isFinite(actual) || !Number.isFinite(target) || target <= 0) return null;
-  const ratio = Math.abs(actual - target) / target;
-  if (ratio <= preferredRatio) return 1;
-  if (ratio <= acceptableRatio) {
-    const span = Math.max(0.0001, acceptableRatio - preferredRatio);
-    return 1 - ((ratio - preferredRatio) / span) * 0.35; // 1 -> 0.65 in acceptable band
-  }
-  const overflowSpan = Math.max(0.0001, acceptableRatio);
-  const overflow = (ratio - acceptableRatio) / overflowSpan;
-  return clamp01(0.65 - overflow * 0.65);
-};
-
-const normalizeFeaturesArray = (value) => {
-  if (value == null) return [];
-  if (Array.isArray(value)) {
-    return value.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean);
-  }
-  return String(value)
-    .split(/[,\n;|]/)
-    .map((v) => String(v || '').trim().toLowerCase())
-    .filter(Boolean);
-};
-
 const toLowerTokens = (value) => {
   if (value == null) return [];
   if (Array.isArray(value)) {
@@ -622,17 +583,6 @@ const toLowerTokens = (value) => {
     .filter(Boolean);
 };
 
-const coerceBool = (value) => {
-  if (value === true || value === false) return value;
-  if (value == null) return null;
-  if (typeof value === 'number') return value !== 0;
-  const raw = String(value).trim().toLowerCase();
-  if (!raw) return null;
-  if (['true', 'yes', 'y', '1', 'да', 'є', 'так'].includes(raw)) return true;
-  if (['false', 'no', 'n', '0', 'нет', 'ні'].includes(raw)) return false;
-  return null;
-};
-
 const getRequestedAmenityFlags = (insights = {}) => {
   const pool = [
     ...toLowerTokens(insights?.features),
@@ -643,30 +593,6 @@ const getRequestedAmenityFlags = (insights = {}) => {
   return {
     parking: /(parking|паркинг|парковк|паркомест|парко ?місц)/i.test(text),
     balcony: /(balcony|балкон|лоджи|лоджія|loggia)/i.test(text)
-  };
-};
-
-const getPropertyAmenityFlags = (property = {}) => {
-  const features = property?.features && typeof property.features === 'object' ? property.features : {};
-  const desc = String(property?.description || '').toLowerCase();
-  const parkingCandidates = [
-    features.has_parking,
-    features.parking,
-    features?.display_specs?.parking,
-    features?.display_specs?.has_parking
-  ];
-  const balconyCandidates = [
-    features.has_balcony,
-    features.balcony,
-    features.loggia,
-    features?.display_specs?.balcony,
-    features?.display_specs?.loggia
-  ];
-  const parkingFromValue = parkingCandidates.map((v) => coerceBool(v)).find((v) => v !== null);
-  const balconyFromValue = balconyCandidates.map((v) => coerceBool(v)).find((v) => v !== null);
-  return {
-    parking: parkingFromValue === true || /(parking|паркинг|парковк|паркомест|парко ?місц)/i.test(desc),
-    balcony: balconyFromValue === true || /(balcony|балкон|лоджи|лоджія|loggia)/i.test(desc)
   };
 };
 
@@ -687,50 +613,6 @@ const parseFloorPreference = (insights = {}) => {
     middle: /(средн|middle|mid)/i.test(text),
     high: /(высок|high)/i.test(text)
   };
-};
-
-const scoreFloorPreference = (property = {}, floorPref = {}, strictMode = false) => {
-  const actualFloor = parseIntLoose(property?.floor);
-  if (actualFloor == null || actualFloor <= 0) return { score: 0, hardFail: strictMode && (floorPref.notFirst || floorPref.notLast) };
-  const totalFloors = parseIntLoose(property?.features?.display_specs?.total_floors ?? property?.features?.total_floors);
-
-  if (floorPref.notFirst && actualFloor <= 1) {
-    return { score: 0, hardFail: strictMode };
-  }
-  if (floorPref.notLast) {
-    if (Number.isFinite(totalFloors) && totalFloors > 1) {
-      if (actualFloor >= totalFloors) return { score: 0, hardFail: strictMode };
-    } else if (strictMode) {
-      return { score: 0, hardFail: true };
-    }
-  }
-
-  if (floorPref.low || floorPref.middle || floorPref.high) {
-    let bucket = null;
-    if (Number.isFinite(totalFloors) && totalFloors >= 3) {
-      const oneThird = totalFloors / 3;
-      if (actualFloor <= oneThird) bucket = 'low';
-      else if (actualFloor <= oneThird * 2) bucket = 'middle';
-      else bucket = 'high';
-    } else if (actualFloor <= 4) bucket = 'low';
-    else if (actualFloor <= 9) bucket = 'middle';
-    else bucket = 'high';
-
-    const target = floorPref.high ? 'high' : (floorPref.middle ? 'middle' : 'low');
-    if (bucket === target) return { score: 1, hardFail: false };
-    if (!strictMode) return { score: 0.45, hardFail: false };
-    return { score: 0, hardFail: false };
-  }
-
-  if (floorPref.numericFloor != null) {
-    const diff = Math.abs(actualFloor - floorPref.numericFloor);
-    if (diff === 0) return { score: 1, hardFail: false };
-    if (diff <= 2) return { score: 0.55, hardFail: false };
-    return { score: strictMode ? 0 : 0.2, hardFail: false };
-  }
-
-  if (floorPref.notFirst || floorPref.notLast) return { score: 1, hardFail: false };
-  return { score: 0, hardFail: false };
 };
 
 const getPropertyComplex = (property = {}) =>
@@ -827,108 +709,44 @@ const applyResidentialComplexFallbackFromTranscript = (transcription = '', insig
   return { applied, rcOnly: rcOnlyApplied, complex: complexApplied };
 };
 
-const getPropertyFeaturesIndex = (property = {}) => {
-  const textParts = [String(property?.description || '').toLowerCase()];
-  if (property?.features && typeof property.features === 'object') {
-    for (const value of Object.values(property.features)) {
-      if (value == null) continue;
-      if (Array.isArray(value)) {
-        textParts.push(value.map((v) => String(v || '')).join(' ').toLowerCase());
-      } else if (typeof value === 'object') {
-        textParts.push(JSON.stringify(value).toLowerCase());
-      } else {
-        textParts.push(String(value).toLowerCase());
-      }
-    }
-  }
-  const text = textParts.join(' ');
-  const candidates = [
-    ['terrace', /(terrace|терасс|террас)/i],
-    ['balcony', /(balcony|балкон)/i],
-    ['pool', /(pool|бассейн)/i],
-    ['sea view', /(sea view|вид на море)/i],
-    ['high floor', /(high floor|высокий этаж)/i],
-    ['concierge', /(concierge|консьерж)/i],
-    ['parking', /(parking|парковк)/i]
-  ];
-  return candidates.filter(([, re]) => re.test(text)).map(([label]) => label);
+const normalizeRoomsConstraint = (value) => {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return '';
+  if (['4plus', '5plus'].includes(raw)) return raw;
+  if (/^5\+?$/.test(raw)) return '5plus';
+  if (/^4\+?$/.test(raw)) return '4plus';
+  const parsed = parseIntLoose(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? String(parsed) : '';
 };
 
-const resolveTierByScore = (score) => {
-  const safe = Number(score) || 0;
-  if (safe >= 80) return 'high';
-  if (safe >= 50) return 'mid';
-  return 'low';
-};
-
-const scoreProperty = (p, insights, mode = 'relaxed') => {
-  const strictMode = mode === 'strict';
-  let score = 0;
+const buildScoreContextFromInsights = (insights = {}) => {
   const floorPref = parseFloorPreference(insights);
-
   const budgetCap = getBudgetCap(insights);
-  const price = Number(p?.priceEUR);
-  if (budgetCap != null && Number.isFinite(budgetCap) && Number.isFinite(price) && price > 0) {
-    const budgetScore = scoreByRelativeDistance(price, budgetCap);
-    score += SCORE_WEIGHTS.budget * (budgetScore == null ? 0 : budgetScore);
-  }
-
-  const expectedRooms = parseIntLoose(insights?.rooms);
-  const actualRooms = parseIntLoose(p?.rooms);
-  if (expectedRooms != null && actualRooms != null) {
-    if (expectedRooms === actualRooms) {
-      score += SCORE_WEIGHTS.rooms;
-    } else if (!strictMode && Math.abs(expectedRooms - actualRooms) === 1) {
-      score += SCORE_WEIGHTS.rooms * 0.35;
-    } else if (strictMode) {
-      return 0;
-    }
-  }
-
-  const expectedArea = parseFloatLoose(insights?.areaMin ?? insights?.areaMax ?? insights?.area);
-  const actualArea = parseFloatLoose(p?.area_m2);
-  if (actualArea != null && expectedArea != null && expectedArea > 0) {
-    const areaScore = scoreByRelativeDistance(actualArea, expectedArea);
-    score += SCORE_WEIGHTS.area * (areaScore == null ? 0 : areaScore);
-  }
-
-  const floorScore = scoreFloorPreference(p, floorPref, strictMode);
-  if (floorScore.hardFail) return 0;
-  score += SCORE_WEIGHTS.floor * floorScore.score;
-
-  const requestedAmenities = getRequestedAmenityFlags(insights);
-  const propertyAmenities = getPropertyAmenityFlags(p);
-  if (requestedAmenities.parking) {
-    if (propertyAmenities.parking) score += SCORE_WEIGHTS.parking;
-    else if (strictMode) return 0;
-  }
-  if (requestedAmenities.balcony) {
-    if (propertyAmenities.balcony) score += SCORE_WEIGHTS.balcony;
-    else if (strictMode) return 0;
-  }
-
-  // keep a small residual signal from generic feature mentions without turning them into hard gates
-  const requestedFeatures = normalizeFeaturesArray(insights?.features || insights?.preferences || insights?.details);
-  if (!strictMode && requestedFeatures.length) {
-    const index = getPropertyFeaturesIndex(p);
-    const hits = requestedFeatures.filter((f) => index.includes(f)).length;
-    const ratio = requestedFeatures.length ? (hits / requestedFeatures.length) : 0;
-    score += 2 * ratio;
-  }
-
-  const finalScore = Math.max(0, Math.round(score * 100) / 100);
-  return finalScore;
+  const exactArea = parseFloatLoose(insights?.area);
+  const minArea = parseFloatLoose(insights?.areaMin);
+  const maxArea = parseFloatLoose(insights?.areaMax);
+  const areaMin = Number.isFinite(minArea) ? minArea : (Number.isFinite(exactArea) ? exactArea : null);
+  const areaMax = Number.isFinite(maxArea) ? maxArea : (Number.isFinite(exactArea) ? exactArea : null);
+  const floorExact = floorPref.numericFloor;
+  const floorMin = Number.isFinite(floorExact) ? floorExact : (floorPref.notFirst ? 2 : null);
+  const floorMax = Number.isFinite(floorExact) ? floorExact : null;
+  const amenity = getRequestedAmenityFlags(insights);
+  return buildScoreContext({
+    roomsRaw: normalizeRoomsConstraint(insights?.rooms),
+    minPrice: null,
+    maxPrice: Number.isFinite(budgetCap) ? budgetCap : null,
+    minArea: Number.isFinite(areaMin) ? areaMin : null,
+    maxArea: Number.isFinite(areaMax) ? areaMax : null,
+    minFloor: Number.isFinite(floorMin) ? floorMin : null,
+    maxFloor: Number.isFinite(floorMax) ? floorMax : null,
+    parkingRequired: amenity.parking === true,
+    balconyRequired: amenity.balcony === true
+  });
 };
 
 const annotatePropertyWithScores = (property, insights = {}) => {
-  const relaxedScore = scoreProperty(property, insights, 'relaxed');
-  const strictScore = scoreProperty(property, insights, 'strict');
-  return {
-    ...property,
-    _score: relaxedScore,
-    _strictScore: strictScore,
-    _tier: resolveTierByScore(relaxedScore)
-  };
+  const scoreContext = buildScoreContextFromInsights(insights);
+  return annotatePropertyScoresByContext(property, scoreContext);
 };
 
 // Нормализация строки из БД к формату карточек, совместимому с фронтом
@@ -1003,10 +821,15 @@ const getAllNormalizedProperties = async () => {
 
 const rankPropertiesByInsights = (properties, insights) => {
   const gated = applyHardGateByInsights(properties, insights);
+  const scoreContext = buildScoreContextFromInsights(insights);
   const scored = gated.map((p) => {
-    const relaxedScore = scoreProperty(p, insights, 'relaxed');
-    const strictScore = scoreProperty(p, insights, 'strict');
-    return { p, relaxedScore, strictScore, tier: resolveTierByScore(relaxedScore) };
+    const annotated = annotatePropertyScoresByContext(p, scoreContext);
+    return {
+      p: annotated,
+      relaxedScore: Number(annotated?._score ?? 0),
+      strictScore: Number(annotated?._strictScore ?? 0),
+      tier: String(annotated?._tier || 'low')
+    };
   });
   const rankedRows = scored
     .filter(({ relaxedScore }) => relaxedScore > 0)
@@ -1691,7 +1514,7 @@ const mapPurposeToOperationRu = (purpose) => {
   if (!purpose) return null;
   const s = String(purpose).toLowerCase();
   if (/(buy|покуп|купить|purchase|invest|инвест)/i.test(s)) return 'покупка';
-  if (/(rent|аренд|снять|lease)/i.test(s)) return 'аренда';
+  if (/(rent|аренд|оренд|снять|lease)/i.test(s)) return 'аренда';
   return null;
 };
 
@@ -1756,23 +1579,23 @@ const applyMetaInsightsToSession = (session, meta) => {
       return Math.round(amount * rate);
     };
     const normalizeNum = (v) => Number(String(v).replace(',', '.'));
-    const thousandBefore = raw.match(/(?:тыс|тысяч)\s*(\d+(?:[.,]\d+)?)/i);
+    const thousandBefore = raw.match(/(?:тыс|тысяч|тис\.?)\s*(\d+(?:[.,]\d+)?)/i);
     if (thousandBefore) {
       const n = normalizeNum(thousandBefore[1]);
       if (Number.isFinite(n)) return toUsdIfNeeded(n * 1000);
     }
-    const thousandAfter = raw.match(/(\d+(?:[.,]\d+)?)\s*(?:тыс|тысяч)\b/i);
+    const thousandAfter = raw.match(/(\d+(?:[.,]\d+)?)\s*(?:тыс|тысяч|тис\.?)\b/i);
     if (thousandAfter) {
       const n = normalizeNum(thousandAfter[1]);
       if (Number.isFinite(n)) return toUsdIfNeeded(n * 1000);
     }
     const compact = raw.replace(/\s+/g, '');
-    const match = compact.match(/^(\d+(?:[.,]\d+)?)(k|к|тыс|тысяч|м|млн|миллион|миллиона|миллионов)?$/i);
+    const match = compact.match(/^(\d+(?:[.,]\d+)?)(k|к|тыс|тысяч|тис|м|млн|миллион|миллиона|миллионов)?$/i);
     if (match) {
       const base = Number(String(match[1]).replace(',', '.'));
       if (!Number.isFinite(base)) return null;
       const suffix = String(match[2] || '').toLowerCase();
-      if (['k', 'к', 'тыс', 'тысяч'].includes(suffix)) return toUsdIfNeeded(base * 1000);
+      if (['k', 'к', 'тыс', 'тысяч', 'тис'].includes(suffix)) return toUsdIfNeeded(base * 1000);
       if (['м', 'млн', 'миллион', 'миллиона', 'миллионов'].includes(suffix)) return toUsdIfNeeded(base * 1000000);
       return toUsdIfNeeded(base);
     }
@@ -1831,7 +1654,7 @@ const applyMetaInsightsToSession = (session, meta) => {
     const raw = String(value).trim().toLowerCase();
     if (!raw) return null;
     if (/(buy|purchase|invest|покуп|купить|инвест)/i.test(raw)) return 'buy';
-    if (/(rent|lease|аренд|снять)/i.test(raw)) return 'rent';
+    if (/(rent|lease|аренд|оренд|снять)/i.test(raw)) return 'rent';
     return null;
   };
   const normalizeType = (value) => {
@@ -3496,7 +3319,7 @@ const transcribeAndRespond = async (req, res) => {
   }
 };
 
-const clearSession = (sessionId) => {
+const clearSessionById = (sessionId) => {
   // RMv3: best-effort Telegram final update on explicit clear
   try {
     const session = sessions.get(sessionId);
@@ -3525,6 +3348,21 @@ const clearSession = (sessionId) => {
   sessions.delete(sessionId);
 };
 
+const clearSessionHttp = (req, res) => {
+  try {
+    const sessionId = String(req?.params?.sessionId || '').trim();
+    if (!sessionId) {
+      return res.status(400).json({ ok: false, error: 'SESSION_ID_REQUIRED' });
+    }
+    const existed = sessions.has(sessionId);
+    clearSessionById(sessionId);
+    return res.json({ ok: true, cleared: existed, sessionId });
+  } catch (error) {
+    console.error('clearSessionHttp error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+};
+
 // ✅ Получить статистику всех активных сессий
 const getStats = (req, res) => {
   const sessionStats = [];
@@ -3549,14 +3387,14 @@ const getSessionInfo = async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
     const session = sessions.get(sessionId);
+    const verbose = ['1', 'true', 'yes', 'on'].includes(String(req?.query?.verbose || '').trim().toLowerCase());
 
     if (!session) {
       return res.status(404).json({ error: 'Сессия не найдена' });
     }
 
     const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights || {});
-
-    res.json({
+    const basePayload = {
       sessionId,
       clientProfile: session.clientProfile,
       stage: session.stage,
@@ -3565,14 +3403,27 @@ const getSessionInfo = async (req, res) => {
       totalMatches,
       strictMatches,
       relaxedMatches,
-      topCandidates: ranked.slice(0, 60).map((p) => formatCardForClient(req, p)),
-      lastCandidates: Array.isArray(session.lastCandidates) ? session.lastCandidates : [],
+      topCandidates: ranked.slice(0, 24).map((p) => formatCardForClient(req, p)),
+      lastCandidates: Array.isArray(session.lastCandidates) ? session.lastCandidates.slice(0, 80) : [],
       messageCount: session.messages.length,
       lastActivity: session.lastActivity,
       // 🆕 Sprint IV: distinction between shown and focused (для валидации/debug)
       currentFocusCard: session.currentFocusCard || { cardId: null, updatedAt: null },
       lastShown: session.lastShown || { cardId: null, updatedAt: null },
       lastFocusSnapshot: session.lastFocusSnapshot || null,
+      debugSummary: {
+        candidateShortlistCount: Array.isArray(session?.candidateShortlist?.items) ? session.candidateShortlist.items.length : 0,
+        unknownUiActionsCount: Number(session?.unknownUiActions?.count || 0),
+        debugTraceCount: Array.isArray(session?.debugTrace?.items) ? session.debugTrace.items.length : 0
+      }
+    };
+
+    if (!verbose) {
+      return res.json(basePayload);
+    }
+
+    return res.json({
+      ...basePayload,
       // 🆕 Sprint V: reference and ambiguity states (для валидации/debug)
       referenceIntent: session.referenceIntent || null,
       referenceAmbiguity: session.referenceAmbiguity || { isAmbiguous: false, reason: null, detectedAt: null, source: 'server_contract' },
@@ -3662,7 +3513,8 @@ const triggerCompletion = (session, reason = 'post_handoff_cycle_complete') => {
 // ✅ Экспорт всех нужных функций
 export {
   transcribeAndRespond,
-  clearSession,
+  clearSessionById,
+  clearSessionHttp,
   getSessionInfo,
   getStats,
   handleInteraction,
@@ -3674,7 +3526,8 @@ export {
 // ---------- Взаимодействия (like / next) ----------
 async function handleInteraction(req, res) {
   try {
-    const { action, variantId, sessionId } = req.body || {};
+    const { action, variantId: rawVariantId, sessionId } = req.body || {};
+    const variantId = normalizeCardIdValue(rawVariantId);
     if (!action || !sessionId) return res.status(400).json({ error: 'action и sessionId обязательны' });
     const session = sessions.get(sessionId);
     if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
@@ -3818,7 +3671,7 @@ async function handleInteraction(req, res) {
     // - не меняет role/stage
     // - не трогает LLM
     if (action === 'select') {
-      const cardId = typeof variantId === 'string' ? variantId.trim() : null;
+      const cardId = normalizeCardIdValue(variantId);
       if (!cardId) {
         return res.status(400).json({ error: 'variantId обязателен для select' });
       }
@@ -3948,9 +3801,9 @@ async function handleInteraction(req, res) {
 
     // 🆕 Sprint IV: обработка события ui_focus_changed для фиксации текущей карточки в фокусе
     if (action === 'ui_focus_changed') {
-      const cardId = req.body.cardId;
+      const cardId = normalizeCardIdValue(req?.body?.cardId);
       
-      if (!cardId || typeof cardId !== 'string' || cardId.trim().length === 0) {
+      if (!cardId) {
         console.warn(`⚠️ [Sprint IV] ui_focus_changed с невалидным cardId (сессия ${sessionId.slice(-8)})`);
         return res.status(400).json({ error: 'cardId is required and must be a non-empty string' });
       }
@@ -3959,17 +3812,16 @@ async function handleInteraction(req, res) {
         session.currentFocusCard = { cardId: null, updatedAt: null };
       }
       
-      const trimmedCardId = cardId.trim();
-      session.currentFocusCard.cardId = trimmedCardId;
+      session.currentFocusCard.cardId = cardId;
       session.currentFocusCard.updatedAt = Date.now();
       
       // 🆕 Sprint IV: обновляем lastFocusSnapshot при ui_focus_changed (отдельно от lastShown и allowedFactsSnapshot)
       session.lastFocusSnapshot = {
-        cardId: trimmedCardId,
+        cardId: cardId,
         updatedAt: Date.now()
       };
       
-      console.log(`🎯 [Sprint IV] Focus изменён на карточку ${trimmedCardId} (сессия ${sessionId.slice(-8)})`);
+      console.log(`🎯 [Sprint IV] Focus изменён на карточку ${cardId} (сессия ${sessionId.slice(-8)})`);
       return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
     }
 

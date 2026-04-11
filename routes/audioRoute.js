@@ -4,7 +4,7 @@ import multer from 'multer';
 import {
   transcribeAndRespond,
   getSessionInfo,
-  clearSession,
+  clearSessionHttp,
   getStats,
   handleInteraction
 } from '../controllers/audioController.js';
@@ -180,7 +180,7 @@ router.get('/access', async (req, res) => {
 });
 
 // 🧹 Очистить конкретную сессию
-router.delete('/session/:sessionId', clearSession);
+router.delete('/session/:sessionId', requireSuperAdminDebug, clearSessionHttp);
 
 // 📈 Получить статистику всех сессий
 router.get('/stats', requireSuperAdminDebug, getStats);
