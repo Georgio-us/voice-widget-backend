@@ -68,6 +68,22 @@ const getFeatureComplex = (property) => {
   return String(direct || fromDisplay || '').trim();
 };
 
+const getTotalFloors = (property = {}) => {
+  const toIntSafe = (v) => {
+    const n = parseInt(String(v ?? '').trim(), 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  return (
+    toIntSafe(property?.total_floors)
+    ?? toIntSafe(property?.floors_total)
+    ?? toIntSafe(property?.building_floors)
+    ?? toIntSafe(property?.features?.display_specs?.total_floors)
+    ?? toIntSafe(property?.features?.total_floors)
+    ?? toIntSafe(property?.features?.buildingFloors)
+    ?? null
+  );
+};
+
 // scoring is centralized in services/scoringEngine.js
 
 /**
@@ -177,6 +193,14 @@ const normalizeProperty = (p) => {
   const bathrooms = toInt(p.specs?.bathrooms ?? feat.bathrooms ?? p.specs_bathrooms);
   const area_m2 = toNumber(p.specs?.area_m2 ?? feat.areaM2 ?? p.specs_area_m2);
   const floor = toInt(p.specs?.floor ?? feat.floor ?? p.specs_floor);
+  const building_floors = toInt(
+    p.building_floors
+    ?? p.floors_total
+    ?? p.total_floors
+    ?? feat?.display_specs?.total_floors
+    ?? feat?.total_floors
+    ?? feat?.buildingFloors
+  );
   const balcony = toBool(p.specs?.balcony ?? feat.balcony ?? p.specs_balcony);
   const terrace = toBool(p.specs?.terrace ?? feat.terrace ?? p.specs_terrace);
 
@@ -217,6 +241,9 @@ const normalizeProperty = (p) => {
     bathrooms,
     area_m2,
     floor,
+    building_floors,
+    floors_total: building_floors,
+    total_floors: building_floors,
     balcony,
     terrace,
 
@@ -264,6 +291,8 @@ router.get('/search', async (req, res) => {
       maxArea,
       minFloor,
       maxFloor,
+      floorNotFirst,
+      floorNotLast,
       smart,
       arcadia,
       rcOnly,
@@ -292,6 +321,8 @@ router.get('/search', async (req, res) => {
     const areaMax = toNumber(maxArea);
     const floorMin = toInt(minFloor);
     const floorMax = toInt(maxFloor);
+    const onlyFloorNotFirst = toBool(floorNotFirst);
+    const onlyFloorNotLast = toBool(floorNotLast);
     const onlySmart = toBool(smart);
     const onlyArcadia = toBool(arcadia);
     const onlyRc = toBool(rcOnly);
@@ -357,6 +388,27 @@ router.get('/search', async (req, res) => {
 
     if (floorMax != null) {
       list = list.filter((p) => Number(p.floor) <= floorMax);
+    }
+
+    if (onlyFloorNotFirst) {
+      list = list.filter((p) => {
+        const floor = toInt(p?.floor);
+        if (!Number.isFinite(floor)) return false;
+        return floor > 1;
+      });
+    }
+
+    if (onlyFloorNotLast) {
+      list = list.filter((p) => {
+        const floor = toInt(p?.floor);
+        if (!Number.isFinite(floor)) return false;
+        const totalFloors = getTotalFloors(p);
+        // Product rule: apply "not last" only when total floors are known.
+        if (Number.isFinite(totalFloors) && totalFloors > 1) {
+          return floor < totalFloors;
+        }
+        return true;
+      });
     }
 
     if (onlySmart) {
