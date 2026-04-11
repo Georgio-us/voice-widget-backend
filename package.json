@@ -19,6 +19,7 @@
     "dev": "nodemon index.js",
     "smoke": "node scripts/smoke.js",
     "smoke:soft": "VW_SMOKE_SOFT=1 node scripts/smoke.js",
+    "test:manual-filters": "node scripts/manualFiltersMatrixTest.js",
     "analyze:olx-attributes": "node scripts/analyzeOlxRawAttributes.js",
     "diagnose:olx-coverage": "node scripts/diagnoseOlxCoverage.js",
     "backfill:olx": "node scripts/backfillOlxFromRaw.js",
