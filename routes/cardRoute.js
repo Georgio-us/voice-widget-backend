@@ -4,6 +4,7 @@ import {
   getPropertyByExternalId 
 } from '../services/propertiesRepository.js';
 import { listResidentialComplexes } from '../services/residentialComplexesRepository.js';
+import { buildScoreContext as buildUnifiedScoreContext, annotatePropertyScoresByContext } from '../services/scoringEngine.js';
 
 const router = express.Router();
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
@@ -13,7 +14,7 @@ const normalizeOperationValue = (value) => {
   const raw = normalizeText(value);
   if (!raw) return '';
   if (/(buy|sale|sell|purchase|покуп|купить|продаж)/i.test(raw)) return 'sale';
-  if (/(rent|lease|аренд|снять)/i.test(raw)) return 'rent';
+  if (/(rent|lease|аренд|оренд|снять)/i.test(raw)) return 'rent';
   return raw;
 };
 const DISTRICT_ALIASES = new Map([
@@ -54,200 +55,20 @@ const normalizeDistrictValue = (value) => {
 };
 const hasToken = (value, token) => normalizeText(value).includes(normalizeText(token));
 const isTrue = (value) => value === true || value === 'true' || value === 1 || value === '1';
+const normalizeNeighborhoodValue = (value) => {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  if (/(аркад|arcad|аркаді)/i.test(raw)) return 'arcadia';
+  if (/(центр|center|central)/i.test(raw)) return 'center';
+  return raw;
+};
 const getFeatureComplex = (property) => {
   const direct = property?.features?.complex;
   const fromDisplay = property?.features?.display_specs?.complex;
   return String(direct || fromDisplay || '').trim();
 };
 
-const SCORE_WEIGHTS = Object.freeze({
-  rooms: 35,
-  budget: 25,
-  area: 8,
-  floor: 8,
-  parking: 12,
-  balcony: 12
-});
-
-const clamp01 = (n) => {
-  if (!Number.isFinite(n)) return 0;
-  if (n <= 0) return 0;
-  if (n >= 1) return 1;
-  return n;
-};
-
-const scoreByRelativeDistance = (actual, target, preferred = 0.10, acceptable = 0.25) => {
-  if (!Number.isFinite(actual) || !Number.isFinite(target) || target <= 0) return null;
-  const ratio = Math.abs(actual - target) / target;
-  if (ratio <= preferred) return 1;
-  if (ratio <= acceptable) {
-    const span = Math.max(0.0001, acceptable - preferred);
-    return 1 - ((ratio - preferred) / span) * 0.35; // 1 -> 0.65 in acceptable band
-  }
-  const overflowSpan = Math.max(0.0001, acceptable);
-  const overflow = (ratio - acceptable) / overflowSpan;
-  return clamp01(0.65 - overflow * 0.65);
-};
-
-const resolveTierByScore = (score) => {
-  const safe = Number(score) || 0;
-  if (safe >= 80) return 'high';
-  if (safe >= 55) return 'mid';
-  return 'low';
-};
-
-const getAmenityFlags = (property = {}) => {
-  const features = property?.features && typeof property.features === 'object' ? property.features : {};
-  const text = `${String(property?.description || '').toLowerCase()} ${JSON.stringify(features || {}).toLowerCase()}`;
-  const parking = isTrue(features?.parking) || isTrue(features?.has_parking) || /(parking|паркинг|парковк|паркомест|парко ?місц)/i.test(text);
-  const balcony = isTrue(features?.balcony) || isTrue(features?.has_balcony) || isTrue(features?.loggia) || /(balcony|балкон|лоджи|лоджія|loggia)/i.test(text);
-  return { parking, balcony };
-};
-
-const buildScoreContext = ({
-  roomsRaw,
-  minPrice,
-  maxPrice,
-  minArea,
-  maxArea,
-  minFloor,
-  maxFloor,
-  parkingRequired,
-  balconyRequired
-}) => {
-  const hasRooms = String(roomsRaw || '').trim() !== '';
-  const hasBudget = Number.isFinite(minPrice) || Number.isFinite(maxPrice);
-  const hasArea = Number.isFinite(minArea) || Number.isFinite(maxArea);
-  const hasFloor = Number.isFinite(minFloor) || Number.isFinite(maxFloor);
-  const hasParking = parkingRequired === true;
-  const hasBalcony = balconyRequired === true;
-
-  const fields = {
-    rooms: hasRooms,
-    budget: hasBudget,
-    area: hasArea,
-    floor: hasFloor,
-    parking: hasParking,
-    balcony: hasBalcony
-  };
-
-  const weightSum = Object.entries(SCORE_WEIGHTS).reduce((acc, [key, weight]) => (
-    fields[key] ? acc + weight : acc
-  ), 0);
-
-  const budgetAnchor = Number.isFinite(minPrice) && Number.isFinite(maxPrice)
-    ? (minPrice + maxPrice) / 2
-    : (Number.isFinite(maxPrice) ? maxPrice : (Number.isFinite(minPrice) ? minPrice : null));
-  const areaAnchor = Number.isFinite(minArea) && Number.isFinite(maxArea)
-    ? (minArea + maxArea) / 2
-    : (Number.isFinite(minArea) ? minArea : (Number.isFinite(maxArea) ? maxArea : null));
-  const floorAnchor = Number.isFinite(minFloor) && Number.isFinite(maxFloor)
-    ? (minFloor + maxFloor) / 2
-    : (Number.isFinite(minFloor) ? minFloor : (Number.isFinite(maxFloor) ? maxFloor : null));
-
-  return {
-    fields,
-    weightSum,
-    roomsRaw: String(roomsRaw || '').trim(),
-    minPrice,
-    maxPrice,
-    minArea,
-    maxArea,
-    minFloor,
-    maxFloor,
-    budgetAnchor,
-    areaAnchor,
-    floorAnchor
-  };
-};
-
-const scorePropertyByContext = (property, ctx, mode = 'relaxed') => {
-  const strictMode = mode === 'strict';
-  if (!ctx || !Number.isFinite(ctx.weightSum) || ctx.weightSum <= 0) return 100;
-
-  let weighted = 0;
-  const add = (field, match) => {
-    if (!ctx.fields[field]) return;
-    weighted += SCORE_WEIGHTS[field] * clamp01(match);
-  };
-
-  // rooms
-  if (ctx.fields.rooms) {
-    const actual = Number(property?.rooms);
-    const rr = String(ctx.roomsRaw || '');
-    let score = 0;
-    if (Number.isFinite(actual)) {
-      if (rr === '4plus' || rr === '5plus') {
-        const threshold = rr === '5plus' ? 5 : 4;
-        if (actual >= threshold) score = 1;
-        else if (!strictMode && actual === threshold - 1) score = 0.35;
-      } else {
-        const expected = Number(rr);
-        if (Number.isFinite(expected)) {
-          const diff = Math.abs(actual - expected);
-          if (diff === 0) score = 1;
-          else if (!strictMode && diff === 1) score = 0.35;
-        }
-      }
-    }
-    add('rooms', score);
-  }
-
-  // budget
-  if (ctx.fields.budget) {
-    const actual = Number(property?.priceEUR);
-    let score = 0;
-    if (Number.isFinite(actual) && actual > 0) {
-      if (strictMode) {
-        const passMin = !Number.isFinite(ctx.minPrice) || actual >= ctx.minPrice;
-        const passMax = !Number.isFinite(ctx.maxPrice) || actual <= ctx.maxPrice;
-        score = passMin && passMax ? 1 : 0;
-      } else {
-        score = scoreByRelativeDistance(actual, ctx.budgetAnchor) ?? 0;
-      }
-    }
-    add('budget', score);
-  }
-
-  // area
-  if (ctx.fields.area) {
-    const actual = Number(property?.area_m2);
-    let score = 0;
-    if (Number.isFinite(actual) && actual > 0) {
-      if (strictMode) {
-        const passMin = !Number.isFinite(ctx.minArea) || actual >= ctx.minArea;
-        const passMax = !Number.isFinite(ctx.maxArea) || actual <= ctx.maxArea;
-        score = passMin && passMax ? 1 : 0;
-      } else {
-        score = scoreByRelativeDistance(actual, ctx.areaAnchor) ?? 0;
-      }
-    }
-    add('area', score);
-  }
-
-  // floor
-  if (ctx.fields.floor) {
-    const actual = Number(property?.floor);
-    let score = 0;
-    if (Number.isFinite(actual) && actual > 0) {
-      if (strictMode) {
-        const passMin = !Number.isFinite(ctx.minFloor) || actual >= ctx.minFloor;
-        const passMax = !Number.isFinite(ctx.maxFloor) || actual <= ctx.maxFloor;
-        score = passMin && passMax ? 1 : 0;
-      } else {
-        score = scoreByRelativeDistance(actual, ctx.floorAnchor, 0.15, 0.35) ?? 0;
-      }
-    }
-    add('floor', score);
-  }
-
-  // parking / balcony
-  const amenity = getAmenityFlags(property);
-  if (ctx.fields.parking) add('parking', amenity.parking ? 1 : 0);
-  if (ctx.fields.balcony) add('balcony', amenity.balcony ? 1 : 0);
-
-  return Math.max(0, Math.min(100, Math.round((weighted / ctx.weightSum) * 100)));
-};
+// scoring is centralized in services/scoringEngine.js
 
 /**
  * Нормализация объекта из БД (Postgres)
@@ -539,11 +360,16 @@ router.get('/search', async (req, res) => {
     }
 
     if (onlySmart) {
-      list = list.filter((p) => p?.features?.smartFlat === true || hasToken(p.title, 'смарт') || hasToken(p.description, 'смарт') || hasToken(p.title, 'smart') || hasToken(p.description, 'smart'));
+      list = list.filter((p) => p?.features?.smartFlat === true);
     }
 
     if (onlyArcadia) {
-      list = list.filter((p) => hasToken(p.neighborhood, 'аркад') || hasToken(p.address, 'аркад') || hasToken(p.title, 'аркад') || hasToken(p.description, 'аркад') || hasToken(p.neighborhood, 'arcad') || hasToken(p.address, 'arcad'));
+      list = list.filter((p) => {
+        const neighborhoodNorm = normalizeNeighborhoodValue(p?.neighborhood);
+        if (neighborhoodNorm === 'arcadia') return true;
+        // Temporary fallback: title only (description excluded as too noisy).
+        return hasToken(p?.title, 'аркад') || hasToken(p?.title, 'arcad');
+      });
     }
 
     if (onlyExclusive) {
@@ -551,7 +377,7 @@ router.get('/search', async (req, res) => {
     }
 
     if (onlyCenter) {
-      list = list.filter((p) => hasToken(p.neighborhood, 'центр') || hasToken(p.address, 'центр') || hasToken(p.title, 'центр') || hasToken(p.description, 'центр'));
+      list = list.filter((p) => normalizeNeighborhoodValue(p?.neighborhood) === 'center');
     }
 
     if (onlyParking) {
@@ -572,7 +398,7 @@ router.get('/search', async (req, res) => {
 
     // Unified deterministic scoring for both manual and AI paths.
     // Core constraints above are hard gates; score below is calculated only for soft fields.
-    const scoreCtx = buildScoreContext({
+    const scoreCtx = buildUnifiedScoreContext({
       roomsRaw: rooms,
       minPrice: min,
       maxPrice: max,
@@ -584,16 +410,7 @@ router.get('/search', async (req, res) => {
       balconyRequired: onlyBalconyLoggia
     });
 
-    const ranked = list.map((p) => {
-      const relaxedScore = scorePropertyByContext(p, scoreCtx, 'relaxed');
-      const strictScore = scorePropertyByContext(p, scoreCtx, 'strict');
-      return {
-        ...p,
-        score: relaxedScore,
-        strictScore,
-        matchTier: resolveTierByScore(relaxedScore)
-      };
-    });
+    const ranked = list.map((p) => annotatePropertyScoresByContext(p, scoreCtx));
 
     ranked.sort((a, b) => {
       const byScore = Number(b.score || 0) - Number(a.score || 0);
