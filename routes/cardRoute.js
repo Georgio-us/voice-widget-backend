@@ -317,9 +317,24 @@ router.get('/search', async (req, res) => {
       const raw = normalizeText(v);
       return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
     };
+    const toQueryArray = (value) => {
+      if (value == null) return [];
+      const raw = Array.isArray(value) ? value : [value];
+      const out = [];
+      raw.forEach((entry) => {
+        String(entry ?? '')
+          .split(',')
+          .map((v) => String(v || '').trim())
+          .filter(Boolean)
+          .forEach((v) => out.push(v));
+      });
+      return out;
+    };
     const min = toInt(minPrice);
     const max = toInt(maxPrice);
-    const r = toInt(rooms);
+    const roomsValues = toQueryArray(rooms).map((v) => String(v || '').trim().toLowerCase()).filter(Boolean);
+    const districtValues = toQueryArray(district).map((v) => normalizeDistrictValue(v)).filter(Boolean);
+    const roomsForScore = roomsValues[0] || '';
     const areaMin = toNumber(minArea);
     const areaMax = toNumber(maxArea);
     const floorMin = toInt(minFloor);
@@ -345,9 +360,8 @@ router.get('/search', async (req, res) => {
       list = list.filter(p => p.city && p.city.toLowerCase() === c);
     }
 
-    if (district) {
-      const d = normalizeDistrictValue(district);
-      list = list.filter((p) => normalizeDistrictValue(p.district) === d);
+    if (districtValues.length) {
+      list = list.filter((p) => districtValues.includes(normalizeDistrictValue(p.district)));
     }
 
     if (type) {
@@ -360,13 +374,17 @@ router.get('/search', async (req, res) => {
       list = list.filter((p) => normalizeOperationValue(p.operation) === want);
     }
 
-    const roomsStr = String(rooms || '').trim();
-    if (roomsStr === '5plus') {
-      list = list.filter((p) => Number(p.rooms) >= 5);
-    } else if (roomsStr === '4plus') {
-      list = list.filter((p) => Number(p.rooms) >= 4);
-    } else if (r != null) {
-      list = list.filter((p) => Number(p.rooms) === r);
+    if (roomsValues.length) {
+      list = list.filter((p) => {
+        const actualRooms = Number(p.rooms);
+        return roomsValues.some((roomToken) => {
+          if (roomToken === 'smart') return p?.features?.smartFlat === true;
+          if (roomToken === '5plus') return Number.isFinite(actualRooms) && actualRooms >= 5;
+          if (roomToken === '4plus') return Number.isFinite(actualRooms) && actualRooms >= 4;
+          const want = toInt(roomToken);
+          return want != null && Number.isFinite(actualRooms) && actualRooms === want;
+        });
+      });
     }
 
     if (min != null) {
@@ -455,10 +473,10 @@ router.get('/search', async (req, res) => {
     // Browse mode if query has no filters (except limit).
     const hasStrictFilters = Boolean(
       hasValue(city)
-      || hasValue(district)
+      || districtValues.length > 0
       || hasValue(type)
       || hasValue(operation)
-      || hasValue(roomsStr)
+      || roomsValues.length > 0
       || min != null
       || max != null
       || areaMin != null
@@ -480,7 +498,7 @@ router.get('/search', async (req, res) => {
     // Unified deterministic scoring for both manual and AI paths.
     // Core constraints above are hard gates; score below is calculated only for soft fields.
     const scoreCtx = buildUnifiedScoreContext({
-      roomsRaw: rooms,
+      roomsRaw: roomsForScore,
       minPrice: min,
       maxPrice: max,
       minArea: areaMin,
