@@ -11,6 +11,14 @@ const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
 
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
 const hasValue = (value) => value !== null && value !== undefined && String(value).trim() !== '';
+const toQueryArray = (value) => {
+  if (value == null) return [];
+  const rawItems = Array.isArray(value) ? value : [value];
+  return rawItems
+    .flatMap((item) => String(item ?? '').split(','))
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean);
+};
 const normalizeOperationValue = (value) => {
   const raw = normalizeText(value);
   if (!raw) return '';
@@ -319,7 +327,21 @@ router.get('/search', async (req, res) => {
     };
     const min = toInt(minPrice);
     const max = toInt(maxPrice);
-    const r = toInt(rooms);
+    const roomsTokens = Array.from(new Set(
+      toQueryArray(rooms)
+        .map((v) => normalizeText(v))
+        .map((v) => {
+          if (v === '5+' || v === '5plus') return '5plus';
+          if (v === '4+' || v === '4plus') return '4plus';
+          const n = toInt(v);
+          if (n != null && n >= 1) return String(n);
+          return '';
+        })
+        .filter(Boolean)
+    ));
+    const districtTokens = Array.from(new Set(
+      toQueryArray(district).map((v) => normalizeDistrictValue(v)).filter(Boolean)
+    ));
     const areaMin = toNumber(minArea);
     const areaMax = toNumber(maxArea);
     const floorMin = toInt(minFloor);
@@ -345,9 +367,8 @@ router.get('/search', async (req, res) => {
       list = list.filter(p => p.city && p.city.toLowerCase() === c);
     }
 
-    if (district) {
-      const d = normalizeDistrictValue(district);
-      list = list.filter((p) => normalizeDistrictValue(p.district) === d);
+    if (districtTokens.length > 0) {
+      list = list.filter((p) => districtTokens.includes(normalizeDistrictValue(p.district)));
     }
 
     if (type) {
@@ -360,13 +381,17 @@ router.get('/search', async (req, res) => {
       list = list.filter((p) => normalizeOperationValue(p.operation) === want);
     }
 
-    const roomsStr = String(rooms || '').trim();
-    if (roomsStr === '5plus') {
-      list = list.filter((p) => Number(p.rooms) >= 5);
-    } else if (roomsStr === '4plus') {
-      list = list.filter((p) => Number(p.rooms) >= 4);
-    } else if (r != null) {
-      list = list.filter((p) => Number(p.rooms) === r);
+    if (roomsTokens.length > 0) {
+      list = list.filter((p) => {
+        const roomNum = Number(p.rooms);
+        if (!Number.isFinite(roomNum)) return false;
+        return roomsTokens.some((token) => {
+          if (token === '5plus') return roomNum >= 5;
+          if (token === '4plus') return roomNum >= 4;
+          const want = toInt(token);
+          return want != null && roomNum === want;
+        });
+      });
     }
 
     if (min != null) {
@@ -455,10 +480,10 @@ router.get('/search', async (req, res) => {
     // Browse mode if query has no filters (except limit).
     const hasStrictFilters = Boolean(
       hasValue(city)
-      || hasValue(district)
+      || districtTokens.length > 0
       || hasValue(type)
       || hasValue(operation)
-      || hasValue(roomsStr)
+      || roomsTokens.length > 0
       || min != null
       || max != null
       || areaMin != null
@@ -480,7 +505,7 @@ router.get('/search', async (req, res) => {
     // Unified deterministic scoring for both manual and AI paths.
     // Core constraints above are hard gates; score below is calculated only for soft fields.
     const scoreCtx = buildUnifiedScoreContext({
-      roomsRaw: rooms,
+      roomsRaw: roomsTokens[0] || (Array.isArray(rooms) ? rooms[0] : rooms),
       minPrice: min,
       maxPrice: max,
       minArea: areaMin,
