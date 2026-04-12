@@ -1,4 +1,9 @@
-import { SCORE_WEIGHTS, SCORE_BANDS, resolveTierByScore } from './scoringConfig.js';
+import {
+  SCORE_WEIGHTS,
+  SCORE_BANDS,
+  FEATURE_SCORE_RULES,
+  resolveTierByScore
+} from './scoringConfig.js';
 
 const clamp01 = (n) => {
   if (!Number.isFinite(n)) return 0;
@@ -26,6 +31,20 @@ export const scoreByRelativeDistance = (
 };
 
 const isTrue = (value) => value === true || value === 'true' || value === 1 || value === '1';
+
+const getPriceForScoring = (property = {}) => {
+  const candidates = [
+    property?.priceEUR,
+    property?.priceUSD,
+    property?.price_amount,
+    property?.price
+  ];
+  for (const value of candidates) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+};
 
 const getAmenityFlags = (property = {}) => {
   const features = property?.features && typeof property.features === 'object' ? property.features : {};
@@ -124,7 +143,7 @@ export const scorePropertyByContext = (property, ctx, mode = 'relaxed') => {
   }
 
   if (ctx.fields.budget) {
-    const actual = Number(property?.priceEUR);
+    const actual = getPriceForScoring(property);
     let score = 0;
     if (Number.isFinite(actual) && actual > 0) {
       if (strictMode) {
@@ -169,8 +188,12 @@ export const scorePropertyByContext = (property, ctx, mode = 'relaxed') => {
   }
 
   const amenity = getAmenityFlags(property);
-  if (ctx.fields.parking) add('parking', amenity.parking ? 1 : 0);
-  if (ctx.fields.balcony) add('balcony', amenity.balcony ? 1 : 0);
+  if (ctx.fields.parking) {
+    add('parking', amenity.parking ? FEATURE_SCORE_RULES.selectedMatch : FEATURE_SCORE_RULES.selectedNoMatch);
+  }
+  if (ctx.fields.balcony) {
+    add('balcony', amenity.balcony ? FEATURE_SCORE_RULES.selectedMatch : FEATURE_SCORE_RULES.selectedNoMatch);
+  }
 
   return Math.max(0, Math.min(100, Math.round((weighted / ctx.weightSum) * 100)));
 };
@@ -188,4 +211,3 @@ export const annotatePropertyScoresByContext = (property, ctx) => {
     _tier: resolveTierByScore(score)
   };
 };
-
