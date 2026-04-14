@@ -1682,6 +1682,16 @@ const applyMetaInsightsToSession = (session, meta, userUtterance = '') => {
     if (/\b(от|начиная\s+с|не\s*ниже|min(?:imum)?|from)\b/.test(raw)) return 'lower';
     return 'single_or_upper';
   };
+  const detectAreaSemantics = (text) => {
+    const raw = String(text || '').trim().toLowerCase();
+    if (!raw) return 'single_or_upper';
+    if (/\b(от|from)\b[\s\S]{0,30}\b(до|to)\b/.test(raw)) return 'range';
+    if (/\b\d+\s*[-–—]\s*\d+\b/.test(raw)) return 'range';
+    if (/\b(в\s*диапазоне|range|between)\b/.test(raw)) return 'range';
+    if (/\b(до|не\s*более|макс(?:имум)?|up\s*to)\b/.test(raw)) return 'upper';
+    if (/\b(от|начиная\s+с|не\s*ниже|min(?:imum)?|from)\b/.test(raw)) return 'lower';
+    return 'single_or_upper';
+  };
 
   const parseRoomsValue = (value) => {
     if (value === null || value === undefined) return null;
@@ -1917,6 +1927,65 @@ const applyMetaInsightsToSession = (session, meta, userUtterance = '') => {
       }
     }
   } catch {}
+  // area policy v1 (AI -> execution semantics source fields):
+  // - "до X м²" / "X м²" => upper bound (areaMax)
+  // - explicit range => areaMin + areaMax
+  // - "от X м²" => areaMin only
+  // This also prevents stale/legacy areaMin from acting as default for single-area mentions.
+  try {
+    const incomingHasArea = Object.prototype.hasOwnProperty.call(sourceInsights, 'area');
+    const incomingHasAreaMin = Object.prototype.hasOwnProperty.call(sourceInsights, 'areaMin');
+    const incomingHasAreaMax = Object.prototype.hasOwnProperty.call(sourceInsights, 'areaMax');
+    const incomingArea = incomingHasArea ? parseNumeric(sourceInsights?.area) : null;
+    const incomingAreaMin = incomingHasAreaMin ? parseNumeric(sourceInsights?.areaMin) : null;
+    const incomingAreaMax = incomingHasAreaMax ? parseNumeric(sourceInsights?.areaMax) : null;
+    const areaSemantics = detectAreaSemantics(userUtterance);
+
+    if (areaSemantics === 'range') {
+      if (incomingAreaMin != null && incomingAreaMax != null) {
+        const low = Math.min(incomingAreaMin, incomingAreaMax);
+        const high = Math.max(incomingAreaMin, incomingAreaMax);
+        session.insights.areaMin = low;
+        session.insights.areaMax = high;
+      } else if (incomingArea != null && incomingAreaMax != null) {
+        session.insights.areaMin = Math.min(incomingArea, incomingAreaMax);
+        session.insights.areaMax = Math.max(incomingArea, incomingAreaMax);
+      } else if (incomingAreaMin != null && incomingArea != null) {
+        session.insights.areaMin = Math.min(incomingAreaMin, incomingArea);
+        session.insights.areaMax = Math.max(incomingAreaMin, incomingArea);
+      } else if (incomingAreaMax != null) {
+        session.insights.areaMin = null;
+        session.insights.areaMax = incomingAreaMax;
+      } else if (incomingArea != null) {
+        session.insights.areaMin = null;
+        session.insights.areaMax = incomingArea;
+      }
+    } else if (areaSemantics === 'upper') {
+      const upper = incomingAreaMax ?? incomingArea ?? incomingAreaMin;
+      if (upper != null) {
+        session.insights.areaMin = null;
+        session.insights.areaMax = upper;
+      }
+    } else if (areaSemantics === 'lower') {
+      const lower = incomingAreaMin ?? incomingArea ?? incomingAreaMax;
+      if (lower != null) {
+        session.insights.areaMin = lower;
+        session.insights.areaMax = null;
+      }
+    } else {
+      // single_or_upper default
+      if (incomingAreaMin != null && incomingAreaMax != null) {
+        session.insights.areaMin = Math.min(incomingAreaMin, incomingAreaMax);
+        session.insights.areaMax = Math.max(incomingAreaMin, incomingAreaMax);
+      } else {
+        const upper = incomingAreaMax ?? incomingArea ?? incomingAreaMin;
+        if (upper != null) {
+          session.insights.areaMin = null;
+          session.insights.areaMax = upper;
+        }
+      }
+    }
+  } catch {}
   // floor flags fallback: if model encoded constraint in floor text, convert to structured flags.
   if (session.insights.floorNotFirst == null && typeof session.insights.floor === 'string') {
     const derived = parseFloorBooleanFlag(session.insights.floor, 'not_first');
@@ -1925,11 +1994,6 @@ const applyMetaInsightsToSession = (session, meta, userUtterance = '') => {
   if (session.insights.floorNotLast == null && typeof session.insights.floor === 'string') {
     const derived = parseFloorBooleanFlag(session.insights.floor, 'not_last');
     if (derived === true) session.insights.floorNotLast = true;
-  }
-  // back-compat: if only area is present, treat it as minimum desired area
-  if ((session.insights.areaMin == null || session.insights.areaMin === '') && session.insights.area != null) {
-    const areaMin = parseNumeric(session.insights.area);
-    if (areaMin != null) session.insights.areaMin = areaMin;
   }
   recalcInsightsProgress(session.insights);
   console.log('[INSIGHTS_UPDATE] Updates applied:', session.insights);
