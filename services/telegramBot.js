@@ -257,7 +257,9 @@ function isValidPublicImageUrl(url) {
 }
 
 async function getPropertyForInlineShare(propId) {
+  console.log('--- DB SEARCH --- Searching for external_id:', propId, 'AND client_id:', process.env.CLIENT_ID);
   const raw = await getPropertyByExternalId(propId);
+  console.log('--- DB RESULT --- Found object:', raw ? `YES (ID: ${raw.external_id || raw.id})` : 'NO (NULL)');
   if (!raw) return null;
   const images = parseImages(raw.images);
   const geo = raw && raw.geo && typeof raw.geo === 'object' ? raw.geo : null;
@@ -663,10 +665,12 @@ export async function startTelegramBot() {
 
   bot.on('inline_query', async (ctx) => {
     try {
+      console.log('--- INLINE START --- Query:', ctx.inlineQuery?.query);
       const query = String(ctx.inlineQuery?.query || '').trim();
       console.log('Received inline query:', query);
       const propId = parseInlineSharePropId(query);
       const selectionToken = parseInlineShareSelectionToken(query);
+      console.log('--- INLINE PARSE --- Extracted ID:', propId, '| From Env CLIENT_ID:', process.env.CLIENT_ID);
       if (!propId && !selectionToken) {
         try {
           await ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });

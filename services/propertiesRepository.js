@@ -105,11 +105,11 @@ export async function getPropertyByExternalId(externalId, clientId) {
       created_at,
       updated_at
     FROM properties
-    WHERE client_id = $1
-      AND UPPER(TRIM(external_id)) = UPPER(TRIM($2))
+    WHERE UPPER(TRIM(external_id)) = UPPER(TRIM($1))
+      AND UPPER(TRIM(client_id)) = UPPER(TRIM($2))
     LIMIT 1
     `,
-    [safeClientId, String(externalId ?? '')]
+    [String(externalId ?? ''), safeClientId]
   );
 
   if (!rows.length) return null;
