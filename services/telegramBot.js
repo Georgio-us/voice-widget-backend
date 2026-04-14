@@ -30,6 +30,7 @@ const normalizeBool = (value, fallback = true) => {
 };
 const TELEGRAM_WEBHOOK_PUBLIC_PATH = '/api/telegram/webhook';
 const TELEGRAM_WEBHOOK_ALLOW_PUBLIC = normalizeBool(process.env.TELEGRAM_WEBHOOK_ALLOW_PUBLIC, true);
+const TELEGRAM_INLINE_SAFE_MODE = normalizeBool(process.env.TELEGRAM_INLINE_SAFE_MODE, false);
 
 function resolveBackendOrigin() {
   const explicitWebhookUrl = normalize(process.env.TELEGRAM_WEBHOOK_URL);
@@ -454,6 +455,9 @@ export async function startTelegramBot() {
   const bot = new Telegraf(token);
   const miniAppUrl = String(process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL).trim();
   const webAppButtonText = 'Talk to AI / Catalog 🏗️';
+  if (TELEGRAM_INLINE_SAFE_MODE) {
+    console.warn('⚠️ TELEGRAM_INLINE_SAFE_MODE=1: inline results are forced to minimal article payload.');
+  }
   if (!miniAppUrl) {
     console.warn('⚠️ FRONTEND_URL не задан. WebApp-кнопки будут ограничены.');
   }
@@ -703,32 +707,51 @@ export async function startTelegramBot() {
               ]
             }
           : undefined;
-        const result = imageUrl
-          ? {
-              type: 'photo',
-              id: `share_sel_photo_${selectionToken.slice(0, 24)}_${Date.now()}`,
-              photo_url: imageUrl,
-              thumbnail_url: imageUrl,
-              title: `🏘 ${heading}`,
-              description: `🏠 ${total} объектов`,
-              caption: messageText,
-              ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {})
-            }
-          : {
-              type: 'article',
-              id: `share_sel_article_${selectionToken.slice(0, 24)}_${Date.now()}`,
-              title: `🏘 ${heading}`,
-              description: `🏠 ${total} объектов`,
-              input_message_content: {
-                message_text: messageText
-              },
-              ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {}),
-              ...(VIA_LOGO_FALLBACK ? { thumb_url: VIA_LOGO_FALLBACK } : {})
-            };
+        const articleResult = {
+          type: 'article',
+          id: `share_sel_article_${selectionToken.slice(0, 24)}_${Date.now()}`,
+          title: `🏘 ${heading}`,
+          description: `🏠 ${total} объектов`,
+          input_message_content: {
+            message_text: messageText
+          },
+          ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {}),
+          ...(VIA_LOGO_FALLBACK ? { thumb_url: VIA_LOGO_FALLBACK } : {})
+        };
+        const safeArticleResult = {
+          type: 'article',
+          id: `share_sel_article_safe_${selectionToken.slice(0, 24)}_${Date.now()}`,
+          title: `🏘 ${heading}`,
+          description: `🏠 ${total} объектов`,
+          input_message_content: {
+            message_text: messageText
+          }
+        };
+        const photoResult = {
+          type: 'photo',
+          id: `share_sel_photo_${selectionToken.slice(0, 24)}_${Date.now()}`,
+          photo_url: imageUrl,
+          thumbnail_url: imageUrl,
+          title: `🏘 ${heading}`,
+          description: `🏠 ${total} объектов`,
+          caption: messageText,
+          ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {})
+        };
+        const result = TELEGRAM_INLINE_SAFE_MODE
+          ? safeArticleResult
+          : (imageUrl ? photoResult : articleResult);
         try {
           await ctx.answerInlineQuery([result], { cache_time: 0, is_personal: true });
         } catch (answerError) {
           console.warn('answerInlineQuery rejected (selection result):', answerError?.response?.description || answerError?.message || answerError);
+          if (!TELEGRAM_INLINE_SAFE_MODE && result.type === 'photo') {
+            try {
+              await ctx.answerInlineQuery([safeArticleResult], { cache_time: 0, is_personal: true });
+              return;
+            } catch (retryError) {
+              console.warn('answerInlineQuery rejected (selection safe fallback):', retryError?.response?.description || retryError?.message || retryError);
+            }
+          }
           throw answerError;
         }
         return;
@@ -767,28 +790,39 @@ export async function startTelegramBot() {
             ]
           }
         : undefined;
-      const result = imageUrl
-        ? {
-            type: 'photo',
-            id: `share_photo_${property.id}_${Date.now()}`,
-            photo_url: imageUrl,
-            thumbnail_url: imageUrl,
-            title: `🏙 ${heading}`,
-            description: `💰 ${property.priceLabel} • 📍 ${district}`,
-            caption: messageText,
-            ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {})
-          }
-        : {
-            type: 'article',
-            id: `share_article_${property.id}_${Date.now()}`,
-            title: `🏙 ${heading}`,
-            description: `💰 ${property.priceLabel} • 📍 ${district}`,
-            input_message_content: {
-              message_text: messageText
-            },
-            ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {}),
-            ...(VIA_LOGO_FALLBACK ? { thumb_url: VIA_LOGO_FALLBACK } : {})
-          };
+      const articleResult = {
+        type: 'article',
+        id: `share_article_${property.id}_${Date.now()}`,
+        title: `🏙 ${heading}`,
+        description: `💰 ${property.priceLabel} • 📍 ${district}`,
+        input_message_content: {
+          message_text: messageText
+        },
+        ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {}),
+        ...(VIA_LOGO_FALLBACK ? { thumb_url: VIA_LOGO_FALLBACK } : {})
+      };
+      const safeArticleResult = {
+        type: 'article',
+        id: `share_article_safe_${property.id}_${Date.now()}`,
+        title: `🏙 ${heading}`,
+        description: `💰 ${property.priceLabel} • 📍 ${district}`,
+        input_message_content: {
+          message_text: messageText
+        }
+      };
+      const photoResult = {
+        type: 'photo',
+        id: `share_photo_${property.id}_${Date.now()}`,
+        photo_url: imageUrl,
+        thumbnail_url: imageUrl,
+        title: `🏙 ${heading}`,
+        description: `💰 ${property.priceLabel} • 📍 ${district}`,
+        caption: messageText,
+        ...(maybeReplyMarkup ? { reply_markup: maybeReplyMarkup } : {})
+      };
+      const result = TELEGRAM_INLINE_SAFE_MODE
+        ? safeArticleResult
+        : (imageUrl ? photoResult : articleResult);
 
       console.log('Inline query result prepared:', {
         id: result.id,
@@ -801,6 +835,14 @@ export async function startTelegramBot() {
         await ctx.answerInlineQuery([result], { cache_time: 0, is_personal: true });
       } catch (answerError) {
         console.warn('answerInlineQuery rejected (with result):', answerError?.response?.description || answerError?.message || answerError);
+        if (!TELEGRAM_INLINE_SAFE_MODE && result.type === 'photo') {
+          try {
+            await ctx.answerInlineQuery([safeArticleResult], { cache_time: 0, is_personal: true });
+            return;
+          } catch (retryError) {
+            console.warn('answerInlineQuery rejected (safe fallback):', retryError?.response?.description || retryError?.message || retryError);
+          }
+        }
         throw answerError;
       }
     } catch (error) {

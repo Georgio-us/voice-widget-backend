@@ -46,6 +46,7 @@ Optional:
 - `TELEGRAM_WEBAPP_BOT_TOKEN` (explicit override for WebApp `initData` verification token)
 - `TELEGRAM_WEBHOOK_SECRET` (fixed secret for Telegram webhook header validation)
 - `TELEGRAM_WEBHOOK_ALLOW_PUBLIC` (default `1`; allows `/api/telegram/webhook` without secret match)
+- `TELEGRAM_INLINE_SAFE_MODE` (default `0`; forces minimal inline `article` payload for diagnostics)
 - `TELEGRAM_INITDATA_ENFORCE_ADMIN` (strict Telegram signature check for admin access, recommended `1`)
 - `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID` (legacy fallback via plain `tgUserId`, recommended `0`)
 - `EXIT_ON_UNCAUGHT_EXCEPTION` (default `1`; set `0` only for emergency diagnostics)
@@ -269,6 +270,7 @@ COMMIT;
   - keep `/api/telegram/webhook` publicly reachable from Telegram;
   - set `TELEGRAM_WEBHOOK_ALLOW_PUBLIC=1` (current safe default);
   - if strict header validation is required, set fixed `TELEGRAM_WEBHOOK_SECRET` and re-run `setWebhook` with the same `secret_token`.
+  - if Telegram still shows "Not found", temporarily set `TELEGRAM_INLINE_SAFE_MODE=1` to force minimal `article` payload and bypass photo/thumb/reply markup incompatibilities.
 - Quick check:
   - `curl "https://api.telegram.org/bot<TELEGRAM_INTERACTIVE_TOKEN>/getWebhookInfo"`
   - `allowed_updates` must include `inline_query`
