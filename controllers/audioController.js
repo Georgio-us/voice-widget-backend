@@ -27,8 +27,9 @@ const INSIGHTS_RESPONSE_SCHEMA = {
         type: 'object',
         additionalProperties: false,
         required: [
-          'name', 'operation', 'budget', 'budgetMax', 'type', 'location', 'rooms',
-          'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences'
+          'name', 'operation', 'budget', 'budgetMax', 'type', 'district', 'location', 'rooms',
+          'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences',
+          'residentialComplex', 'floorNotFirst', 'floorNotLast'
         ],
         properties: {
           name: { type: ['string', 'null'] },
@@ -36,8 +37,18 @@ const INSIGHTS_RESPONSE_SCHEMA = {
           budget: { type: ['number', 'string', 'null'] },
           budgetMax: { type: ['number', 'string', 'null'] },
           type: { type: ['string', 'null'], enum: ['apartment', 'house', 'land', 'commercial', null] },
-          location: { type: ['string', 'null'] },
-          rooms: { type: ['number', 'string', 'null'] },
+          district: {
+            type: ['string', 'array', 'null'],
+            items: { type: 'string' }
+          },
+          location: {
+            type: ['string', 'array', 'null'],
+            items: { type: 'string' }
+          },
+          rooms: {
+            type: ['number', 'string', 'array', 'null'],
+            items: { type: ['number', 'string'] }
+          },
           area: { type: ['number', 'string', 'null'] },
           areaMin: { type: ['number', 'string', 'null'] },
           areaMax: { type: ['number', 'string', 'null'] },
@@ -47,7 +58,10 @@ const INSIGHTS_RESPONSE_SCHEMA = {
             items: { type: 'string' }
           },
           details: { type: ['string', 'null'] },
-          preferences: { type: ['string', 'null'] }
+          preferences: { type: ['string', 'null'] },
+          residentialComplex: { type: ['string', 'null'] },
+          floorNotFirst: { type: ['boolean', 'null'] },
+          floorNotLast: { type: ['boolean', 'null'] }
         }
       }
     }
@@ -212,6 +226,7 @@ const getOrCreateSession = (sessionId) => {
         budget: null,
         budgetMax: null,
         type: null,
+        district: null,
         location: null,
         rooms: null,
         area: null,
@@ -221,6 +236,9 @@ const getOrCreateSession = (sessionId) => {
         features: null,
         details: null,
         preferences: null,
+        residentialComplex: null,
+        floorNotFirst: null,
+        floorNotLast: null,
         progress: 0
       },
       extractionMetrics: {
@@ -235,6 +253,7 @@ const getOrCreateSession = (sessionId) => {
           budget: 0,
           budgetMax: 0,
           type: 0,
+          district: 0,
           location: 0,
           rooms: 0,
           area: 0,
@@ -243,7 +262,10 @@ const getOrCreateSession = (sessionId) => {
           floor: 0,
           features: 0,
           details: 0,
-          preferences: 0
+          preferences: 0,
+          residentialComplex: 0,
+          floorNotFirst: 0,
+          floorNotLast: 0
         }
       },
       metaContract: {
@@ -484,10 +506,10 @@ const normalizeDistrict = (val) => {
 };
 
 const splitLocationTargets = (value) => {
-  const raw = String(value || '').trim();
-  if (!raw) return [];
-  return raw
-    .split(/\s*(?:,|\/|\\|\||\s+или\s+|\s+либо\s+|;)\s*/i)
+  if (value == null) return [];
+  const arr = Array.isArray(value) ? value : [value];
+  return arr
+    .flatMap((item) => String(item || '').split(/\s*(?:,|\/|\\|\||\s+или\s+|\s+либо\s+|;)\s*/i))
     .map((part) => String(part || '').trim())
     .filter(Boolean);
 };
@@ -512,6 +534,7 @@ const hasHardFilters = (insights = {}) => {
     insights?.budget ||
     insights?.budgetMax ||
     insights?.type ||
+    insights?.district ||
     insights?.location ||
     insights?.rooms
   );
@@ -626,6 +649,7 @@ const hasRcOnlySignal = (insights = {}) => {
   else if (insights?.features != null) parts.push(insights.features);
   if (insights?.details != null) parts.push(insights.details);
   if (insights?.preferences != null) parts.push(insights.preferences);
+  if (insights?.district != null) parts.push(insights.district);
   if (insights?.location != null) parts.push(insights.location);
   const text = parts.map((v) => String(v || '').toLowerCase()).join(' ');
   if (!text) return false;
@@ -642,7 +666,9 @@ const applyHardGateByInsights = (properties = [], insights = {}) => {
   if (expectedType) {
     list = list.filter((p) => normalizeTypeForProperty(p?.property_type) === expectedType);
   }
-  const insightDistrictTargets = getNormalizedLocationTargets(insights?.location);
+  const insightDistrictTargets = getNormalizedLocationTargets(
+    insights?.district != null ? insights.district : insights?.location
+  );
   if (insightDistrictTargets.length) {
     list = list.filter((p) => {
       const propParts = [
@@ -686,18 +712,36 @@ const applyResidentialComplexFallbackFromTranscript = (transcription = '', insig
   }
 
   if (!String(insights.residentialComplex || '').trim()) {
+    const cleanupComplexCandidate = (value) => {
+      let text = String(value || '').trim();
+      if (!text) return '';
+      // Cut obvious continuation after the complex name.
+      text = text
+        .replace(/\s+(?:в|на|для|до|по|из|у|к|рядом|возле|около|near)\b.*$/i, '')
+        .replace(/\s+(?:район|мікрорайон|микрорайон|district|area)\b.*$/i, '')
+        .replace(/\s+\d{1,3}(?:[.,]\d+)?\s*(?:usd|\$|доллар|долл|грн|₴)\b.*$/i, '')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/^[«"'`]+|[»"'`]+$/g, '')
+        .trim();
+      return text;
+    };
     let complexName = null;
     const quoted = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s*[«"']([^»"']{2,60})[»"']/i);
     if (quoted && quoted[1]) {
       complexName = String(quoted[1]).trim();
     } else {
-      const plain = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s+([a-zа-яё0-9][a-zа-яё0-9\-\s]{1,48})(?=$|[,.!?;:]|\s+(?:в|на|для|до|котор|где)\b)/i);
+      const plain = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s+([a-zа-яё0-9][a-zа-яё0-9\-\s]{1,80})(?=$|[,.!?;:]|\s+(?:в|на|для|до|котор|где)\b)/i);
       if (plain && plain[1]) {
         complexName = String(plain[1]).trim();
+      } else {
+        const tail = source.match(/(?:^|[\s,;:()\-])(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s*[«"']?([^,;.!?()\-]{2,100})/i);
+        if (tail && tail[1]) {
+          complexName = String(tail[1]).trim();
+        }
       }
     }
     if (complexName) {
-      const cleaned = complexName.replace(/\s{2,}/g, ' ').replace(/^[«"'`]+|[»"'`]+$/g, '').trim();
+      const cleaned = cleanupComplexCandidate(complexName);
       if (cleaned.length >= 2) {
         insights.residentialComplex = cleaned;
         applied = true;
@@ -1022,25 +1066,43 @@ const updateInsights = (sessionId, newMessage) => {
     name: current.name ?? null,
     operation: current.operation ?? null,
     budget: current.budget ?? null,
+    budgetMax: current.budgetMax ?? null,
     type: current.type ?? null,
+    district: current.district ?? null,
     location: current.location ?? null,
     rooms: current.rooms ?? null,
     area: current.area ?? null,
+    areaMin: current.areaMin ?? null,
+    areaMax: current.areaMax ?? null,
+    floor: current.floor ?? null,
+    floorNotFirst: current.floorNotFirst ?? null,
+    floorNotLast: current.floorNotLast ?? null,
+    features: current.features ?? null,
     details: current.details ?? null,
     preferences: current.preferences ?? null,
+    residentialComplex: current.residentialComplex ?? null,
     progress: 0
   };
 
   const weights = {
-    name: 11,
-    operation: 11,
-    budget: 11,
-    type: 11,
-    location: 11,
-    rooms: 11,
-    area: 11,
-    details: 11,
-    preferences: 11
+    name: 7,
+    operation: 7,
+    budget: 7,
+    budgetMax: 7,
+    type: 7,
+    district: 7,
+    location: 7,
+    rooms: 7,
+    area: 7,
+    areaMin: 7,
+    areaMax: 7,
+    floor: 7,
+    floorNotFirst: 7,
+    floorNotLast: 7,
+    features: 7,
+    details: 7,
+    preferences: 7,
+    residentialComplex: 7
   };
   let totalProgress = 0;
   for (const [field, weight] of Object.entries(weights)) {
@@ -1457,8 +1519,9 @@ const formatBudgetFromRange = (min, max) => {
 };
 
 const INSIGHT_FIELDS = [
-  'name', 'operation', 'budget', 'budgetMax', 'type', 'location', 'rooms',
-  'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences'
+  'name', 'operation', 'budget', 'budgetMax', 'type', 'district', 'location', 'rooms',
+  'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences',
+  'residentialComplex', 'floorNotFirst', 'floorNotLast'
 ];
 
 const recalcInsightsProgress = (insights) => {
@@ -1469,6 +1532,7 @@ const recalcInsightsProgress = (insights) => {
     budget: 7,
     budgetMax: 7,
     type: 7,
+    district: 7,
     location: 7,
     rooms: 7,
     area: 7,
@@ -1477,7 +1541,10 @@ const recalcInsightsProgress = (insights) => {
     floor: 7,
     features: 7,
     details: 7,
-    preferences: 7
+    preferences: 7,
+    residentialComplex: 7,
+    floorNotFirst: 7,
+    floorNotLast: 7
   };
   let totalProgress = 0;
   for (const [field, weight] of Object.entries(weights)) {
@@ -1605,11 +1672,8 @@ const applyMetaInsightsToSession = (session, meta) => {
     return Number.isFinite(parsed) ? toUsdIfNeeded(parsed) : null;
   };
 
-  const parseRoomsNumber = (value) => {
+  const parseRoomsValue = (value) => {
     if (value === null || value === undefined) return null;
-    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
-    const raw = String(value).trim().toLowerCase();
-    if (!raw) return null;
     const namedRooms = {
       'студия': 0,
       'studio': 0,
@@ -1628,11 +1692,44 @@ const applyMetaInsightsToSession = (session, meta) => {
       'four bedroom': 4,
       '4 bedroom': 4
     };
-    if (Object.prototype.hasOwnProperty.call(namedRooms, raw)) return namedRooms[raw];
-    const numeric = raw.match(/\d+/);
-    if (!numeric) return null;
-    const parsed = Number(numeric[0]);
-    return Number.isFinite(parsed) ? parsed : null;
+    const parseOne = (item) => {
+      if (item === null || item === undefined) return null;
+      if (typeof item === 'number' && Number.isFinite(item)) return Math.round(item);
+      const raw = String(item).trim().toLowerCase();
+      if (!raw) return null;
+      if (Object.prototype.hasOwnProperty.call(namedRooms, raw)) return namedRooms[raw];
+      if (/\b5\+?\b/.test(raw) || /\b(5plus|5\s*\+)\b/.test(raw)) return 5;
+      if (/\b4\+?\b/.test(raw) || /\b(4plus|4\s*\+)\b/.test(raw)) return 4;
+      const numeric = raw.match(/\d+/);
+      if (!numeric) return null;
+      const parsed = Number(numeric[0]);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const tokens = Array.isArray(value)
+      ? value
+      : String(value).split(/\s*(?:,|\/|\\|\||\s+или\s+|\s+либо\s+|;|&)\s*/i);
+    const uniq = [];
+    for (const token of tokens) {
+      const parsed = parseOne(token);
+      if (parsed == null) continue;
+      if (!uniq.includes(parsed)) uniq.push(parsed);
+    }
+    if (!uniq.length) return null;
+    return uniq.length === 1 ? uniq[0] : uniq;
+  };
+
+  const parseDistrictValue = (value) => {
+    if (value === null || value === undefined) return null;
+    const tokens = splitLocationTargets(value);
+    if (!tokens.length) return null;
+    const uniq = [];
+    for (const token of tokens) {
+      const cleaned = sanitizeInsightValue(token);
+      if (!cleaned) continue;
+      if (!uniq.includes(cleaned)) uniq.push(cleaned);
+    }
+    if (!uniq.length) return null;
+    return uniq.length === 1 ? uniq[0] : uniq;
   };
 
   const parseFloorNumber = (value) => {
@@ -1712,6 +1809,21 @@ const applyMetaInsightsToSession = (session, meta) => {
     return out.length ? out : null;
   };
 
+  const parseFloorBooleanFlag = (value, kind = 'not_first') => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'boolean') return value;
+    const raw = String(value).trim().toLowerCase();
+    if (!raw) return null;
+    if (['true', '1', 'yes', 'y', 'да'].includes(raw)) return true;
+    if (['false', '0', 'no', 'n', 'нет'].includes(raw)) return false;
+    if (kind === 'not_first') {
+      if (/(не\s*перв|not\s*first)/i.test(raw)) return true;
+    } else {
+      if (/(не\s*послед|не\s*остан|not\s*last)/i.test(raw)) return true;
+    }
+    return null;
+  };
+
   const invalidFields = [];
   let appliedCount = 0;
   for (const field of INSIGHT_FIELDS) {
@@ -1720,13 +1832,17 @@ const applyMetaInsightsToSession = (session, meta) => {
     let nextValue = null;
     if (field === 'budget') nextValue = parseBudgetNumber(incoming);
     else if (field === 'budgetMax') nextValue = parseBudgetNumber(incoming);
-    else if (field === 'rooms') nextValue = parseRoomsNumber(incoming);
+    else if (field === 'district') nextValue = parseDistrictValue(incoming);
+    else if (field === 'location') nextValue = parseDistrictValue(incoming);
+    else if (field === 'rooms') nextValue = parseRoomsValue(incoming);
     else if (field === 'operation') nextValue = normalizeOperation(incoming);
     else if (field === 'type') nextValue = normalizeType(incoming);
     else if (field === 'area') nextValue = parseNumeric(incoming);
     else if (field === 'areaMin') nextValue = parseNumeric(incoming);
     else if (field === 'areaMax') nextValue = parseNumeric(incoming);
     else if (field === 'floor') nextValue = parseFloorNumber(incoming);
+    else if (field === 'floorNotFirst') nextValue = parseFloorBooleanFlag(incoming, 'not_first');
+    else if (field === 'floorNotLast') nextValue = parseFloorBooleanFlag(incoming, 'not_last');
     else if (field === 'features') nextValue = parseFeatures(incoming);
     else nextValue = sanitizeInsightValue(incoming);
     const isEmptyArray = Array.isArray(nextValue) && nextValue.length === 0;
@@ -1736,6 +1852,15 @@ const applyMetaInsightsToSession = (session, meta) => {
     }
     session.insights[field] = nextValue;
     appliedCount += 1;
+  }
+  // floor flags fallback: if model encoded constraint in floor text, convert to structured flags.
+  if (session.insights.floorNotFirst == null && typeof session.insights.floor === 'string') {
+    const derived = parseFloorBooleanFlag(session.insights.floor, 'not_first');
+    if (derived === true) session.insights.floorNotFirst = true;
+  }
+  if (session.insights.floorNotLast == null && typeof session.insights.floor === 'string') {
+    const derived = parseFloorBooleanFlag(session.insights.floor, 'not_last');
+    if (derived === true) session.insights.floorNotLast = true;
   }
   // back-compat: if model sent only budget, use it as upper cap too
   if ((session.insights.budgetMax == null || session.insights.budgetMax === '') && session.insights.budget != null) {

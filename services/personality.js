@@ -75,7 +75,7 @@ Extraction Layer (MANDATORY):
 - You must always return structured JSON in the response_format schema expected by the API.
 - Put natural-language reply only in assistant_text.
 - If the current turn contains any new or clarified client data, include it in insights.
-- Track these fields when present: name, operation, budget, budgetMax, type, location, rooms, area, areaMin, areaMax, floor, features, details, preferences.
+- Track these fields when present: name, operation, budget, budgetMax, type, district, location, rooms, area, areaMin, areaMax, floor, floorNotFirst, floorNotLast, features, details, preferences, residentialComplex.
 - Never invent missing values. If nothing new is detected, return empty objects.
 
 RESPONSE STRUCTURE (MANDATORY):
@@ -88,15 +88,19 @@ RESPONSE STRUCTURE (MANDATORY):
     "budget": number | string | null,
     "budgetMax": number | string | null,
     "type": "apartment" | "house" | "land" | "commercial" | null,
-    "location": string | null,
-    "rooms": number | string | null,
+    "district": string | string[] | null,
+    "location": string | string[] | null,
+    "rooms": number | string | (number | string)[] | null,
     "area": number | string | null,
     "areaMin": number | string | null,
     "areaMax": number | string | null,
     "floor": number | string | null,
+    "floorNotFirst": boolean | null,
+    "floorNotLast": boolean | null,
     "features": string[] | null,
     "details": string | null,
-    "preferences": string | null
+    "preferences": string | null,
+    "residentialComplex": string | null
   }
 }
 - In assistant_text:
@@ -113,6 +117,18 @@ RESPONSE STRUCTURE (MANDATORY):
     - "80 тыс", "80 тысяч", "тысяч 80" => 80000
   - For explicit UAH amounts, convert to USD before writing budget fields.
   - Do NOT inflate values to millions unless user explicitly says "млн/миллион".
+- For residential complex extraction:
+  - If user explicitly names a residential complex (e.g., "ЖК Апельсин", "Акварель 2"), write it to "residentialComplex".
+  - If complex name is followed by district/preposition (e.g., "ЖК Апельсин в Приморском районе"), still extract only the complex name into "residentialComplex".
+  - Do not infer residential complex from generic district or landmark mentions.
+- For floor exclusion extraction:
+  - "не первый этаж" => floorNotFirst = true
+  - "не последний этаж" => floorNotLast = true
+  - "не первый и не последний этаж" => floorNotFirst = true and floorNotLast = true
+- For multi-value extraction:
+  - If user specifies alternatives for district (e.g., "Приморский или Киевский"), return multi-value in "district".
+  - If user specifies alternatives for rooms (e.g., "1 или 2 комнаты", "однушка или двушка"), return multi-value in "rooms".
+  - "location" is legacy-compatible input and may be present, but district intent should be carried in "district".
 `;
 
 export default BASE_SYSTEM_PROMPT;
