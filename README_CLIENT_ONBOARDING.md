@@ -44,6 +44,7 @@ Optional:
 - `VIA_LOGO_FALLBACK`
 - `OLX_SCOPES` (space-separated OAuth scopes required by OLX API)
 - `TELEGRAM_WEBAPP_BOT_TOKEN` (explicit override for WebApp `initData` verification token)
+- `TELEGRAM_WEBHOOK_URL` (recommended; explicit webhook URL, e.g. `https://<backend>.up.railway.app/api/telegram/webhook`)
 - `TELEGRAM_WEBHOOK_SECRET` (fixed secret for Telegram webhook header validation)
 - `TELEGRAM_WEBHOOK_ALLOW_PUBLIC` (default `1`; allows `/api/telegram/webhook` without secret match)
 - `TELEGRAM_INITDATA_ENFORCE_ADMIN` (strict Telegram signature check for admin access, recommended `1`)
@@ -127,6 +128,21 @@ Then redeploy backend. This restores legacy behavior.
 - `EXIT_ON_UNHANDLED_REJECTION`
   - `0` (default): backend logs `unhandledRejection` and keeps process alive.
   - `1`: backend exits on `unhandledRejection` (strict mode).
+
+## 4.3) Telegram webhook URL source priority (important)
+
+Webhook URL is resolved in this order:
+1. `TELEGRAM_WEBHOOK_URL` (explicit, preferred)
+2. `OLX_REDIRECT_URI` origin (fallback)
+3. `RAILWAY_STATIC_URL` / `RAILWAY_PUBLIC_DOMAIN` (fallback)
+
+Why this matters:
+- If `TELEGRAM_WEBHOOK_URL` is missing and `OLX_REDIRECT_URI` points to another environment, the bot may register webhook on the wrong domain.
+- In that case inline updates go to another backend, and Railway logs in the expected service will show no inline events.
+
+Recommendation:
+- Always set `TELEGRAM_WEBHOOK_URL` explicitly per environment/client.
+- Keep `OLX_REDIRECT_URI` aligned with the same backend domain.
 
 ## 5) Import Properties
 
@@ -273,6 +289,17 @@ COMMIT;
   - `curl "https://api.telegram.org/bot<TELEGRAM_INTERACTIVE_TOKEN>/getWebhookInfo"`
   - `allowed_updates` must include `inline_query`
   - `last_error_message` must be empty.
+
+### Inline logs do not appear in expected Railway service
+- Symptom: no `inline_query` logs in current service, while bot is active.
+- Typical root cause: webhook is registered on another environment domain.
+- Detect:
+  - startup log prints `Telegram interactive bot запущен (webhook): <url>`
+  - compare this URL with expected service domain.
+- Fix:
+  - set `TELEGRAM_WEBHOOK_URL` to the exact service webhook endpoint;
+  - ensure `OLX_REDIRECT_URI` uses the same service domain (fallback safety);
+  - redeploy and verify `getWebhookInfo.result.url`.
 
 ## 10) Notes
 
