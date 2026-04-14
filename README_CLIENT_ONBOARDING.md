@@ -44,6 +44,8 @@ Optional:
 - `VIA_LOGO_FALLBACK`
 - `OLX_SCOPES` (space-separated OAuth scopes required by OLX API)
 - `TELEGRAM_WEBAPP_BOT_TOKEN` (explicit override for WebApp `initData` verification token)
+- `TELEGRAM_WEBHOOK_SECRET` (fixed secret for Telegram webhook header validation)
+- `TELEGRAM_WEBHOOK_ALLOW_PUBLIC` (default `1`; allows `/api/telegram/webhook` without secret match)
 - `TELEGRAM_INITDATA_ENFORCE_ADMIN` (strict Telegram signature check for admin access, recommended `1`)
 - `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID` (legacy fallback via plain `tgUserId`, recommended `0`)
 - `EXIT_ON_UNCAUGHT_EXCEPTION` (default `1`; set `0` only for emergency diagnostics)
@@ -258,6 +260,19 @@ COMMIT;
 
 ### CORS failure
 - Ensure `FRONTEND_URL` is exact origin of frontend.
+
+### Telegram inline share opens without preview (`401` / `409`)
+- Symptom: inline chooser opens, but no preview card is shown.
+- `getWebhookInfo` often shows `last_error_message: "Wrong response from the webhook: 401"`.
+- Root cause: webhook route blocked by auth/secret mismatch.
+- Fix:
+  - keep `/api/telegram/webhook` publicly reachable from Telegram;
+  - set `TELEGRAM_WEBHOOK_ALLOW_PUBLIC=1` (current safe default);
+  - if strict header validation is required, set fixed `TELEGRAM_WEBHOOK_SECRET` and re-run `setWebhook` with the same `secret_token`.
+- Quick check:
+  - `curl "https://api.telegram.org/bot<TELEGRAM_INTERACTIVE_TOKEN>/getWebhookInfo"`
+  - `allowed_updates` must include `inline_query`
+  - `last_error_message` must be empty.
 
 ## 10) Notes
 

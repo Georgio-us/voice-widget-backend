@@ -22,6 +22,14 @@ const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
 const TELEGRAM_WEBHOOK_PATH = '/api/telegram/webhook';
 
 const normalize = (value) => String(value || '').trim();
+const normalizeBool = (value, fallback = true) => {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (['1', 'true', 'on', 'yes', 'y'].includes(v)) return true;
+  if (['0', 'false', 'off', 'no', 'n'].includes(v)) return false;
+  return Boolean(fallback);
+};
+const TELEGRAM_WEBHOOK_PUBLIC_PATH = '/api/telegram/webhook';
+const TELEGRAM_WEBHOOK_ALLOW_PUBLIC = normalizeBool(process.env.TELEGRAM_WEBHOOK_ALLOW_PUBLIC, true);
 
 function resolveBackendOrigin() {
   const explicitWebhookUrl = normalize(process.env.TELEGRAM_WEBHOOK_URL);
@@ -267,13 +275,6 @@ async function getPropertyForInlineShare(propId) {
     image: images[0] || ''
   };
 }
-
-const normalizeBool = (value, fallback = true) => {
-  const v = String(value ?? '').trim().toLowerCase();
-  if (['1', 'true', 'on', 'yes', 'y'].includes(v)) return true;
-  if (['0', 'false', 'off', 'no', 'n'].includes(v)) return false;
-  return Boolean(fallback);
-};
 
 const normalizeAlertsMode = (value) => {
   const v = String(value || '').trim().toLowerCase();
@@ -882,8 +883,14 @@ export async function telegramWebhookExpressHandler(req, res) {
     }
     const expectedSecret = String(botInstance.__webhookSecret || '').trim();
     const incomingSecret = String(req.headers?.['x-telegram-bot-api-secret-token'] || '').trim();
+    const requestPath = String(req.path || req.originalUrl || '').trim();
+    const isWebhookPublicPath = requestPath === TELEGRAM_WEBHOOK_PUBLIC_PATH
+      || requestPath.endsWith(TELEGRAM_WEBHOOK_PUBLIC_PATH);
     if (expectedSecret && incomingSecret !== expectedSecret) {
-      return res.status(401).json({ ok: false, error: 'INVALID_WEBHOOK_SECRET' });
+      if (!(TELEGRAM_WEBHOOK_ALLOW_PUBLIC && isWebhookPublicPath)) {
+        return res.status(401).json({ ok: false, error: 'INVALID_WEBHOOK_SECRET' });
+      }
+      console.warn('telegram webhook secret mismatch ignored (public webhook mode enabled)');
     }
     const update = req.body;
     if (!update || typeof update !== 'object') {
