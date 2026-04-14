@@ -485,7 +485,7 @@ const normalizeDistrict = (val) => {
   const map = {
     // Odesa districts
     'одесса': 'odesa', 'одеса': 'odesa', 'odessa': 'odesa', 'odesa': 'odesa',
-    'приморский': 'prymorskyi', 'проморский': 'prymorskyi', 'приморський': 'prymorskyi', 'проморський': 'prymorskyi', 'prymorskyi': 'prymorskyi', 'primorsky': 'prymorskyi', 'promorsky': 'prymorskyi',
+    'приморский': 'prymorskyi', 'проморский': 'prymorskyi', 'прыморский': 'prymorskyi', 'приморський': 'prymorskyi', 'проморський': 'prymorskyi', 'прыморський': 'prymorskyi', 'prymorskyi': 'prymorskyi', 'primorsky': 'prymorskyi', 'promorsky': 'prymorskyi',
     'киевский': 'kyivskyi', 'київський': 'kyivskyi', 'kyivskyi': 'kyivskyi', 'kievskiy': 'kyivskyi',
     'малиновский': 'khadzhibeyskyi', 'малиновський': 'khadzhibeyskyi', 'хаджибейский': 'khadzhibeyskyi', 'khadzhibeyskyi': 'khadzhibeyskyi',
     'суворовский': 'peresypskyi', 'суворовський': 'peresypskyi', 'пересыпский': 'peresypskyi', 'пересипський': 'peresypskyi', 'peresypskyi': 'peresypskyi',
@@ -1622,7 +1622,7 @@ const mapClientProfileToInsights = (clientProfile, insights) => {
   recalcInsightsProgress(insights);
 };
 
-const applyMetaInsightsToSession = (session, meta) => {
+const applyMetaInsightsToSession = (session, meta, userUtterance = '') => {
   if (!session || !meta || typeof meta !== 'object') return { applied: false, invalidFields: ['meta'] };
   const sourceInsights = (meta.insights && typeof meta.insights === 'object' && !Array.isArray(meta.insights))
     ? meta.insights
@@ -1672,34 +1672,38 @@ const applyMetaInsightsToSession = (session, meta) => {
     return Number.isFinite(parsed) ? toUsdIfNeeded(parsed) : null;
   };
 
+  const detectPriceSemantics = (text) => {
+    const raw = String(text || '').trim().toLowerCase();
+    if (!raw) return 'single_or_upper';
+    if (/\b(от|from)\b[\s\S]{0,30}\b(до|to)\b/.test(raw)) return 'range';
+    if (/\b\d+\s*[-–—]\s*\d+\b/.test(raw)) return 'range';
+    if (/\b(в\s*диапазоне|range|between)\b/.test(raw)) return 'range';
+    if (/\b(до|не\s*более|макс(?:имум)?|up\s*to|budget)\b/.test(raw)) return 'upper';
+    if (/\b(от|начиная\s+с|не\s*ниже|min(?:imum)?|from)\b/.test(raw)) return 'lower';
+    return 'single_or_upper';
+  };
+
   const parseRoomsValue = (value) => {
     if (value === null || value === undefined) return null;
-    const namedRooms = {
-      'студия': 0,
-      'studio': 0,
-      'однушка': 1,
-      'one bedroom': 1,
-      '1 bedroom': 1,
-      'двушка': 2,
-      'two bedroom': 2,
-      '2 bedroom': 2,
-      'трешка': 3,
-      'трёшка': 3,
-      'three bedroom': 3,
-      '3 bedroom': 3,
-      'четырешка': 4,
-      'четырёшка': 4,
-      'four bedroom': 4,
-      '4 bedroom': 4
+    const detectRoomBands = (textLike) => {
+      const text = String(textLike || '').trim().toLowerCase();
+      if (!text) return [];
+      const found = new Set();
+      if (/(5\+|5plus|\bпят(и|ь)\b|\bпятикомнат|\b5\s*комн|\bfive\b)/i.test(text)) found.add(5);
+      if (/(4\+|4plus|\bчетыр(е|ё|ех|ёх)\b|\bчетырехкомнат|\bчетырёхкомнат|\b4\s*комн|\bfour\b)/i.test(text)) found.add(4);
+      if (/(тр(е|ё)шка|\bтрехкомнат|\bтрёхкомнат|\b3\s*комн|\bthree\b|\bтр(е|ё)х\b)/i.test(text)) found.add(3);
+      if (/(двушка|\bдвухкомнат|\b2\s*комн|\btwo\b|\bдвух\b|\bдву\b)/i.test(text)) found.add(2);
+      if (/(однушка|\bоднокомнат|\b1\s*комн|\bone\b|\bодн\b|studio|студия|смарт)/i.test(text)) found.add(1);
+      return Array.from(found).sort((a, b) => a - b);
     };
     const parseOne = (item) => {
       if (item === null || item === undefined) return null;
       if (typeof item === 'number' && Number.isFinite(item)) return Math.round(item);
       const raw = String(item).trim().toLowerCase();
       if (!raw) return null;
-      if (Object.prototype.hasOwnProperty.call(namedRooms, raw)) return namedRooms[raw];
-      if (/\b5\+?\b/.test(raw) || /\b(5plus|5\s*\+)\b/.test(raw)) return 5;
-      if (/\b4\+?\b/.test(raw) || /\b(4plus|4\s*\+)\b/.test(raw)) return 4;
+      const detected = detectRoomBands(raw);
+      if (detected.length === 1) return detected[0];
+      if (detected.length > 1) return detected;
       const numeric = raw.match(/\d+/);
       if (!numeric) return null;
       const parsed = Number(numeric[0]);
@@ -1712,7 +1716,11 @@ const applyMetaInsightsToSession = (session, meta) => {
     for (const token of tokens) {
       const parsed = parseOne(token);
       if (parsed == null) continue;
-      if (!uniq.includes(parsed)) uniq.push(parsed);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((value) => {
+          if (!uniq.includes(value)) uniq.push(value);
+        });
+      } else if (!uniq.includes(parsed)) uniq.push(parsed);
     }
     if (!uniq.length) return null;
     return uniq.length === 1 ? uniq[0] : uniq;
@@ -1853,6 +1861,62 @@ const applyMetaInsightsToSession = (session, meta) => {
     session.insights[field] = nextValue;
     appliedCount += 1;
   }
+  // price policy v1 (AI -> execution semantics source fields):
+  // - single amount / upper intent => budgetMax only
+  // - explicit range => budget(lower) + budgetMax(upper)
+  // - lower-only => keep in budget, do not auto-populate budgetMax
+  // This block also resolves stale budget/budgetMax conflicts from previous turns.
+  try {
+    const incomingHasBudget = Object.prototype.hasOwnProperty.call(sourceInsights, 'budget');
+    const incomingHasBudgetMax = Object.prototype.hasOwnProperty.call(sourceInsights, 'budgetMax');
+    const incomingBudget = incomingHasBudget ? parseBudgetNumber(sourceInsights?.budget) : null;
+    const incomingBudgetMax = incomingHasBudgetMax ? parseBudgetNumber(sourceInsights?.budgetMax) : null;
+    const semantics = detectPriceSemantics(userUtterance);
+
+    if (semantics === 'range') {
+      if (incomingBudget != null && incomingBudgetMax != null) {
+        const low = Math.min(incomingBudget, incomingBudgetMax);
+        const high = Math.max(incomingBudget, incomingBudgetMax);
+        session.insights.budget = low;
+        session.insights.budgetMax = high;
+      } else if (incomingBudgetMax != null) {
+        session.insights.budget = null;
+        session.insights.budgetMax = incomingBudgetMax;
+      } else if (incomingBudget != null) {
+        session.insights.budget = null;
+        session.insights.budgetMax = incomingBudget;
+      }
+    } else if (semantics === 'upper') {
+      const upper = incomingBudgetMax ?? incomingBudget;
+      if (upper != null) {
+        session.insights.budget = null;
+        session.insights.budgetMax = upper;
+      }
+    } else if (semantics === 'lower') {
+      const lower = incomingBudget ?? incomingBudgetMax;
+      if (lower != null) {
+        session.insights.budget = lower;
+        session.insights.budgetMax = null;
+      }
+    } else {
+      // single_or_upper (default for ambiguous single value)
+      if (incomingBudget != null && incomingBudgetMax != null) {
+        if (incomingBudget < incomingBudgetMax) {
+          session.insights.budget = incomingBudget;
+          session.insights.budgetMax = incomingBudgetMax;
+        } else {
+          session.insights.budget = null;
+          session.insights.budgetMax = Math.max(incomingBudget, incomingBudgetMax);
+        }
+      } else if (incomingBudgetMax != null) {
+        session.insights.budget = null;
+        session.insights.budgetMax = incomingBudgetMax;
+      } else if (incomingBudget != null) {
+        session.insights.budget = null;
+        session.insights.budgetMax = incomingBudget;
+      }
+    }
+  } catch {}
   // floor flags fallback: if model encoded constraint in floor text, convert to structured flags.
   if (session.insights.floorNotFirst == null && typeof session.insights.floor === 'string') {
     const derived = parseFloorBooleanFlag(session.insights.floor, 'not_first');
@@ -1861,11 +1925,6 @@ const applyMetaInsightsToSession = (session, meta) => {
   if (session.insights.floorNotLast == null && typeof session.insights.floor === 'string') {
     const derived = parseFloorBooleanFlag(session.insights.floor, 'not_last');
     if (derived === true) session.insights.floorNotLast = true;
-  }
-  // back-compat: if model sent only budget, use it as upper cap too
-  if ((session.insights.budgetMax == null || session.insights.budgetMax === '') && session.insights.budget != null) {
-    const inferred = parseBudgetNumber(session.insights.budget);
-    if (inferred != null) session.insights.budgetMax = inferred;
   }
   // back-compat: if only area is present, treat it as minimum desired area
   if ((session.insights.areaMin == null || session.insights.areaMin === '') && session.insights.area != null) {
@@ -3050,7 +3109,7 @@ const transcribeAndRespond = async (req, res) => {
           session.clientProfile = mergeClientProfile(session.clientProfile, patch);
         }
         mapClientProfileToInsights(session.clientProfile, session.insights);
-        const applyResult = applyMetaInsightsToSession(session, meta);
+        const applyResult = applyMetaInsightsToSession(session, meta, transcription);
         extractionInvalidFields = Array.isArray(applyResult?.invalidFields) ? applyResult.invalidFields : [];
         extractionReport.validationError = Array.isArray(applyResult?.invalidFields) && applyResult.invalidFields.length > 0;
         extractionReport.updatesApplied = applyResult?.applied === true;

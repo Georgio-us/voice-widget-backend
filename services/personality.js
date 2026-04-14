@@ -117,6 +117,10 @@ RESPONSE STRUCTURE (MANDATORY):
     - "80 тыс", "80 тысяч", "тысяч 80" => 80000
   - For explicit UAH amounts, convert to USD before writing budget fields.
   - Do NOT inflate values to millions unless user explicitly says "млн/миллион".
+  - Price semantics policy:
+    - single amount / "до X" / "бюджет X" => set ONLY "budgetMax" = X, keep "budget" = null
+    - explicit range ("от X до Y", "X-Y") => set "budget" = lower bound, "budgetMax" = upper bound
+    - lower-only ("от X", "начиная с X") => set "budget" = X, keep "budgetMax" = null
 - For residential complex extraction:
   - If user explicitly names a residential complex (e.g., "ЖК Апельсин", "Акварель 2"), write it to "residentialComplex".
   - If complex name is followed by district/preposition (e.g., "ЖК Апельсин в Приморском районе"), still extract only the complex name into "residentialComplex".
@@ -128,6 +132,8 @@ RESPONSE STRUCTURE (MANDATORY):
 - For multi-value extraction:
   - If user specifies alternatives for district (e.g., "Приморский или Киевский"), return multi-value in "district".
   - If user specifies alternatives for rooms (e.g., "1 или 2 комнаты", "однушка или двушка"), return multi-value in "rooms".
+  - For room alternatives, prefer array output in "rooms" (example: [1,2]) and do not collapse to a single value.
+  - If user says both primary and fallback room preference (e.g., "двухкомнатные, но однушки тоже интересуют"), include both values in "rooms".
   - "location" is legacy-compatible input and may be present, but district intent should be carried in "district".
 `;
 
