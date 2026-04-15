@@ -47,7 +47,7 @@ const parseBool = (value, fallback = false) => {
 
 export function resolveClientId(rawClientId) {
   const fromQuery = normalize(rawClientId);
-  const fromEnv = normalize(process.env.BOT_CLIENT_ID);
+  const fromEnv = normalize(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID);
   return fromQuery || fromEnv || DEFAULT_CLIENT_ID;
 }
 
@@ -93,6 +93,9 @@ function sanitizeReturnTo(rawReturnTo) {
   if (!value) return '';
   try {
     const url = new URL(value);
+    // Do not persist Telegram Mini App hash payload in OAuth state.
+    // It bloats state and is not needed for post-connect redirect target.
+    url.hash = '';
     const allowedOrigins = resolveAllowedFrontendOrigins();
     const hubMapPresent = normalize(process.env.CLIENT_BACKEND_MAP).length > 0;
     const allowAny = parseBool(process.env.OLX_ALLOW_ANY_RETURN_TO, hubMapPresent);
@@ -109,6 +112,21 @@ function sanitizeReturnTo(rawReturnTo) {
     return url.toString();
   } catch {
     return '';
+  }
+}
+
+function normalizeOlxAuthorizeBase(rawAuthUrl) {
+  const value = normalize(rawAuthUrl);
+  if (!value) return value;
+  try {
+    const url = new URL(value);
+    const host = String(url.hostname || '').toLowerCase();
+    if (host === 'm.olx.ua') {
+      url.hostname = 'www.olx.ua';
+    }
+    return url.toString();
+  } catch {
+    return value;
   }
 }
 
@@ -175,7 +193,7 @@ export function buildOlxAuthorizeUrl({
     throw new Error(`OLX_CONFIG_MISSING:${missing.join(',')}`);
   }
   const state = createStateToken({ clientId, tgUserId, returnTo });
-  const url = new URL(config.authUrl);
+  const url = new URL(normalizeOlxAuthorizeBase(config.authUrl));
   url.searchParams.set('client_id', config.clientId);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('redirect_uri', config.redirectUri);
