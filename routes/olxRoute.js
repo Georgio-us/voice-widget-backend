@@ -121,8 +121,7 @@ const buildHubConnectUrl = ({ clientId, tgUserId, returnTo, initData }) => {
       url.searchParams.set('hubSig', hubSig);
     }
   }
-  // Append an empty hash to prevent the browser from preserving the Telegram Mini App hash
-  return url.toString() + '#';
+  return url.toString();
 };
 
 const handoffOlxTokensToTarget = async ({

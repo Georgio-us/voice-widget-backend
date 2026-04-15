@@ -209,9 +209,7 @@ export function buildOlxAuthorizeUrl({
     url.searchParams.set('scope', config.scopes);
   }
   url.searchParams.set('state', state);
-  // Append an empty hash to prevent the browser from preserving the Telegram Mini App hash
-  // across redirects, which breaks the OLX SPA router.
-  return url.toString() + '#';
+  return url.toString();
 }
 
 export async function exchangeCodeForTokens(code) {
