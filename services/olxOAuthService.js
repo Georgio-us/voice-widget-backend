@@ -124,6 +124,10 @@ function normalizeOlxAuthorizeBase(rawAuthUrl) {
     if (host === 'm.olx.ua') {
       url.hostname = 'www.olx.ua';
     }
+    // Fix common misconfiguration where API path is used instead of OAuth path
+    if (url.pathname === '/api/open/oauth/authorize') {
+      url.pathname = '/oauth/authorize';
+    }
     return url.toString();
   } catch {
     return value;
@@ -212,7 +216,9 @@ export function buildOlxAuthorizeUrl({
     url.searchParams.set('max_age', '0');
   }
   url.searchParams.set('state', state);
-  return url.toString();
+  // Append an empty hash to prevent the browser from preserving the Telegram Mini App hash
+  // across redirects, which breaks the OLX SPA router.
+  return url.toString() + '#';
 }
 
 export async function exchangeCodeForTokens(code) {
