@@ -3,6 +3,11 @@ import crypto from 'crypto';
 const DEFAULT_CLIENT_ID = 'demo';
 const STATE_TTL_MS = 10 * 60 * 1000;
 
+// In-memory cache to store long state payloads.
+// OLX's mobile router (m.olx.ua) throws a 404 error if the state parameter is too long.
+// We store the full payload here and only pass a short ID to OLX.
+const statePayloadCache = new Map();
+
 const normalize = (value) => String(value || '').trim();
 
 const splitCsv = (value) =>
@@ -159,11 +164,32 @@ export function createStateToken({
 
   const payloadBase64 = toBase64Url(JSON.stringify(payload));
   const signature = signStatePayload(payloadBase64, stateSecret);
-  return `${payloadBase64}.${signature}`;
+  const fullState = `${payloadBase64}.${signature}`;
+
+  // OLX's mobile router (m.olx.ua/oauth/authorize) throws a 404 if the state parameter is too long.
+  // We generate a short ID (16 chars) to send to OLX, and store the full state in memory.
+  const shortId = toSecureHex(8);
+  statePayloadCache.set(shortId, fullState);
+
+  // Clean up the cache after the TTL expires
+  const timer = setTimeout(() => {
+    statePayloadCache.delete(shortId);
+  }, STATE_TTL_MS);
+  if (timer.unref) timer.unref();
+
+  return shortId;
 }
 
 export function verifyStateToken(rawState) {
-  const state = normalize(rawState);
+  let state = normalize(rawState);
+  
+  // If the state is a short ID from our cache, retrieve the full state
+  if (statePayloadCache.has(state)) {
+    const fullState = statePayloadCache.get(state);
+    statePayloadCache.delete(state); // Consume it
+    state = fullState;
+  }
+
   const stateSecret = normalize(process.env.OLX_STATE_SECRET);
   if (!stateSecret) {
     throw new Error('OLX_STATE_SECRET_MISSING');
