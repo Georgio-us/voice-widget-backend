@@ -204,10 +204,11 @@ export function buildOlxAuthorizeUrl({
   if (config.scopes) {
     url.searchParams.set('scope', config.scopes);
   }
+  // Force explicit OAuth approval screen ("allow") after auth.
+  // Unsupported params are ignored by provider, so this is safe.
+  url.searchParams.set('prompt', forceReauth ? 'login consent' : 'consent');
+  url.searchParams.set('approval_prompt', 'force');
   if (forceReauth) {
-    // Best-effort hints for OLX auth screen to request fresh sign-in/account choice.
-    // Unsupported params are safely ignored by provider.
-    url.searchParams.set('prompt', 'login');
     url.searchParams.set('max_age', '0');
   }
   url.searchParams.set('state', state);
