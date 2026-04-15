@@ -208,13 +208,6 @@ export function buildOlxAuthorizeUrl({
   if (config.scopes) {
     url.searchParams.set('scope', config.scopes);
   }
-  // Force explicit OAuth approval screen ("allow") after auth.
-  // Unsupported params are ignored by provider, so this is safe.
-  url.searchParams.set('prompt', forceReauth ? 'login consent' : 'consent');
-  url.searchParams.set('approval_prompt', 'force');
-  if (forceReauth) {
-    url.searchParams.set('max_age', '0');
-  }
   url.searchParams.set('state', state);
   // Append an empty hash to prevent the browser from preserving the Telegram Mini App hash
   // across redirects, which breaks the OLX SPA router.
