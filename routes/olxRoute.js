@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import {
   buildFrontendRedirect,
   buildOlxAuthorizeUrl,
@@ -25,6 +26,7 @@ const parseBool = (value) => ['1', 'true', 'yes', 'on'].includes(normalize(value
 const stripSlash = (value) => String(value || '').trim().replace(/\/+$/, '');
 const OLX_CONNECT_BASE = stripSlash(process.env.OLX_CONNECT_BASE);
 const OLX_HUB_SHARED_SECRET = normalize(process.env.OLX_HUB_SHARED_SECRET);
+const HUB_FORWARD_TTL_MS = 5 * 60 * 1000;
 
 const parseClientBackendMap = () => {
   const raw = normalize(process.env.CLIENT_BACKEND_MAP);
@@ -68,6 +70,41 @@ const resolveTargetBackendBase = (clientId) => {
   return stripSlash(CLIENT_BACKEND_MAP[key] || '');
 };
 
+const toHubForwardPayload = ({ clientId, tgUserId, hubTs }) =>
+  `${normalize(clientId)}|${normalize(tgUserId)}|${normalize(hubTs)}`;
+
+const createHubForwardSignature = ({ clientId, tgUserId, hubTs }) => {
+  if (!OLX_HUB_SHARED_SECRET) return '';
+  return crypto
+    .createHmac('sha256', OLX_HUB_SHARED_SECRET)
+    .update(toHubForwardPayload({ clientId, tgUserId, hubTs }))
+    .digest('hex');
+};
+
+const safeHexEqual = (a, b) => {
+  const x = normalize(a);
+  const y = normalize(b);
+  if (!x || !y || x.length !== y.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(x, 'hex'), Buffer.from(y, 'hex'));
+  } catch {
+    return false;
+  }
+};
+
+const verifyHubForward = ({ clientId, tgUserId, hubTs, hubSig }) => {
+  const tsNum = Number(hubTs);
+  if (!OLX_HUB_SHARED_SECRET) return { ok: false, reason: 'HUB_SECRET_MISSING' };
+  if (!normalize(clientId) || !normalize(tgUserId) || !Number.isFinite(tsNum)) {
+    return { ok: false, reason: 'MISSING_PARAMS' };
+  }
+  const age = Math.abs(Date.now() - tsNum);
+  if (age > HUB_FORWARD_TTL_MS) return { ok: false, reason: 'TS_EXPIRED' };
+  const expected = createHubForwardSignature({ clientId, tgUserId, hubTs: String(tsNum) });
+  if (!safeHexEqual(expected, hubSig)) return { ok: false, reason: 'BAD_SIG' };
+  return { ok: true };
+};
+
 const buildHubConnectUrl = ({ clientId, tgUserId, returnTo, initData }) => {
   const hubBase = stripSlash(OLX_CONNECT_BASE);
   if (!hubBase) return '';
@@ -76,6 +113,14 @@ const buildHubConnectUrl = ({ clientId, tgUserId, returnTo, initData }) => {
   if (tgUserId) url.searchParams.set('tgUserId', String(tgUserId));
   if (returnTo) url.searchParams.set('returnTo', String(returnTo));
   if (initData) url.searchParams.set('initData', String(initData));
+  if (OLX_HUB_SHARED_SECRET && clientId && tgUserId) {
+    const hubTs = String(Date.now());
+    const hubSig = createHubForwardSignature({ clientId, tgUserId, hubTs });
+    if (hubSig) {
+      url.searchParams.set('hubTs', hubTs);
+      url.searchParams.set('hubSig', hubSig);
+    }
+  }
   return url.toString();
 };
 
@@ -121,14 +166,30 @@ const ensurePaidAdminAccess = async (tgUserId) => {
 
 router.get('/connect', async (req, res) => {
   try {
-    const { tgUserId } = resolveTgUserIdForAccess(req);
-    const accessCheck = await ensurePaidAdminAccess(tgUserId);
-    if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
-
     const clientId = resolveClientId(req.query?.clientId);
     const returnTo = normalize(req.query?.returnTo);
     const forceReauth = parseBool(req.query?.reauth);
     const initData = normalize(req.query?.initData || req.headers?.['x-telegram-init-data']);
+    const forwardedTgUserId = normalize(req.query?.tgUserId);
+    const hubTs = normalize(req.query?.hubTs);
+    const hubSig = normalize(req.query?.hubSig);
+    const hubForward = verifyHubForward({
+      clientId,
+      tgUserId: forwardedTgUserId,
+      hubTs,
+      hubSig
+    });
+    let tgUserId = '';
+    let trustedForward = false;
+    if (hubForward.ok) {
+      tgUserId = forwardedTgUserId;
+      trustedForward = true;
+    } else {
+      const resolved = resolveTgUserIdForAccess(req);
+      tgUserId = normalize(resolved?.tgUserId);
+      const accessCheck = await ensurePaidAdminAccess(tgUserId);
+      if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
+    }
     const currentBase = getCurrentServiceBaseFromReq(req);
     if (OLX_CONNECT_BASE && !isSameBase(OLX_CONNECT_BASE, currentBase)) {
       const hubUrl = buildHubConnectUrl({
@@ -145,6 +206,7 @@ router.get('/connect', async (req, res) => {
       clientId,
       tgUserId,
       returnTo,
+      trustedForward,
       forceReauth
     });
     return res.redirect(authorizeUrl);
@@ -190,14 +252,17 @@ router.get('/callback', async (req, res) => {
     return res.redirect(redirectUrl);
   }
 
-  const callbackAccess = await ensurePaidAdminAccess(tgUserId);
-  if (!callbackAccess.ok) {
-    const redirectUrl = buildFrontendRedirect({
-      returnTo,
-      status: 'failed',
-      reason: callbackAccess.body?.error || 'forbidden'
-    });
-    return res.redirect(redirectUrl);
+  const trustedForward = Number(statePayload?.hf || 0) === 1;
+  if (!trustedForward) {
+    const callbackAccess = await ensurePaidAdminAccess(tgUserId);
+    if (!callbackAccess.ok) {
+      const redirectUrl = buildFrontendRedirect({
+        returnTo,
+        status: 'failed',
+        reason: callbackAccess.body?.error || 'forbidden'
+      });
+      return res.redirect(redirectUrl);
+    }
   }
 
   try {

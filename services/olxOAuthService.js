@@ -134,6 +134,7 @@ export function createStateToken({
   clientId,
   tgUserId,
   returnTo,
+  trustedForward = false,
   nonce = toSecureHex(12)
 }) {
   const stateSecret = normalize(process.env.OLX_STATE_SECRET);
@@ -146,6 +147,7 @@ export function createStateToken({
     clientId: resolveClientId(clientId),
     tgUserId: normalize(tgUserId),
     returnTo: sanitizeReturnTo(returnTo) || null,
+    hf: trustedForward ? 1 : 0,
     iat: now,
     exp: now + STATE_TTL_MS,
     nonce
@@ -187,13 +189,14 @@ export function buildOlxAuthorizeUrl({
   clientId,
   tgUserId,
   returnTo,
+  trustedForward = false,
   forceReauth = false
 }) {
   const { config, missing } = getOlxConfig();
   if (missing.length) {
     throw new Error(`OLX_CONFIG_MISSING:${missing.join(',')}`);
   }
-  const state = createStateToken({ clientId, tgUserId, returnTo });
+  const state = createStateToken({ clientId, tgUserId, returnTo, trustedForward });
   const url = new URL(normalizeOlxAuthorizeBase(config.authUrl));
   url.searchParams.set('client_id', config.clientId);
   url.searchParams.set('response_type', 'code');
