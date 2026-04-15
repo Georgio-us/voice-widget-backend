@@ -59,18 +59,35 @@ router.post('/subscriptions/redeem', requireOwnerOrSuperAdmin, async (req, res) 
     if (!activationKey) {
       return res.status(400).json({ ok: false, error: 'ACTIVATION_KEY_REQUIRED' });
     }
-    const ownerTgId = normalizeId(req.viewerAccess?.tgUserId || req.body?.tgUserId);
+    const actorTgId = normalizeId(req.viewerAccess?.tgUserId);
+    const isSuperAdmin = req.viewerAccess?.isSuperAdmin === true;
+    const ownerEnvTgId = normalizeId(process.env.OWNER_TG_ID);
+    const requestedOwnerTgId = normalizeId(
+      req.body?.ownerTgId || req.body?.tgUserId || req.query?.ownerTgId || req.query?.tgUserId
+    );
+    const ownerTgId = isSuperAdmin
+      ? (requestedOwnerTgId || ownerEnvTgId)
+      : actorTgId;
     if (!ownerTgId) {
       return res.status(400).json({ ok: false, error: 'OWNER_TG_ID_REQUIRED' });
     }
     const result = await redeemActivationKey({
       activationKey,
       ownerTgId,
-      activatedByTgId: normalizeId(req.viewerAccess?.tgUserId || ownerTgId)
+      activatedByTgId: actorTgId || ownerTgId
+    });
+    console.log('[SUBSCRIPTION_REDEEM]', {
+      isSuperAdmin,
+      actorTgId,
+      ownerTgId,
+      requestedOwnerTgId: requestedOwnerTgId || null,
+      ownerEnvTgId: ownerEnvTgId || null
     });
     return res.json({
       ok: true,
       message: 'SUBSCRIPTION_ACTIVATED',
+      ownerTgId,
+      activatedByTgId: actorTgId || ownerTgId,
       ...result
     });
   } catch (error) {
