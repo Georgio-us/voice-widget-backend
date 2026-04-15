@@ -635,7 +635,7 @@ async function upsertPropertyFromOlx(mapped) {
       raw,
       is_active
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,$22::jsonb,$23
+      $1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14,$15,$16::numeric,$17,$18,$19,$20,$21::jsonb,$22::jsonb,$23
     )
     ON CONFLICT (client_id, external_id) DO UPDATE
     SET
@@ -679,7 +679,7 @@ async function upsertPropertyFromOlx(mapped) {
       mapped.address,
       mapped.buildingFloors,
       mapped.rooms,
-      toInt(mapped.areaM2),
+      mapped.areaM2,
       mapped.floor,
       mapped.hasBalcony,
       mapped.title,
