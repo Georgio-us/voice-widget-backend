@@ -40,13 +40,6 @@ function resolveBackendOrigin() {
     } catch {}
   }
 
-  const fromOlxRedirect = normalize(process.env.OLX_REDIRECT_URI);
-  if (fromOlxRedirect) {
-    try {
-      return new URL(fromOlxRedirect).origin;
-    } catch {}
-  }
-
   const staticUrl = normalize(process.env.RAILWAY_STATIC_URL);
   if (staticUrl) {
     if (/^https?:\/\//i.test(staticUrl)) return staticUrl.replace(/\/+$/, '');

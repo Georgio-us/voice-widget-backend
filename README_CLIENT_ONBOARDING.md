@@ -133,16 +133,15 @@ Then redeploy backend. This restores legacy behavior.
 
 Webhook URL is resolved in this order:
 1. `TELEGRAM_WEBHOOK_URL` (explicit, preferred)
-2. `OLX_REDIRECT_URI` origin (fallback)
-3. `RAILWAY_STATIC_URL` / `RAILWAY_PUBLIC_DOMAIN` (fallback)
+2. `RAILWAY_STATIC_URL` / `RAILWAY_PUBLIC_DOMAIN` (fallback)
 
 Why this matters:
-- If `TELEGRAM_WEBHOOK_URL` is missing and `OLX_REDIRECT_URI` points to another environment, the bot may register webhook on the wrong domain.
-- In that case inline updates go to another backend, and Railway logs in the expected service will show no inline events.
+- `OLX_REDIRECT_URI` is no longer used for Telegram webhook resolution.
+- This prevents accidental cross-environment webhook registration caused by OLX callback URL drift.
 
 Recommendation:
 - Always set `TELEGRAM_WEBHOOK_URL` explicitly per environment/client.
-- Keep `OLX_REDIRECT_URI` aligned with the same backend domain.
+- Keep `OLX_REDIRECT_URI` dedicated to OLX OAuth callback flow only.
 
 ## 5) Import Properties
 
@@ -298,10 +297,10 @@ COMMIT;
   - compare this URL with expected service domain.
 - Fix:
   - set `TELEGRAM_WEBHOOK_URL` to the exact service webhook endpoint;
-  - ensure `OLX_REDIRECT_URI` uses the same service domain (fallback safety);
   - redeploy and verify `getWebhookInfo.result.url`.
 
 ## 10) Notes
 
 - Keep this file updated when onboarding flow changes.
 - Do not put tokens, passwords, or private IDs into this document.
+- Subscription behavior details are documented in `docs/subscriptions.md`.
