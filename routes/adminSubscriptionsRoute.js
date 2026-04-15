@@ -63,7 +63,7 @@ router.post('/subscriptions/redeem', requireOwnerOrSuperAdmin, async (req, res) 
     const isSuperAdmin = req.viewerAccess?.isSuperAdmin === true;
     const ownerEnvTgId = normalizeId(process.env.OWNER_TG_ID);
     const requestedOwnerTgId = normalizeId(
-      req.body?.ownerTgId || req.body?.tgUserId || req.query?.ownerTgId || req.query?.tgUserId
+      req.body?.ownerTgId || req.query?.ownerTgId
     );
     const ownerTgId = isSuperAdmin
       ? (requestedOwnerTgId || ownerEnvTgId)
