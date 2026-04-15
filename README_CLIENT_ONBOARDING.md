@@ -47,6 +47,10 @@ Optional:
 - `TELEGRAM_WEBHOOK_URL` (recommended; explicit webhook URL, e.g. `https://<backend>.up.railway.app/api/telegram/webhook`)
 - `TELEGRAM_WEBHOOK_SECRET` (fixed secret for Telegram webhook header validation)
 - `TELEGRAM_WEBHOOK_ALLOW_PUBLIC` (default `1`; allows `/api/telegram/webhook` without secret match)
+- `OLX_CONNECT_BASE` (optional; if set on client backends, `/api/olx/connect` is redirected to centralized OAuth hub)
+- `OLX_HUB_SHARED_SECRET` (shared secret between OAuth hub and client backends for secure token handoff)
+- `CLIENT_BACKEND_MAP` (OAuth hub only; JSON map `{ "<clientId>": "<backendBaseUrl>" }`)
+- `OLX_ALLOW_ANY_RETURN_TO` (optional; allow signed `returnTo` outside `FRONTEND_URL(S)` allowlist; default `1` when hub map is present)
 - `TELEGRAM_INITDATA_ENFORCE_ADMIN` (strict Telegram signature check for admin access, recommended `1`)
 - `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID` (legacy fallback via plain `tgUserId`, recommended `0`)
 - `EXIT_ON_UNCAUGHT_EXCEPTION` (default `1`; set `0` only for emergency diagnostics)
@@ -304,3 +308,18 @@ COMMIT;
 - Keep this file updated when onboarding flow changes.
 - Do not put tokens, passwords, or private IDs into this document.
 - Subscription behavior details are documented in `docs/subscriptions.md`.
+
+## 11) Centralized OLX OAuth (hub mode)
+
+When OLX app allows a single redirect URI, use centralized OAuth hub mode:
+
+- Keep one `OLX_REDIRECT_URI` registered in OLX app (hub callback URL).
+- Set `CLIENT_BACKEND_MAP` only on hub backend.
+- Set `OLX_HUB_SHARED_SECRET` on hub and every client backend.
+- Set `OLX_CONNECT_BASE` on client backends to the hub base URL.
+
+Flow:
+1. Client backend receives `/api/olx/connect` and redirects to hub `/api/olx/connect`.
+2. Hub performs authorize + callback.
+3. Hub resolves `clientId` from signed state and securely POSTs tokens to target backend `/api/olx/link-from-hub`.
+4. Target backend stores tokens in its own DB (`olx_integrations`).

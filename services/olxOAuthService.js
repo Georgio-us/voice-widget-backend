@@ -37,6 +37,13 @@ const toBase64Url = (value) =>
     .replace(/=+$/g, '');
 
 const toSecureHex = (size = 24) => crypto.randomBytes(size).toString('hex');
+const parseBool = (value, fallback = false) => {
+  const raw = normalize(value).toLowerCase();
+  if (!raw) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  return fallback;
+};
 
 export function resolveClientId(rawClientId) {
   const fromQuery = normalize(rawClientId);
@@ -87,8 +94,18 @@ function sanitizeReturnTo(rawReturnTo) {
   try {
     const url = new URL(value);
     const allowedOrigins = resolveAllowedFrontendOrigins();
-    if (!allowedOrigins.size) return '';
-    if (!allowedOrigins.has(url.origin)) return '';
+    const hubMapPresent = normalize(process.env.CLIENT_BACKEND_MAP).length > 0;
+    const allowAny = parseBool(process.env.OLX_ALLOW_ANY_RETURN_TO, hubMapPresent);
+    if (!allowedOrigins.size) {
+      if (!allowAny) return '';
+      if (!/^https?:$/i.test(url.protocol)) return '';
+      return url.toString();
+    }
+    if (!allowedOrigins.has(url.origin)) {
+      if (!allowAny) return '';
+      if (!/^https?:$/i.test(url.protocol)) return '';
+      return url.toString();
+    }
     return url.toString();
   } catch {
     return '';
