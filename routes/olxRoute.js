@@ -10,7 +10,11 @@ import {
   getOlxIntegrationStatus,
   upsertOlxIntegration
 } from '../services/olxIntegrationRepository.js';
-import { syncOlxAdvertsForAdmin } from '../services/olxImportService.js';
+import {
+  clearImportedOlxProperties,
+  getOlxImportedStats,
+  syncOlxAdvertsForAdmin
+} from '../services/olxImportService.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
 
@@ -282,9 +286,11 @@ router.get('/status', async (req, res) => {
     if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
     const clientId = resolveClientId(req.query?.clientId);
     const status = await getOlxIntegrationStatus({ clientId, tgUserId });
+    const imported = await getOlxImportedStats({ clientId });
     return res.json({
       ok: true,
-      ...status
+      ...status,
+      ...imported
     });
   } catch (error) {
     const authError = toHttpAuthError(error);
@@ -293,6 +299,32 @@ router.get('/status', async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: 'INTERNAL_ERROR'
+    });
+  }
+});
+
+router.post('/clear-imported', async (req, res) => {
+  try {
+    const { tgUserId } = resolveTgUserIdForAccess(req);
+    const accessCheck = await ensurePaidAdminAccess(tgUserId);
+    if (!accessCheck.ok) return res.status(accessCheck.status).json(accessCheck.body);
+    const clientId = resolveClientId(req.query?.clientId || req.body?.clientId);
+    const result = await clearImportedOlxProperties({ clientId });
+    const imported = await getOlxImportedStats({ clientId });
+    return res.json({
+      ok: true,
+      clientId,
+      ...result,
+      ...imported
+    });
+  } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
+    console.error('❌ /api/olx/clear-imported error:', error);
+    return res.status(500).json({
+      ok: false,
+      error: 'OLX_CLEAR_IMPORTED_FAILED',
+      details: String(error?.message || 'unknown_error')
     });
   }
 });

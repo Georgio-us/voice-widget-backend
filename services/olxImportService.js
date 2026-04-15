@@ -849,3 +849,51 @@ export async function syncOlxAdvertsForAdmin({
     residentialComplexesUpserted
   };
 }
+
+export async function getOlxImportedStats({ clientId }) {
+  const safeClientId = normalize(clientId);
+  if (!safeClientId) {
+    return {
+      activeImportedCount: 0,
+      totalImportedCount: 0
+    };
+  }
+  const { rows } = await pool.query(
+    `
+    SELECT
+      COUNT(*) FILTER (WHERE is_active = TRUE) AS active_imported_count,
+      COUNT(*) AS total_imported_count
+    FROM properties
+    WHERE client_id = $1
+      AND external_id LIKE 'OLX_%'
+    `,
+    [safeClientId]
+  );
+  const row = rows?.[0] || {};
+  return {
+    activeImportedCount: Number(row.active_imported_count || 0),
+    totalImportedCount: Number(row.total_imported_count || 0)
+  };
+}
+
+export async function clearImportedOlxProperties({ clientId }) {
+  const safeClientId = normalize(clientId);
+  if (!safeClientId) {
+    return { cleared: 0 };
+  }
+  const result = await pool.query(
+    `
+    UPDATE properties
+    SET
+      is_active = FALSE,
+      updated_at = NOW()
+    WHERE client_id = $1
+      AND external_id LIKE 'OLX_%'
+      AND is_active = TRUE
+    `,
+    [safeClientId]
+  );
+  return {
+    cleared: Number(result?.rowCount || 0)
+  };
+}
