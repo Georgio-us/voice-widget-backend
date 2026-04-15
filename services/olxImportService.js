@@ -679,7 +679,7 @@ async function upsertPropertyFromOlx(mapped) {
       mapped.address,
       mapped.buildingFloors,
       mapped.rooms,
-      mapped.areaM2,
+      toInt(mapped.areaM2),
       mapped.floor,
       mapped.hasBalcony,
       mapped.title,
