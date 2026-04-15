@@ -186,7 +186,8 @@ export function verifyStateToken(rawState) {
 export function buildOlxAuthorizeUrl({
   clientId,
   tgUserId,
-  returnTo
+  returnTo,
+  forceReauth = false
 }) {
   const { config, missing } = getOlxConfig();
   if (missing.length) {
@@ -199,6 +200,12 @@ export function buildOlxAuthorizeUrl({
   url.searchParams.set('redirect_uri', config.redirectUri);
   if (config.scopes) {
     url.searchParams.set('scope', config.scopes);
+  }
+  if (forceReauth) {
+    // Best-effort hints for OLX auth screen to request fresh sign-in/account choice.
+    // Unsupported params are safely ignored by provider.
+    url.searchParams.set('prompt', 'login');
+    url.searchParams.set('max_age', '0');
   }
   url.searchParams.set('state', state);
   return url.toString();

@@ -17,6 +17,7 @@ import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramI
 const router = express.Router();
 
 const normalize = (value) => String(value || '').trim();
+const parseBool = (value) => ['1', 'true', 'yes', 'on'].includes(normalize(value).toLowerCase());
 const stripSlash = (value) => String(value || '').trim().replace(/\/+$/, '');
 const OLX_CONNECT_BASE = stripSlash(process.env.OLX_CONNECT_BASE);
 const OLX_HUB_SHARED_SECRET = normalize(process.env.OLX_HUB_SHARED_SECRET);
@@ -122,6 +123,7 @@ router.get('/connect', async (req, res) => {
 
     const clientId = resolveClientId(req.query?.clientId);
     const returnTo = normalize(req.query?.returnTo);
+    const forceReauth = parseBool(req.query?.reauth);
     const initData = normalize(req.query?.initData || req.headers?.['x-telegram-init-data']);
     const currentBase = getCurrentServiceBaseFromReq(req);
     if (OLX_CONNECT_BASE && !isSameBase(OLX_CONNECT_BASE, currentBase)) {
@@ -138,7 +140,8 @@ router.get('/connect', async (req, res) => {
     const authorizeUrl = buildOlxAuthorizeUrl({
       clientId,
       tgUserId,
-      returnTo
+      returnTo,
+      forceReauth
     });
     return res.redirect(authorizeUrl);
   } catch (error) {
