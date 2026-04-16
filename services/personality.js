@@ -134,6 +134,7 @@ RESPONSE STRUCTURE (MANDATORY):
     - lower-only ("от X", "начиная с X") => set "budget" = X, keep "budgetMax" = null
 - For residential complex extraction:
   - If user explicitly names a residential complex (e.g., "ЖК Апельсин", "Акварель 2"), write it to "residentialComplex".
+  - Normalize specific complex names to remove hyphens if they are single words (e.g. "Аль-Таир" -> "Альтаир").
   - If complex name is followed by district/preposition (e.g., "ЖК Апельсин в Приморском районе"), still extract only the complex name into "residentialComplex".
   - Do not infer residential complex from generic district or landmark mentions.
   - If user asks for "новострой", "новостройка", "новый дом" without naming a specific complex => set rcOnly = true.
