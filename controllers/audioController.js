@@ -29,7 +29,8 @@ const INSIGHTS_RESPONSE_SCHEMA = {
         required: [
           'name', 'operation', 'budget', 'budgetMax', 'type', 'district', 'location', 'rooms',
           'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences',
-          'residentialComplex', 'floorNotFirst', 'floorNotLast'
+          'residentialComplex', 'floorNotFirst', 'floorNotLast',
+          'rcOnly', 'parking', 'balconyLoggia', 'arcadia', 'center', 'smart'
         ],
         properties: {
           name: { type: ['string', 'null'] },
@@ -61,7 +62,13 @@ const INSIGHTS_RESPONSE_SCHEMA = {
           preferences: { type: ['string', 'null'] },
           residentialComplex: { type: ['string', 'null'] },
           floorNotFirst: { type: ['boolean', 'null'] },
-          floorNotLast: { type: ['boolean', 'null'] }
+          floorNotLast: { type: ['boolean', 'null'] },
+          rcOnly: { type: ['boolean', 'null'] },
+          parking: { type: ['boolean', 'null'] },
+          balconyLoggia: { type: ['boolean', 'null'] },
+          arcadia: { type: ['boolean', 'null'] },
+          center: { type: ['boolean', 'null'] },
+          smart: { type: ['boolean', 'null'] }
         }
       }
     }
@@ -3086,7 +3093,7 @@ const transcribeAndRespond = async (req, res) => {
       openai.chat.completions.create({
         messages,
         model: 'gpt-4o-mini',
-        temperature: 0.5,
+        temperature: 0.3,
         response_format: { type: 'json_schema', json_schema: INSIGHTS_RESPONSE_SCHEMA },
         stream: false
       }), 2, 'GPT'
