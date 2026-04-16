@@ -153,6 +153,9 @@ RESPONSE STRUCTURE (MANDATORY):
   - For room alternatives, prefer array output in "rooms" (example: [1,2]) and do not collapse to a single value.
   - If user says both primary and fallback room preference (e.g., "двухкомнатные, но однушки тоже интересуют"), include both values in "rooms".
   - "location" is legacy-compatible input and may be present, but district intent should be carried in "district".
+- For district names normalization:
+  - Always normalize district names to one of the standard Odesa districts: "Приморский", "Киевский", "Малиновский", "Суворовский".
+  - Correct any speech recognition typos automatically (e.g., "Проморский" -> "Приморский", "Приморсово" -> "Приморский").
 `;
 
 export default BASE_SYSTEM_PROMPT;
