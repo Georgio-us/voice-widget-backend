@@ -13,6 +13,25 @@ Operational SQL checklist to:
 - validate feed import quality
 - support safe ongoing updates
 
+## How to Run SQL in This Project
+
+SQL in this project is executed via terminal using `psql` and the PostgreSQL connection string taken from Railway DB service variables.
+
+Practical workflow:
+1. Open Railway PostgreSQL service variables.
+2. Copy DB connection string (`DATABASE_URL` / Postgres URL).
+3. Run queries from terminal via `psql`.
+
+Example:
+
+```bash
+psql "<POSTGRES_CONNECTION_STRING>"
+```
+
+Note:
+- There is no separate direct "run SQL" button used in this flow.
+- Running SQL via `psql` connection string gives the same result (same DB context), as long as the correct Railway environment URL is used.
+
 ## Safety Rules
 
 1. Always run in the client environment DB connection.
