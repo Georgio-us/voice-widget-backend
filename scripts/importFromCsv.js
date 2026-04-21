@@ -7,7 +7,7 @@ import path from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { pool } from '../services/db.js';
 
-const CLIENT_ID = process.env.IMPORT_CLIENT_ID || 'demo';
+const CLIENT_ID = process.env.IMPORT_CLIENT_ID || process.env.APP_CLIENT_ID || 'demo';
 
 // usage:
 // node scripts/importFromCsv.js ./data/import/properties.csv

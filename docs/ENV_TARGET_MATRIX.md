@@ -28,6 +28,7 @@ Define target variable contract for a dedicated client environment on Railway:
 |---|---|---|---|---|
 | `OPENAI_API_KEY` | STATIC | Yes | `sk-...` | Required to start backend. |
 | `DATABASE_URL` | CLIENT | Yes | `postgres://...` | Must point to client-specific DB instance. |
+| `APP_CLIENT_ID` | CLIENT | Yes | `client_estyle_x` | Default client scope for repositories/runtime writes. |
 | `FRONTEND_URL` | CLIENT | Yes | `https://client-widget-frontend.up.railway.app` | Used by CORS allow-list (after CORS hardening). |
 | `NODE_ENV` | STATIC | Yes | `production` | Controls error payload verbosity. |
 | `PORT` | STATIC | Auto | Railway injects | Keep default behavior. |
@@ -37,7 +38,7 @@ Define target variable contract for a dedicated client environment on Railway:
 | `DEPLOY_TAG` | STATIC | Optional | commit/tag | Usually auto from Railway SHA fallback. |
 | `TELEGRAM_BOT_TOKEN` | CLIENT | Optional | bot token | If client-level Telegram notifications needed. |
 | `TELEGRAM_CHAT_ID` | CLIENT | Optional | chat id | Pair with bot token. |
-| `IMPORT_CLIENT_ID` | CLIENT | Recommended | `client_estyle_x` | Used by import scripts (csv/xlsx/xml). |
+| `IMPORT_CLIENT_ID` | CLIENT | Recommended | `client_estyle_x` | Used by import scripts; falls back to `APP_CLIENT_ID`. |
 
 ## Frontend Variables (Target)
 
@@ -46,10 +47,11 @@ Current frontend runtime uses almost no env vars; target minimal contract:
 | Variable | Class | Required | Example | Notes |
 |---|---|---|---|---|
 | `PORT` | STATIC | Auto | Railway injects | Service port only. |
-| `WIDGET_API_URL` | CLIENT | Recommended | `https://client-widget-backend.up.railway.app/api/audio/upload` | Introduce as deployment-time source of truth for API endpoint. |
+| `WIDGET_API_URL` | CLIENT | Yes | `https://client-widget-backend.up.railway.app/api/audio/upload` | Injected by frontend `/runtime-config.js` into `window.__VW_API_URL__`. |
+| `WIDGET_ASSETS_BASE` | CLIENT | Optional | `https://client-widget-frontend.up.railway.app/assets/` | Injected by frontend `/runtime-config.js` into `window.__VW_ASSETS_BASE__`. |
 
 Note:
-- Until `WIDGET_API_URL` wiring is implemented, API source is controlled by `api-url` attribute + runtime fallbacks in widget.
+- Widget still supports explicit `api-url` attribute and runtime overrides (query/global/storage), but production baseline should come from `WIDGET_API_URL`.
 
 ## PostgreSQL (Target)
 

@@ -7,7 +7,7 @@ import path from 'node:path';
 import xlsx from 'xlsx';
 import { pool } from '../services/db.js';
 
-const CLIENT_ID = process.env.IMPORT_CLIENT_ID || 'demo';
+const CLIENT_ID = process.env.IMPORT_CLIENT_ID || process.env.APP_CLIENT_ID || 'demo';
 
 // usage:
 // IMPORT_CLIENT_ID="demo" DATABASE_URL="..." node scripts/importFromXlsx.js ./data/properties.xlsx

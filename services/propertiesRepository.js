@@ -1,7 +1,7 @@
 // services/propertiesRepository.js
 import { pool } from './db.js';
 
-const DEFAULT_CLIENT_ID = 'demo';
+const DEFAULT_CLIENT_ID = process.env.APP_CLIENT_ID || 'demo';
 
 // Получить все квартиры для клиента (пока используем только demo)
 // ✅ Возвращаем КОЛОНКИ таблицы (а не raw), чтобы типы были корректные (int/bool/json)

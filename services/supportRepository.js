@@ -2,7 +2,7 @@
 // Репозиторий для работы с тикетами поддержки (таблица support_requests)
 import { pool } from './db.js';
 
-const DEFAULT_CLIENT_ID = 'demo';
+const DEFAULT_CLIENT_ID = process.env.APP_CLIENT_ID || 'demo';
 
 /**
  * Создаёт новый тикет поддержки в таблице support_requests.
@@ -102,4 +102,3 @@ export async function createSupportRequest({
     throw new Error(`Database error: ${err.message}`);
   }
 }
-

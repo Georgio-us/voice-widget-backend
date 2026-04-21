@@ -16,7 +16,7 @@ const properties =
   propertiesModule.data ||
   propertiesModule;
 
-const CLIENT_ID = 'demo';
+const CLIENT_ID = process.env.IMPORT_CLIENT_ID || process.env.APP_CLIENT_ID || 'demo';
 
 if (!Array.isArray(properties)) {
   console.error('❌ Ожидался массив properties, а получил:', typeof properties);

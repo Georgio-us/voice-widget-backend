@@ -31,12 +31,13 @@ Use `ENV_TARGET_MATRIX.md` as the source of truth.
 
 1. `OPENAI_API_KEY`
 2. `DATABASE_URL` (client DB)
-3. `FRONTEND_URL` (client frontend URL)
-4. `NODE_ENV=production`
+3. `APP_CLIENT_ID` (client runtime scope, e.g. `client_estyle_x`)
+4. `FRONTEND_URL` (client frontend URL)
+5. `NODE_ENV=production`
 
 ### Backend (as needed)
 
-1. `IMPORT_CLIENT_ID=<client_id>`
+1. `IMPORT_CLIENT_ID=<client_id>` (if omitted, importer uses `APP_CLIENT_ID`)
 2. `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (if enabled)
 3. `DISABLE_SERVER_UI`, `ENABLE_PERIODIC_ANALYSIS`, `VW_DEBUG_CLIENT` (feature flags)
 

@@ -2,7 +2,7 @@
 // Репозиторий для работы с лидами (таблица lead_requests)
 import { pool } from './db.js';
 
-const DEFAULT_CLIENT_ID = 'demo';
+const DEFAULT_CLIENT_ID = process.env.APP_CLIENT_ID || 'demo';
 
 /**
  * Создаёт новый лид в таблице lead_requests.
@@ -145,4 +145,3 @@ export async function createLead({
     throw new Error(`Database error: ${err.message}`);
   }
 }
-
