@@ -4,6 +4,14 @@ Last updated: 2026-04-21
 Branch: `Split`
 Audience: internal ops/dev team
 
+## Current Execution Status (Estyle, 2026-04-21)
+
+- Phase 1 completed: client environment and URLs configured.
+- Phase 2 completed: required backend/frontend variables configured in Railway.
+- Phase 3 completed: DB migrated and normalized to `client_id=estyle`.
+- Current pause point: before XML feed mapping/import implementation.
+- See execution snapshot: `docs/CURRENT_EXECUTION_PLAN.md`.
+
 ## Objective
 
 Create an isolated production environment for a new client, with:

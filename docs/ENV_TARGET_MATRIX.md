@@ -10,6 +10,13 @@ Define target variable contract for a dedicated client environment on Railway:
 - no accidental cross-client data mix
 - clear static vs client-specific configuration
 
+## Current Deployment Snapshot (Estyle, non-secret)
+
+- Backend URL: `https://voice-widget-backend-estyle.up.railway.app`
+- Frontend URL (`FRONTEND_URL`): `https://voice-widget-frontend-estyle.up.railway.app`
+- `APP_CLIENT_ID`: `estyle`
+- `IMPORT_CLIENT_ID`: `estyle`
+
 ## Railway Services in Scope
 
 1. `voice-widget-backend` (Node/Express)
