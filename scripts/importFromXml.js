@@ -11,6 +11,8 @@ const LIMIT = (() => {
   const n = Number.parseInt(v, 10);
   return Number.isFinite(n) && n > 0 ? n : null;
 })();
+const PG_INT4_MIN = -2147483648;
+const PG_INT4_MAX = 2147483647;
 
 const toText = (v) => {
   if (v === undefined || v === null) return null;
@@ -27,6 +29,13 @@ const toInt = (v) => {
   if (!cleaned) return null;
   const n = Number.parseInt(cleaned, 10);
   return Number.isFinite(n) ? n : null;
+};
+
+const toInt4 = (v) => {
+  const n = toInt(v);
+  if (n === null) return null;
+  if (n < PG_INT4_MIN || n > PG_INT4_MAX) return null;
+  return n;
 };
 
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -263,15 +272,15 @@ async function run() {
       province: toText(extractTag(block, 'province')),
       locationDetail: toText(extractTag(block, 'location_detail')),
       address: toText(extractTag(extractTag(block, 'location') || '', 'address')),
-      beds: toInt(extractTag(block, 'beds')),
-      baths: toInt(extractTag(block, 'baths')),
-      areaBuilt: toInt(extractTag(surfaceNode || '', 'built')),
-      floor: toInt(extractTag(block, 'floor')),
-      priceAmount: toInt(extractTag(block, 'price')),
+      beds: toInt4(extractTag(block, 'beds')),
+      baths: toInt4(extractTag(block, 'baths')),
+      areaBuilt: toInt4(extractTag(surfaceNode || '', 'built')),
+      floor: toInt4(extractTag(block, 'floor')),
+      priceAmount: toInt4(extractTag(block, 'price')),
       priceCurrency: toText(extractTag(block, 'currency')) || 'EUR',
       title: pickLang(titleNode, ['ru', 'en', 'es']),
       description: pickLang(descNode, ['ru', 'en', 'es']),
-      yearBuild: toInt(extractTag(block, 'year_build')),
+      yearBuild: toInt4(extractTag(block, 'year_build')),
       images: extractImages(block),
       raw: {
         source: 'xml-mediaelx',
