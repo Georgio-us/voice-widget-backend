@@ -13,3 +13,13 @@ uploads/
 # Import source data (do not track)
 /data/properties.csv
 /data/properties.xlsx
+
+# Canon docs should be versioned only in docs/internal-canon/
+/AI_CANON_AS_IS.md
+/AI_CANON_TO_BE.md
+/AI_EXECUTION_MAPPING_AUDIT.md
+/AI_EXECUTION_MAPPING_TO_BE.md
+/CURRENT_EXECUTION_CANON.md
+/PHASE1_FINALIZATION.md
+/PHASE2_CURRENT_EXECUTION.md
+/RELEASE_CHECKLIST.md
