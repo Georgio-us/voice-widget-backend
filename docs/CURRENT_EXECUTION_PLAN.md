@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-21
 Branch: `Split`
-Status: paused after variables + DB migration, ready for XML phase.
+Status: XML source analyzed, ready to implement importer.
 
 ## Current Environment Snapshot (non-secret)
 
@@ -49,12 +49,19 @@ Project is ready to proceed to XML integration:
 3. implement XML importer + normalizer,
 4. run import and validate cards in widget.
 
-## Next Step (First Task Tomorrow)
+## XML Analysis Update (2026-04-22)
 
-1. Receive XML feed URL/sample.
-2. Build explicit mapping matrix:
-   - `xml_field -> db_column`
-   - type conversion
-   - default/null rules
-   - image URL handling
-3. Implement `scripts/importFromXml.js` with upsert on `(client_id, external_id)`.
+1. Feed URLs received and analyzed.
+2. Selected primary feed: `xml-mediaelx` (richer schema).
+3. Parsed stats confirmed:
+   - `547` properties
+   - `539 sale` + `8 week`
+4. Mapping document created:
+   - `docs/XML_FEED_MAPPING.md`
+
+## Next Step
+
+1. Confirm business mapping for `price_freq=week` (`rent` expected).
+2. Implement `scripts/importFromXml.js` with normalized upsert.
+3. Run import into `client_id=estyle`.
+4. Validate via `/api/cards/search` and widget rendering.
