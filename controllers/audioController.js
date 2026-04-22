@@ -469,6 +469,8 @@ const mapRowToProperty = (row) => {
   return {
     // важный момент: используем external_id как основной id (совместимость со старым фронтом)
     id: row.external_id || String(row.id),
+    operation: row.operation || null,
+    property_type: row.property_type || null,
     city: row.location_city || null,
     district: row.location_district || null,
     neighborhood: row.location_neighborhood || null,
@@ -481,6 +483,7 @@ const mapRowToProperty = (row) => {
     floor: row.specs_floor != null ? Number(row.specs_floor) : null,
     has_parking: row.has_parking === true,
     has_pool: row.has_pool === true,
+    is_new_build: row.is_new_build === true,
     description: row.description || null,
     images,
   };
@@ -517,12 +520,17 @@ const formatCardForClient = (req, p) => {
     : [];
   const rawFirstImage = images.length ? images[0] : null;
   const image = rawFirstImage || null;
+  const op = String(p.operation || '').toLowerCase();
+  const listingStatus = op === 'rent'
+    ? 'RENT'
+    : (p.is_new_build === true ? 'NEW BUILD' : 'RESALE');
   return {
     id: p.id,
     // Левые поля (география)
     city: p.city ?? p?.location?.city ?? null,
     district: p.district ?? p?.location?.district ?? null,
     neighborhood: p.neighborhood ?? p?.location?.neighborhood ?? null,
+    province: p.district ?? p?.location?.district ?? null,
     // Правые поля (основные цифры)
     price: (p.priceEUR != null ? `${p.priceEUR} €` : (p?.price?.amount != null ? `${p.price.amount} €` : null)),
     priceEUR: p.priceEUR ?? p?.price?.amount ?? null,
@@ -534,6 +542,9 @@ const formatCardForClient = (req, p) => {
     plot_m2: p.plot_m2 ?? null,
     price_per_m2: p.price_per_m2 ?? null,
     bathrooms: p.bathrooms ?? p?.specs?.bathrooms ?? null,
+    property_type: p.property_type ?? null,
+    operation: p.operation ?? null,
+    listing_status: listingStatus,
     has_parking: p.has_parking === true,
     has_pool: p.has_pool === true,
     // Изображение

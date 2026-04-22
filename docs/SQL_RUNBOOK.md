@@ -130,7 +130,8 @@ Run once before deploying icon-related importer/API changes:
 ALTER TABLE properties
   ADD COLUMN IF NOT EXISTS specs_plot_m2 integer,
   ADD COLUMN IF NOT EXISTS has_parking boolean NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS has_pool boolean NOT NULL DEFAULT false;
+  ADD COLUMN IF NOT EXISTS has_pool boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS is_new_build boolean NOT NULL DEFAULT false;
 ```
 
 After migration, re-run XML import to populate these fields from feed.

@@ -153,6 +153,11 @@ Feed sources used:
 - `parking/*` (localized) -> `has_parking=true` when non-empty
 - `pool/*` (localized) -> `has_pool=true` when non-empty
 
+Status fields for front second line:
+- `new_build` -> `is_new_build` (boolean)
+- `price_freq` -> `operation` (`sale`/`rent`)
+- UI status rule: `operation=rent -> RENT`, else `is_new_build=true -> NEW BUILD`, else `RESALE`
+
 ## Next Implementation Slice (planned, not executed here)
 
 1. Payload contract fix:
