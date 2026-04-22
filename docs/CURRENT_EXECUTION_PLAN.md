@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-21
 Branch: `Split`
-Status: XML source analyzed, ready to implement importer.
+Status: XML importer implemented and smoke-tested, ready for full import run.
 
 ## Current Environment Snapshot (non-secret)
 
@@ -59,9 +59,18 @@ Project is ready to proceed to XML integration:
 4. Mapping document created:
    - `docs/XML_FEED_MAPPING.md`
 
+## XML Implementation Update (2026-04-22)
+
+1. Business rule confirmed:
+   - `price_freq=week -> operation=rent`
+2. Implemented:
+   - `scripts/importFromXml.js`
+3. Smoke-tested import:
+   - processed sample records successfully
+   - DB write verified in `properties` for `client_id=estyle`
+
 ## Next Step
 
-1. Confirm business mapping for `price_freq=week` (`rent` expected).
-2. Implement `scripts/importFromXml.js` with normalized upsert.
-3. Run import into `client_id=estyle`.
-4. Validate via `/api/cards/search` and widget rendering.
+1. Execute full XML import (`547` properties) into `estyle`.
+2. Run SQL quality checks (nulls, counts, operation distribution).
+3. Validate via `/api/cards/search` and widget rendering.

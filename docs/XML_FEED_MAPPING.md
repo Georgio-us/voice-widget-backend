@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-22
 Branch: `Split`
-Status: analysis completed, implementation pending.
+Status: mapping confirmed, importer implemented.
 
 ## Source Feeds
 
@@ -93,23 +93,27 @@ Reason:
 
 ## Open Decisions Before Coding
 
-1. `price_freq=week`:
-   - confirm final business mapping:
-     - option A: map to `operation='rent'`
-     - option B: keep `operation='sale'` and store original in `raw` (not recommended)
-2. `location_district`:
+1. `location_district`:
    - current temporary mapping uses `province`.
    - later can map from richer locality fields if provided.
 
-## Next Implementation Step
+## Decisions Confirmed
 
-Create `scripts/importFromXml.js`:
-- download feed URL
-- parse xml
-- normalize per rules above
-- upsert into `properties`
-- print import report:
-  - total
-  - inserted/updated
-  - skipped
-  - `sale` vs `week`
+1. `price_freq=week` is treated as rental flow:
+   - `operation='rent'`
+
+## Implemented Importer
+
+Script added:
+- `scripts/importFromXml.js`
+
+Implemented behavior:
+1. downloads XML from URL argument or `XML_FEED_URL` env
+2. parses `<property>` blocks
+3. normalizes key fields per mapping above
+4. upserts by `(client_id, external_id)`
+5. outputs summary:
+   - found
+   - processed
+   - skipped
+   - operation distribution (`sale`/`rent`)
