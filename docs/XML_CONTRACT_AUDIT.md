@@ -19,7 +19,27 @@ So we can decide exactly which fields to keep and how to normalize them.
 - Objects: `547`
 - Top-level tags per property: `66`
 
-## Feed Field Inventory (Key fields)
+## Feed Field Inventory (Full top-level list)
+
+Feed returns these `66` top-level tags per property:
+
+`id, date, ref, price, price_old, price_from, comision, suma, community, catrastal_reference, price_m_1, price_m_2, price_m_3, price_m_4, price_m_5, price_m_6, price_m_7, price_m_8, price_m_9, price_m_10, price_m_11, price_m_12, prices_days, availabity, currency, price_freq, type, town, province, costa, location_detail, beds, baths, wc, energy, year_build, pool, parking, parking_places, wardrobes, kitchens, condition, floor, v360, orientation, distance_beach, distance_beach_med, distance_airport, distance_airport_med, distance_golf, distance_golf_med, distance_amenities, distance_amenities_med, solarium, surface_area, url, title, desc, images, plans, videos, views360, tags, features, location, new_build`.
+
+Main nested groups detected:
+- `type`: localized values (`en/es/ru/...`)
+- `title`: localized values (`en/es/ru`)
+- `desc`: localized values (`en/es/ru`)
+- `floor`: localized values (`en/es/ru/...`)
+- `surface_area`: `built`, `plot`, `terrace`, `usable`, `garden`, `solarium`
+- `images`: multiple `image` nodes with `url`
+- `features`: repeated `feature`
+- `location`: `latitude`, `longitude`, `zoom`, `address`
+- `url`: `en`
+- `videos`: `video_url`
+- `tags`: `tag`
+- `pool` / `parking` / `kitchens` / `condition`: localized flags/labels
+
+## Feed Field Inventory (Key coverage)
 
 Coverage across 547 objects:
 
