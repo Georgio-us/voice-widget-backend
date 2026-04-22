@@ -152,7 +152,12 @@ export function buildLeadTelegramMessage(lead) {
   const lines = [];
   const source = String(lead?.source || '').trim().toLowerCase();
   const propertyId = String(lead?.propertyId || lead?.lastShownCardId || '').trim();
-  if (source === 'tg_property_card') {
+  if (source.startsWith('guest_want_bot')) {
+    lines.push('🚨🚨🚨 ЗАЯВКА: ХОЧУ ТАКОГО БОТА 🚨🚨🚨');
+    if (source === 'guest_want_bot_trial') lines.push('🧪 Канал: 7-дневный тест');
+    else if (source === 'guest_want_bot_consult') lines.push('🗣️ Канал: консультация');
+    else lines.push('📩 Канал: хочу такого бота');
+  } else if (source === 'tg_property_card') {
     lines.push(`🔥 ИНТЕРЕС К ОБЪЕКТУ: ${propertyId || '-'}`);
   } else if (source === 'tg_header_main') {
     lines.push('📞 ОБЩАЯ КОНСУЛЬТАЦИЯ (из хедера)');

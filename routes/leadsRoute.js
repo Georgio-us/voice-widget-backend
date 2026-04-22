@@ -8,6 +8,7 @@ import { notifyLeadToProjectTelegram } from '../services/projectTelegramNotifier
 import { pool } from '../services/db.js';
 
 const router = express.Router();
+const isWantBotSource = (value) => String(value || '').trim().toLowerCase().startsWith('guest_want_bot');
 
 /**
  * POST /api/leads
@@ -185,27 +186,29 @@ router.post('/', async (req, res) => {
       // Токен НЕ логируем; ошибка не должна ломать ответ
       console.warn('[telegram] lead notify failed', tgErr?.message || tgErr);
     }
-    try {
-      await notifyLeadToProjectTelegram({
-        leadId: result.id,
-        createdAt: result.created_at,
-        sessionId: sessionId || null,
-        source,
-        telegramUsername: telegramUsernameTrimmed || null,
-        name,
-        phoneCountryCode,
-        phoneNumber,
-        email,
-        preferredContactMethod,
-        language: language || 'ru',
-        propertyId: propertyId || null,
-        consent,
-        comment,
-        insights: insightsFromSessionLog,
-        lastShownCardId: lastShownCardIdFromSessionLog
-      });
-    } catch (projectTgErr) {
-      console.warn('[telegram-project] lead notify failed', projectTgErr?.message || projectTgErr);
+    if (!isWantBotSource(source)) {
+      try {
+        await notifyLeadToProjectTelegram({
+          leadId: result.id,
+          createdAt: result.created_at,
+          sessionId: sessionId || null,
+          source,
+          telegramUsername: telegramUsernameTrimmed || null,
+          name,
+          phoneCountryCode,
+          phoneNumber,
+          email,
+          preferredContactMethod,
+          language: language || 'ru',
+          propertyId: propertyId || null,
+          consent,
+          comment,
+          insights: insightsFromSessionLog,
+          lastShownCardId: lastShownCardIdFromSessionLog
+        });
+      } catch (projectTgErr) {
+        console.warn('[telegram-project] lead notify failed', projectTgErr?.message || projectTgErr);
+      }
     }
 
     // Логируем событие в телеметрию (если есть EventTypes.LEAD_FORM_SUBMIT)
