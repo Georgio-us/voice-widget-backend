@@ -506,8 +506,14 @@ const getBaseUrl = (req) => {
 
 const formatCardForClient = (req, p) => {
   const baseUrl = getBaseUrl(req);
-  const rawFirstImage = Array.isArray(p.images) && p.images.length ? p.images[0] : null;
-  const image = rawFirstImage ? String(rawFirstImage).replace('https://<backend-host>', baseUrl) : null;
+  const images = Array.isArray(p.images)
+    ? p.images
+        .map((v) => String(v || '').trim())
+        .filter(Boolean)
+        .map((v) => v.replace('https://<backend-host>', baseUrl))
+    : [];
+  const rawFirstImage = images.length ? images[0] : null;
+  const image = rawFirstImage || null;
   return {
     id: p.id,
     // Левые поля (география)
@@ -525,6 +531,7 @@ const formatCardForClient = (req, p) => {
     price_per_m2: p.price_per_m2 ?? null,
     bathrooms: p.bathrooms ?? p?.specs?.bathrooms ?? null,
     // Изображение
+    images,
     image,
     imageUrl: image
   };
