@@ -477,7 +477,10 @@ const mapRowToProperty = (row) => {
     rooms: row.specs_rooms != null ? Number(row.specs_rooms) : null,
     bathrooms: row.specs_bathrooms != null ? Number(row.specs_bathrooms) : null,
     area_m2: row.specs_area_m2 != null ? Number(row.specs_area_m2) : null,
+    plot_m2: row.specs_plot_m2 != null ? Number(row.specs_plot_m2) : null,
     floor: row.specs_floor != null ? Number(row.specs_floor) : null,
+    has_parking: row.has_parking === true,
+    has_pool: row.has_pool === true,
     description: row.description || null,
     images,
   };
@@ -528,8 +531,11 @@ const formatCardForClient = (req, p) => {
     // Дополнительные поля для back-стороны карточки
     description: p.description ?? null,
     area_m2: p.area_m2 ?? p?.specs?.area_m2 ?? null,
+    plot_m2: p.plot_m2 ?? null,
     price_per_m2: p.price_per_m2 ?? null,
     bathrooms: p.bathrooms ?? p?.specs?.bathrooms ?? null,
+    has_parking: p.has_parking === true,
+    has_pool: p.has_pool === true,
     // Изображение
     images,
     image,

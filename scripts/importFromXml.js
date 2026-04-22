@@ -66,6 +66,10 @@ const pickLang = (nodeXml, orderedLangs) => {
   return null;
 };
 
+const pickAnyLang = (nodeXml) => {
+  return pickLang(nodeXml, ['en', 'es', 'ru', 'no', 'de', 'fr', 'it', 'nl', 'da', 'fi', 'is', 'se', 'zh', 'pl', 'ca']);
+};
+
 const normalizeOperation = (priceFreqRaw) => {
   const f = String(priceFreqRaw || '').trim().toLowerCase();
   if (f === 'week') return 'rent';
@@ -137,7 +141,10 @@ async function upsertProperty(record) {
       specs_rooms,
       specs_bathrooms,
       specs_area_m2,
+      specs_plot_m2,
       specs_floor,
+      has_parking,
+      has_pool,
       specs_balcony,
       specs_terrace,
       title,
@@ -152,8 +159,8 @@ async function upsertProperty(record) {
       $6, $7, $8,
       $9, $10, $11, $12, $13,
       $14, $15, $16,
-      $17, $18, $19, $20, $21, $22,
-      $23, $24, $25, $26, $27, $28, $29
+      $17, $18, $19, $20, $21, $22, $23,
+      $24, $25, $26, $27, $28, $29, $30, $31, $32
     )
     ON CONFLICT (client_id, external_id) DO UPDATE SET
       operation = EXCLUDED.operation,
@@ -173,7 +180,10 @@ async function upsertProperty(record) {
       specs_rooms = EXCLUDED.specs_rooms,
       specs_bathrooms = EXCLUDED.specs_bathrooms,
       specs_area_m2 = EXCLUDED.specs_area_m2,
+      specs_plot_m2 = EXCLUDED.specs_plot_m2,
       specs_floor = EXCLUDED.specs_floor,
+      has_parking = EXCLUDED.has_parking,
+      has_pool = EXCLUDED.has_pool,
       specs_balcony = EXCLUDED.specs_balcony,
       specs_terrace = EXCLUDED.specs_terrace,
       title = EXCLUDED.title,
@@ -207,7 +217,10 @@ async function upsertProperty(record) {
       record.beds,
       record.baths,
       record.areaBuilt,
+      record.areaPlot,
       record.floor,
+      record.hasParking,
+      record.hasPool,
       null,
       null,
 
@@ -275,7 +288,10 @@ async function run() {
       beds: toInt4(extractTag(block, 'beds')),
       baths: toInt4(extractTag(block, 'baths')),
       areaBuilt: toInt4(extractTag(surfaceNode || '', 'built')),
+      areaPlot: toInt4(extractTag(surfaceNode || '', 'plot')),
       floor: toInt4(extractTag(block, 'floor')),
+      hasParking: Boolean(toText(pickAnyLang(extractTag(block, 'parking')))),
+      hasPool: Boolean(toText(pickAnyLang(extractTag(block, 'pool')))),
       priceAmount: toInt4(extractTag(block, 'price')),
       priceCurrency: toText(extractTag(block, 'currency')) || 'EUR',
       title: pickLang(titleNode, ['ru', 'en', 'es']),

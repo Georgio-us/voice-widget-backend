@@ -122,6 +122,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS properties_client_external_uidx
 ON properties (client_id, external_id);
 ```
 
+## 4.1) Icon Fields Migration (Current Slice)
+
+Run once before deploying icon-related importer/API changes:
+
+```sql
+ALTER TABLE properties
+  ADD COLUMN IF NOT EXISTS specs_plot_m2 integer,
+  ADD COLUMN IF NOT EXISTS has_parking boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS has_pool boolean NOT NULL DEFAULT false;
+```
+
+After migration, re-run XML import to populate these fields from feed.
+
 ## 5) Pre-Import Quality Checks
 
 Target variable:

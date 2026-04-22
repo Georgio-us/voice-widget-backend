@@ -134,6 +134,25 @@ Treat as optional/nullable:
 - `price_per_m2`
 - `building_year`
 
+## Icon Contract (Current Slice)
+
+Fields added to current scope for front-card icons:
+
+1. `area_m2` (`specs_area_m2`) -> `house-blue.svg` + value
+2. `plot_m2` (`specs_plot_m2`) -> `plano-blue.svg` + value (only if exists)
+3. `rooms` (`specs_rooms`) -> `bed-blue.svg` + value
+4. `bathrooms` (`specs_bathrooms`) -> `bath-blue.svg` + value
+5. `has_parking` -> `garaje-blue.svg` + check mark (show only when true)
+6. `has_pool` -> `pool-blue.svg` + check mark (show only when true)
+
+Feed sources used:
+- `surface_area/built` -> `specs_area_m2`
+- `surface_area/plot` -> `specs_plot_m2`
+- `beds` -> `specs_rooms`
+- `baths` -> `specs_bathrooms`
+- `parking/*` (localized) -> `has_parking=true` when non-empty
+- `pool/*` (localized) -> `has_pool=true` when non-empty
+
 ## Next Implementation Slice (planned, not executed here)
 
 1. Payload contract fix:
