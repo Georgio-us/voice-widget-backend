@@ -316,7 +316,7 @@ const buildTelegramUserLines = (tgUser) => {
   return lines;
 };
 
-const buildSessionActivityStartMessage = (p = {}) => {
+export const buildSessionActivityStartMessage = (p = {}) => {
   const lines = [];
   lines.push('🟢 Кто-то пользуется виджетом прямо сейчас');
   lines.push('');
@@ -340,7 +340,7 @@ const buildSessionActivityStartMessage = (p = {}) => {
   return lines.join('\n').trim();
 };
 
-const buildSessionActivityFinalMessage = (p = {}) => {
+export const buildSessionActivityFinalMessage = (p = {}) => {
   const lines = [];
   lines.push('✅ Была зафиксирована активность пользователя');
   lines.push('');

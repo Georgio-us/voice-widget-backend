@@ -61,6 +61,8 @@ router.post('/', async (req, res) => {
       propertyId,
       consent
     } = req.body || {};
+    const effectiveClientId =
+      String(clientId || process.env.BOT_CLIENT_ID || process.env.CLIENT_ID || 'demo').trim() || 'demo';
 
     // Валидация: name обязателен
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -110,7 +112,7 @@ router.post('/', async (req, res) => {
     // Валидация внутри createLead тоже есть, но здесь мы уже проверили основные поля
     const result = await createLead({
       sessionId: sessionId || null,
-      clientId,
+      clientId: effectiveClientId,
       source,
       name,
       phoneCountryCode,
@@ -222,6 +224,7 @@ router.post('/', async (req, res) => {
         source: 'backend',
         payload: {
           leadId: result.id,
+          clientId: effectiveClientId,
           source,
           language: language || 'ru',
           propertyId: propertyId || null,

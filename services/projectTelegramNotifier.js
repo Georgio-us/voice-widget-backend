@@ -1,5 +1,9 @@
 import { pool } from './db.js';
-import { buildLeadTelegramMessage } from './telegramNotifier.js';
+import {
+  buildLeadTelegramMessage,
+  buildSessionActivityStartMessage,
+  buildSessionActivityFinalMessage
+} from './telegramNotifier.js';
 
 const clip = (v, n = 400) => {
   if (v === null || v === undefined) return '';
@@ -96,7 +100,7 @@ const telegramCall = async ({ token, method, payload, timeoutMs = 5000 }) => {
 };
 
 async function sendToRecipient({ token, chatId, text }) {
-  await telegramCall({
+  const { data } = await telegramCall({
     token,
     method: 'sendMessage',
     payload: {
@@ -105,6 +109,7 @@ async function sendToRecipient({ token, chatId, text }) {
       disable_web_page_preview: true
     }
   });
+  return { messageId: data?.result?.message_id || null };
 }
 
 export async function notifyLeadToProjectTelegram(lead) {
@@ -140,3 +145,91 @@ export async function notifyLeadToProjectTelegram(lead) {
   };
 }
 
+export async function sendSessionActivityStartToProjectTelegram(params = {}) {
+  const token = normalize(process.env.TELEGRAM_INTERACTIVE_TOKEN);
+  const recipients = resolveProjectRecipientIds();
+  if (!token || !recipients.length) {
+    return { ok: false, skipped: true, reason: 'project_notifier_not_configured', messageIds: {} };
+  }
+
+  const text = buildSessionActivityStartMessage(params);
+  const actorTgId = String(params?.telegramUser?.userId || '').trim();
+  const results = [];
+  const messageIds = {};
+
+  for (const chatId of recipients) {
+    if (actorTgId && actorTgId === chatId) {
+      results.push({ chatId, ok: false, skipped: true, reason: 'self_activity' });
+      continue;
+    }
+    const alerts = await getAlertsConfigForUser(chatId);
+    if (!alerts.activity) {
+      results.push({ chatId, ok: false, skipped: true, reason: 'alerts_activity_off' });
+      continue;
+    }
+    try {
+      const { messageId } = await sendToRecipient({ token, chatId, text });
+      if (messageId) messageIds[chatId] = messageId;
+      results.push({ chatId, ok: true, skipped: false, messageId: messageId || null });
+    } catch (error) {
+      results.push({ chatId, ok: false, skipped: false, error: error?.message || 'send_failed' });
+    }
+  }
+
+  const delivered = results.filter((x) => x.ok === true).length;
+  return {
+    ok: delivered > 0,
+    skipped: delivered === 0 && results.every((x) => x.skipped),
+    delivered,
+    results,
+    messageIds
+  };
+}
+
+export async function updateSessionActivityFinalToProjectTelegram(params = {}) {
+  const token = normalize(process.env.TELEGRAM_INTERACTIVE_TOKEN);
+  const messageIds = params?.messageIds && typeof params.messageIds === 'object' ? params.messageIds : {};
+  const chatIds = Object.keys(messageIds).filter(Boolean);
+  if (!token || !chatIds.length) {
+    return { ok: false, skipped: true, reason: 'project_notifier_not_configured_or_no_message_ids' };
+  }
+
+  const text = buildSessionActivityFinalMessage(params);
+  const results = [];
+
+  for (const chatId of chatIds) {
+    const messageId = Number(messageIds[chatId]);
+    if (!Number.isFinite(messageId)) {
+      results.push({ chatId, ok: false, skipped: true, reason: 'invalid_message_id' });
+      continue;
+    }
+    const alerts = await getAlertsConfigForUser(chatId);
+    if (!alerts.activity) {
+      results.push({ chatId, ok: false, skipped: true, reason: 'alerts_activity_off' });
+      continue;
+    }
+    try {
+      await telegramCall({
+        token,
+        method: 'editMessageText',
+        payload: {
+          chat_id: chatId,
+          message_id: messageId,
+          text,
+          disable_web_page_preview: true
+        }
+      });
+      results.push({ chatId, ok: true, skipped: false });
+    } catch (error) {
+      results.push({ chatId, ok: false, skipped: false, error: error?.message || 'edit_failed' });
+    }
+  }
+
+  const delivered = results.filter((x) => x.ok === true).length;
+  return {
+    ok: delivered > 0,
+    skipped: delivered === 0 && results.every((x) => x.skipped),
+    delivered,
+    results
+  };
+}

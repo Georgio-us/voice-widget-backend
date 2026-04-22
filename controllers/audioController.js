@@ -11,6 +11,10 @@ import { buildScoreContext, annotatePropertyScoresByContext } from '../services/
 // Session-level logging: логирование целого диалога по одной строке на сессию
 import { appendMessage, upsertSessionLog } from '../services/sessionLogger.js';
 import { sendSessionActivityStartToTelegram, updateSessionActivityFinalToTelegram } from '../services/telegramNotifier.js';
+import {
+  sendSessionActivityStartToProjectTelegram,
+  updateSessionActivityFinalToProjectTelegram
+} from '../services/projectTelegramNotifier.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -178,6 +182,27 @@ const cleanupOldSessions = () => {
         if (messageId) {
           updateSessionActivityFinalToTelegram({
             messageId,
+            sessionId: session?.sessionId || sessionId,
+            startedAt: session?.createdAt ?? null,
+            lastActivityAt: session?.lastActivity ?? null,
+            durationMs: (typeof session?.createdAt === 'number' && typeof session?.lastActivity === 'number')
+              ? Math.max(0, session.lastActivity - session.createdAt)
+              : null,
+            geo: session?.geo || null,
+            messageCount: Array.isArray(session?.messages) ? session.messages.length : null,
+            sliderReached: !!(session?.sliderContext && session.sliderContext.updatedAt),
+            insights: session?.insights || null,
+            cardsShownCount: session?.shownSet ? (session.shownSet.size || 0) : null,
+            likesCount: Array.isArray(session?.liked) ? session.liked.length : null,
+            selectedCardId: session?.selectedCard?.cardId || null,
+            handoffActive: session?.handoff?.shownAt ? true : (session?.handoff?.active === true),
+            handoffCanceled: session?.handoff?.canceled === true
+          }).catch(() => {});
+        }
+        const projectMessageIds = session?.telegramProject?.activityMessageIds || null;
+        if (projectMessageIds && typeof projectMessageIds === 'object') {
+          updateSessionActivityFinalToProjectTelegram({
+            messageIds: projectMessageIds,
             sessionId: session?.sessionId || sessionId,
             startedAt: session?.createdAt ?? null,
             lastActivityAt: session?.lastActivity ?? null,
@@ -2499,6 +2524,21 @@ const transcribeAndRespond = async (req, res) => {
             }
           })
           .catch(() => {});
+        session.telegramProject = session.telegramProject || {};
+        sendSessionActivityStartToProjectTelegram({
+          sessionId: session.sessionId || sessionId,
+          startedAt: session.createdAt,
+          geo: session.geo,
+          telegramUser: session.telegramUser || null,
+          messageCount: Array.isArray(session.messages) ? session.messages.length : 0
+        })
+          .then((r) => {
+            if (r?.ok === true && r?.messageIds && typeof r.messageIds === 'object') {
+              session.telegramProject.activityMessageIds = { ...r.messageIds };
+              session.telegramProject.activityMessageAt = Date.now();
+            }
+          })
+          .catch(() => {});
       }
     } catch {}
     const inputTypeForLog = req.file ? 'audio' : 'text'; // для логирования (английский)
@@ -3582,6 +3622,27 @@ const clearSessionById = (sessionId) => {
     if (session && messageId) {
       updateSessionActivityFinalToTelegram({
         messageId,
+        sessionId: session?.sessionId || sessionId,
+        startedAt: session?.createdAt ?? null,
+        lastActivityAt: session?.lastActivity ?? null,
+        durationMs: (typeof session?.createdAt === 'number' && typeof session?.lastActivity === 'number')
+          ? Math.max(0, session.lastActivity - session.createdAt)
+          : null,
+        geo: session?.geo || null,
+        messageCount: Array.isArray(session?.messages) ? session.messages.length : null,
+        sliderReached: !!(session?.sliderContext && session.sliderContext.updatedAt),
+        insights: session?.insights || null,
+        cardsShownCount: session?.shownSet ? (session.shownSet.size || 0) : null,
+        likesCount: Array.isArray(session?.liked) ? session.liked.length : null,
+        selectedCardId: session?.selectedCard?.cardId || null,
+        handoffActive: session?.handoff?.shownAt ? true : (session?.handoff?.active === true),
+        handoffCanceled: session?.handoff?.canceled === true
+      }).catch(() => {});
+    }
+    const projectMessageIds = session?.telegramProject?.activityMessageIds || null;
+    if (session && projectMessageIds && typeof projectMessageIds === 'object') {
+      updateSessionActivityFinalToProjectTelegram({
+        messageIds: projectMessageIds,
         sessionId: session?.sessionId || sessionId,
         startedAt: session?.createdAt ?? null,
         lastActivityAt: session?.lastActivity ?? null,
