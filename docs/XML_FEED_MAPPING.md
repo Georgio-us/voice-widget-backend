@@ -4,6 +4,9 @@ Last updated: 2026-04-22
 Branch: `Split`
 Status: mapping confirmed, importer implemented.
 
+Companion contract audit:
+- `docs/XML_CONTRACT_AUDIT.md`
+
 ## Source Feeds
 
 Two feed variants were provided:

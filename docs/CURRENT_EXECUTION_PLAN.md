@@ -1,8 +1,8 @@
 # Current Execution Plan (Estyle)
 
-Last updated: 2026-04-21
+Last updated: 2026-04-22
 Branch: `Split`
-Status: XML importer implemented and smoke-tested, ready for full import run.
+Status: baseline ready; moving from import completion to field-contract normalization.
 
 ## Current Environment Snapshot (non-secret)
 
@@ -16,17 +16,17 @@ Status: XML importer implemented and smoke-tested, ready for full import run.
 
 ## Work Completed
 
-1. Environment variable contract documented (`AS-IS` and `TARGET`).
-2. Backend runtime switched to env-driven client scope (`APP_CLIENT_ID`).
-3. Import scripts switched to `IMPORT_CLIENT_ID || APP_CLIENT_ID || demo`.
-4. Frontend runtime config endpoint added (`/runtime-config.js`).
-5. Split backend hardcoded fallback removed from widget runtime path.
-6. DB migrated from working source DB into target estyle DB.
-7. Target DB client scope normalized to `estyle`.
-8. Smoke checks passed:
-   - `/health` OK
-   - `/api/audio/health` OK
-   - `/api/cards/search` returns cards
+1. Environment contracts documented (`AS-IS`, `TARGET`, onboarding, SQL runbook).
+2. Hardcoded runtime client and API fallbacks removed from critical paths.
+3. DB migrated into estyle environment and normalized to `client_id=estyle`.
+4. XML importer implemented (`scripts/importFromXml.js`).
+5. Full XML import executed successfully:
+   - total imported: `547`
+   - operation split: `539 sale`, `8 rent` (from `price_freq=week`)
+6. Legacy non-feed rows cleaned from target scope.
+7. Post-clean validation:
+   - `properties` for `estyle`: `547` rows
+   - sale/rent split preserved (`539/8`)
 
 ## Current DB State (validated)
 
@@ -36,41 +36,30 @@ Status: XML importer implemented and smoke-tested, ready for full import run.
   - `support_requests`
   - `event_logs`
   - `session_logs`
-- `properties` current scope:
-  - `client_id=estyle`, `count=24`
+- Production scope currently driven by XML baseline only.
 
-## Where We Stopped
+## Current Investigation Focus
 
-Variables and DB baseline are now operational for client environment.
+Goal of current iteration: define exact contract `XML -> properties -> slider`.
 
-Project is ready to proceed to XML integration:
-1. inspect XML feed structure,
-2. map XML fields to `properties` schema,
-3. implement XML importer + normalizer,
-4. run import and validate cards in widget.
+Artifacts:
+1. mapping baseline: `docs/XML_FEED_MAPPING.md`
+2. field-contract audit: `docs/XML_CONTRACT_AUDIT.md`
 
-## XML Analysis Update (2026-04-22)
+Key discovered issues:
+1. description is displayed with raw HTML tags in slider.
+2. multi-image data exists in feed/DB, but card payload currently returns only first image.
+3. `floor` is sparse and partially missed because feed uses localized nested node.
+4. `price_per_m2` is not mapped/populated yet.
+5. location labels need de-dup normalization policy.
 
-1. Feed URLs received and analyzed.
-2. Selected primary feed: `xml-mediaelx` (richer schema).
-3. Parsed stats confirmed:
-   - `547` properties
-   - `539 sale` + `8 week`
-4. Mapping document created:
-   - `docs/XML_FEED_MAPPING.md`
+## Where We Stop In This Session
 
-## XML Implementation Update (2026-04-22)
+Research phase complete for field contract baseline.
 
-1. Business rule confirmed:
-   - `price_freq=week -> operation=rent`
-2. Implemented:
-   - `scripts/importFromXml.js`
-3. Smoke-tested import:
-   - processed sample records successfully
-   - DB write verified in `properties` for `client_id=estyle`
-
-## Next Step
-
-1. Execute full XML import (`547` properties) into `estyle`.
-2. Run SQL quality checks (nulls, counts, operation distribution).
-3. Validate via `/api/cards/search` and widget rendering.
+Next coding slice (planned):
+1. backend payload: include full `images[]`.
+2. description strategy: sanitize HTML vs strip-to-text.
+3. importer update: parse nested localized `floor`.
+4. `price_per_m2` policy: compute or hide if absent.
+5. location de-dup normalization for card subtitle.
