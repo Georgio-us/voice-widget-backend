@@ -1,8 +1,8 @@
 # Current Execution Plan (Estyle)
 
-Last updated: 2026-04-22
+Last updated: 2026-04-23
 Branch: `Split`
-Status: baseline ready; moving from import completion to field-contract normalization.
+Status: XML baseline is live; current priority is CRM-ready lead payload contract.
 
 ## Current Environment Snapshot (non-secret)
 
@@ -21,12 +21,17 @@ Status: baseline ready; moving from import completion to field-contract normaliz
 3. DB migrated into estyle environment and normalized to `client_id=estyle`.
 4. XML importer implemented (`scripts/importFromXml.js`).
 5. Full XML import executed successfully:
-   - total imported: `547`
-   - operation split: `539 sale`, `8 rent` (from `price_freq=week`)
+   - total imported: `548`
+   - operation split: `540 sale`, `8 rent` (from `price_freq=week`)
 6. Legacy non-feed rows cleaned from target scope.
 7. Post-clean validation:
-   - `properties` for `estyle`: `547` rows
-   - sale/rent split preserved (`539/8`)
+   - `properties` for `estyle`: `548` rows
+   - sale/rent split preserved (`540/8`)
+8. Front card contract normalized for current feed:
+   - full image gallery payload (`images[]`)
+   - icon fields (`area/plot/beds/baths/pool/parking`)
+   - location row simplified to `city / province`
+   - status row normalized to `property_type + listing_status` (`NEW BUILD` / `RESALE` / `RENT`)
 
 ## Current DB State (validated)
 
@@ -40,26 +45,25 @@ Status: baseline ready; moving from import completion to field-contract normaliz
 
 ## Current Investigation Focus
 
-Goal of current iteration: define exact contract `XML -> properties -> slider`.
+Goal of current iteration: define and implement CRM-ready lead contract for Mediaelx.
 
-Artifacts:
-1. mapping baseline: `docs/XML_FEED_MAPPING.md`
-2. field-contract audit: `docs/XML_CONTRACT_AUDIT.md`
+Primary artifact:
+1. `docs/LEAD_CRM_CONTRACT.md`
 
-Key discovered issues:
-1. description is displayed with raw HTML tags in slider.
-2. multi-image data exists in feed/DB, but card payload currently returns only first image.
-3. `floor` is sparse and partially missed because feed uses localized nested node.
-4. `price_per_m2` is not mapped/populated yet.
-5. location labels need de-dup normalization policy.
+Scope now:
+1. unify lead JSON shape for all widget lead entry points.
+2. add `ai_notes`/`summary` based on dialog insights.
+3. guarantee `propertyId` propagation for object-context leads.
+4. prepare stable outbound-ready payload (without enabling outbound call yet).
 
 ## Where We Stop In This Session
 
-Research phase complete for field contract baseline.
+Planning phase complete for CRM lead payload.
 
 Next coding slice (planned):
-1. backend payload: include full `images[]`.
-2. description strategy: sanitize HTML vs strip-to-text.
-3. importer update: parse nested localized `floor`.
-4. `price_per_m2` policy: compute or hide if absent.
-5. location de-dup normalization for card subtitle.
+1. extend `POST /api/leads` input contract with optional `summary` / `aiNotes` / `insights`.
+2. implement server-side `ai_notes` builder from `session_logs` fallback + request payload.
+3. persist enriched payload in `lead_requests.extra` (or dedicated columns in follow-up migration).
+4. wire frontend lead forms to pass `propertyId` from active/selected card context.
+5. add one stable outbound payload builder (pure function) and log-ready preview for CRM handoff.
+6. update onboarding docs with final lead schema and webhook integration steps.

@@ -1,16 +1,17 @@
 # Client Onboarding (Railway + Postgres)
 
-Last updated: 2026-04-21
+Last updated: 2026-04-23
 Branch: `Split`
 Audience: internal ops/dev team
 
-## Current Execution Status (Estyle, 2026-04-21)
+## Current Execution Status (Estyle, 2026-04-23)
 
 - Phase 1 completed: client environment and URLs configured.
 - Phase 2 completed: required backend/frontend variables configured in Railway.
 - Phase 3 completed: DB migrated and normalized to `client_id=estyle`.
-- Current pause point: before XML feed mapping/import implementation.
+- Current pause point: XML import is live; next implementation slice is CRM-ready lead payload contract.
 - See execution snapshot: `docs/CURRENT_EXECUTION_PLAN.md`.
+- See lead CRM contract: `docs/LEAD_CRM_CONTRACT.md`.
 
 ## Objective
 
@@ -129,6 +130,22 @@ Exit criteria:
 
 Exit criteria:
 - full path works in client environment only.
+
+## Phase 6: CRM Lead Payload and Webhook Handoff
+
+Source of truth:
+- `docs/LEAD_CRM_CONTRACT.md`
+
+Implementation scope:
+1. Enrich lead payload with AI context (`ai_notes` / `rawInsights`).
+2. Guarantee `propertyId` propagation from object-context lead forms.
+3. Build one normalized outbound-ready JSON envelope.
+4. Align with CRM tech support on required keys and auth.
+
+Exit criteria:
+1. one approved JSON schema shared with CRM.
+2. test lead transformed to contract-compliant payload.
+3. no regressions in `POST /api/leads` base flow.
 
 ## Static vs Client-Specific Quick Reference
 
