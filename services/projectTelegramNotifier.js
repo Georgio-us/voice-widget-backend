@@ -1,6 +1,7 @@
 import { pool } from './db.js';
 import {
   buildLeadTelegramMessage,
+  buildNewTelegramUserMessage,
   buildSessionActivityStartMessage,
   buildSessionActivityFinalMessage
 } from './telegramNotifier.js';
@@ -126,6 +127,39 @@ export async function notifyLeadToProjectTelegram(lead) {
     const alerts = await getAlertsConfigForUser(chatId);
     if (!alerts.leads) {
       results.push({ chatId, ok: false, skipped: true, reason: 'alerts_leads_off' });
+      continue;
+    }
+    try {
+      await sendToRecipient({ token, chatId, text });
+      results.push({ chatId, ok: true, skipped: false });
+    } catch (error) {
+      results.push({ chatId, ok: false, skipped: false, error: error?.message || 'send_failed' });
+    }
+  }
+
+  const delivered = results.filter((x) => x.ok === true).length;
+  return {
+    ok: delivered > 0,
+    skipped: delivered === 0 && results.every((x) => x.skipped),
+    delivered,
+    results
+  };
+}
+
+export async function notifyNewTelegramUserToProjectTelegram(payload = {}) {
+  const token = normalize(process.env.TELEGRAM_INTERACTIVE_TOKEN);
+  const recipients = resolveProjectRecipientIds();
+  if (!token || !recipients.length) {
+    return { ok: false, skipped: true, reason: 'project_notifier_not_configured' };
+  }
+
+  const text = buildNewTelegramUserMessage(payload);
+  const results = [];
+
+  for (const chatId of recipients) {
+    const alerts = await getAlertsConfigForUser(chatId);
+    if (!alerts.activity) {
+      results.push({ chatId, ok: false, skipped: true, reason: 'alerts_activity_off' });
       continue;
     }
     try {

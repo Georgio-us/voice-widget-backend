@@ -3,6 +3,8 @@ import { getPropertyByExternalId } from './propertiesRepository.js';
 import { upsertTelegramUser } from './usersRepository.js';
 import { isAdminTgUser } from './olxOAuthService.js';
 import { pool } from './db.js';
+import { notifyNewTelegramUserToTelegram } from './telegramNotifier.js';
+import { notifyNewTelegramUserToProjectTelegram } from './projectTelegramNotifier.js';
 
 const startMessage =
   'Welcome to Odesa Real Estate! I am your AI assistant. How can I help you today?';
@@ -433,6 +435,30 @@ async function getRecentLeads(clientId, limit = 5) {
   }
 }
 
+async function getUsersJoinStats(clientId) {
+  const safeClientId = String(clientId || BOT_CLIENT_ID).trim() || BOT_CLIENT_ID;
+  const fallback = { totalUsers: null, usersToday: null };
+  try {
+    const [{ rows: totalRows }, { rows: todayRows }] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1`,
+        [safeClientId]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1 AND first_seen_at::date = NOW()::date`,
+        [safeClientId]
+      )
+    ]);
+    return {
+      totalUsers: totalRows?.[0]?.c ?? 0,
+      usersToday: todayRows?.[0]?.c ?? 0
+    };
+  } catch (error) {
+    if (error?.code === '42P01' || error?.code === '42703') return fallback;
+    throw error;
+  }
+}
+
 export async function startTelegramBot() {
   if (botInstance) {
     return botInstance;
@@ -472,9 +498,10 @@ export async function startTelegramBot() {
   await setMenuButton();
 
   bot.start(async (ctx) => {
+    let newUserJoinedPayload = null;
     try {
       const from = ctx?.from || {};
-      await upsertTelegramUser({
+      const upsertResult = await upsertTelegramUser({
         clientId: BOT_CLIENT_ID,
         tgUserId: from?.id,
         username: from?.username || null,
@@ -483,8 +510,33 @@ export async function startTelegramBot() {
         languageCode: from?.language_code || null,
         meta: { source: 'telegram_start' }
       });
+      if (upsertResult?.isNew === true) {
+        const stats = await getUsersJoinStats(BOT_CLIENT_ID);
+        newUserJoinedPayload = {
+          tgUserId: from?.id ?? null,
+          username: from?.username || null,
+          firstName: from?.first_name || null,
+          lastName: from?.last_name || null,
+          totalUsers: Number.isFinite(stats?.totalUsers) ? stats.totalUsers : null,
+          usersToday: Number.isFinite(stats?.usersToday) ? stats.usersToday : null,
+          at: Date.now()
+        };
+      }
     } catch (userSyncError) {
       console.warn('[telegram] users upsert failed:', userSyncError?.message || userSyncError);
+    }
+
+    if (newUserJoinedPayload) {
+      try {
+        await notifyNewTelegramUserToTelegram(newUserJoinedPayload);
+      } catch (notifyError) {
+        console.warn('[telegram] new user notify failed:', notifyError?.message || notifyError);
+      }
+      try {
+        await notifyNewTelegramUserToProjectTelegram(newUserJoinedPayload);
+      } catch (projectNotifyError) {
+        console.warn('[telegram-project] new user notify failed:', projectNotifyError?.message || projectNotifyError);
+      }
     }
 
     const tgUserId = String(ctx?.from?.id || '').trim();

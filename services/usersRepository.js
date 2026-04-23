@@ -24,7 +24,7 @@ export async function upsertTelegramUser({
     meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
 
   try {
-    await pool.query(
+    const { rows } = await pool.query(
       `
       INSERT INTO users (
         client_id,
@@ -46,6 +46,7 @@ export async function upsertTelegramUser({
         language_code = EXCLUDED.language_code,
         last_seen_at = NOW(),
         meta = COALESCE(users.meta, '{}'::jsonb) || COALESCE(EXCLUDED.meta, '{}'::jsonb)
+      RETURNING (xmax = 0) AS inserted
       `,
       [
         String(clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID,
@@ -57,7 +58,7 @@ export async function upsertTelegramUser({
         JSON.stringify(normalizedMeta)
       ]
     );
-    return { ok: true, skipped: false };
+    return { ok: true, skipped: false, isNew: rows?.[0]?.inserted === true };
   } catch (err) {
     // relation does not exist (manual DDL not applied yet)
     if (err?.code === '42P01') {
@@ -66,4 +67,3 @@ export async function upsertTelegramUser({
     throw err;
   }
 }
-

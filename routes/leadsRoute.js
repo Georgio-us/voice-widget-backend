@@ -56,6 +56,7 @@ router.post('/', async (req, res) => {
       phoneNumber,
       email,
       telegramUsername,
+      tgUserId,
       preferredContactMethod,
       comment,
       language,
@@ -87,6 +88,7 @@ router.post('/', async (req, res) => {
     const phoneNumberTrimmed = phoneNumber ? String(phoneNumber).trim() : '';
     const emailTrimmed = email ? String(email).trim() : '';
     const telegramUsernameTrimmed = telegramUsername ? String(telegramUsername).trim() : '';
+    const tgUserIdTrimmed = tgUserId === null || tgUserId === undefined ? '' : String(tgUserId).trim();
     const normalizedSource = String(source || '').trim().toLowerCase();
     const telegramContactOk =
       ((normalizedSource === 'tg_mini_app' || normalizedSource === 'tg_header_main' || normalizedSource === 'tg_property_card') ||
@@ -125,7 +127,9 @@ router.post('/', async (req, res) => {
       propertyId,
       consent,
       telegramUsername: telegramUsernameTrimmed || null,
-      extra: telegramContactOk ? { telegramUsername: telegramUsernameTrimmed } : null
+      extra: telegramContactOk
+        ? { telegramUsername: telegramUsernameTrimmed, ...(tgUserIdTrimmed ? { tgUserId: tgUserIdTrimmed } : {}) }
+        : (tgUserIdTrimmed ? { tgUserId: tgUserIdTrimmed } : null)
     });
 
     // Read-only enrichment for Telegram notification (best-effort):
@@ -170,6 +174,7 @@ router.post('/', async (req, res) => {
         sessionId: sessionId || null,
         source,
         telegramUsername: telegramUsernameTrimmed || null,
+        tgUserId: tgUserIdTrimmed || null,
         name,
         phoneCountryCode,
         phoneNumber,
@@ -194,6 +199,7 @@ router.post('/', async (req, res) => {
           sessionId: sessionId || null,
           source,
           telegramUsername: telegramUsernameTrimmed || null,
+          tgUserId: tgUserIdTrimmed || null,
           name,
           phoneCountryCode,
           phoneNumber,

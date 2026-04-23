@@ -19,6 +19,12 @@ const normalizePhone = (cc, num) => {
   return joined || '';
 };
 
+const normalizeTelegramId = (value) => {
+  const v = String(value ?? '').trim();
+  if (!v) return '';
+  return /^-?\d{5,20}$/.test(v) ? v : '';
+};
+
 const formatPhoneHuman = (raw = '') => {
   const s = String(raw || '').trim();
   if (!s) return '';
@@ -176,6 +182,10 @@ export function buildLeadTelegramMessage(lead) {
       : `@${telegramUsernameRaw}`;
     lines.push(`Telegram: ${clip(telegramUsername, 100)}`);
   }
+  const tgUserId = normalizeTelegramId(lead?.tgUserId);
+  if (tgUserId) {
+    lines.push(`Telegram ID: ${clip(tgUserId, 40)}`);
+  }
   lines.push('');
 
   // Contacts
@@ -279,6 +289,49 @@ export async function notifyLeadToTelegram(lead) {
   } finally {
     clearTimeout(t);
   }
+}
+
+export const buildNewTelegramUserMessage = (payload = {}) => {
+  const lines = [];
+  lines.push('🆕 Новый пользователь добавлен в бота');
+  lines.push('');
+  const tgLines = buildTelegramUserLines({
+    userId: payload?.tgUserId,
+    username: payload?.username,
+    firstName: payload?.firstName,
+    lastName: payload?.lastName
+  });
+  if (tgLines.length) {
+    lines.push(...tgLines);
+  }
+  if (typeof payload?.totalUsers === 'number') {
+    lines.push(`👥 Всего пользователей: ${payload.totalUsers}`);
+  }
+  if (typeof payload?.usersToday === 'number') {
+    lines.push(`📈 Новых за сегодня: ${payload.usersToday}`);
+  }
+  lines.push(`🕒 Время: ${formatDateRu(payload?.at || Date.now())}`);
+  return lines.join('\n').trim();
+};
+
+export async function notifyNewTelegramUserToTelegram(payload = {}) {
+  const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
+  const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
+  if (!token || !chatId) return { ok: false, skipped: true };
+  const alerts = await getAdminAlertsConfig();
+  if (!alerts.activity) return { ok: false, skipped: true, reason: 'alerts_activity_off' };
+
+  const text = buildNewTelegramUserMessage(payload);
+  await telegramCall({
+    token,
+    method: 'sendMessage',
+    payload: {
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true
+    }
+  });
+  return { ok: true, skipped: false };
 }
 
 // ------------------------------------------------------------
