@@ -479,6 +479,11 @@ const mapRowToProperty = (row) => {
     const n = Number.parseInt(String(v), 10);
     return Number.isFinite(n) ? n : null;
   };
+  const toNumber = (v) => {
+    if (v === null || v === undefined) return null;
+    const n = Number.parseFloat(String(v).replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  };
   return {
     // важный момент: используем external_id как основной id (совместимость со старым фронтом)
     id: row.external_id || String(row.id),
@@ -493,13 +498,18 @@ const mapRowToProperty = (row) => {
     bathrooms: row.specs_bathrooms != null ? Number(row.specs_bathrooms) : null,
     area_m2: row.specs_area_m2 != null ? Number(row.specs_area_m2) : null,
     plot_m2: row.specs_plot_m2 != null ? Number(row.specs_plot_m2) : null,
+    terrace_m2: row.specs_terrace != null ? Number(row.specs_terrace) : toInt(rawObj?.terrace),
     floor: row.specs_floor != null ? Number(row.specs_floor) : null,
     year_built: row.building_year != null ? Number(row.building_year) : toInt(rawObj?.yearBuild),
     orientation: rawObj?.orientation ? String(rawObj.orientation).trim() : null,
-    distance_beach: toInt(rawObj?.distanceBeach),
-    distance_airport: toInt(rawObj?.distanceAirport),
-    distance_golf: toInt(rawObj?.distanceGolf),
-    distance_amenities: toInt(rawObj?.distanceAmenities),
+    distance_beach: toNumber(rawObj?.distanceBeach),
+    distance_beach_med: rawObj?.distanceBeachMed ? String(rawObj.distanceBeachMed).trim() : null,
+    distance_airport: toNumber(rawObj?.distanceAirport),
+    distance_airport_med: rawObj?.distanceAirportMed ? String(rawObj.distanceAirportMed).trim() : null,
+    distance_golf: toNumber(rawObj?.distanceGolf),
+    distance_golf_med: rawObj?.distanceGolfMed ? String(rawObj.distanceGolfMed).trim() : null,
+    distance_amenities: toNumber(rawObj?.distanceAmenities),
+    distance_amenities_med: rawObj?.distanceAmenitiesMed ? String(rawObj.distanceAmenitiesMed).trim() : null,
     has_parking: row.has_parking === true,
     has_pool: row.has_pool === true,
     is_new_build: row.is_new_build === true,
@@ -559,13 +569,18 @@ const formatCardForClient = (req, p) => {
     year_built: p.year_built ?? null,
     orientation: p.orientation ?? null,
     distance_beach: p.distance_beach ?? null,
+    distance_beach_med: p.distance_beach_med ?? null,
     distance_airport: p.distance_airport ?? null,
+    distance_airport_med: p.distance_airport_med ?? null,
     distance_golf: p.distance_golf ?? null,
+    distance_golf_med: p.distance_golf_med ?? null,
     distance_amenities: p.distance_amenities ?? null,
+    distance_amenities_med: p.distance_amenities_med ?? null,
     // Дополнительные поля для back-стороны карточки
     description: p.description ?? null,
     area_m2: p.area_m2 ?? p?.specs?.area_m2 ?? null,
     plot_m2: p.plot_m2 ?? null,
+    terrace_m2: p.terrace_m2 ?? null,
     price_per_m2: p.price_per_m2 ?? null,
     bathrooms: p.bathrooms ?? p?.specs?.bathrooms ?? null,
     property_type: p.property_type ?? null,

@@ -38,6 +38,15 @@ const toInt4 = (v) => {
   return n;
 };
 
+const toNumber = (v) => {
+  const s = toText(v);
+  if (!s) return null;
+  const cleaned = s.replace(/,/g, '.').replace(/[^0-9.-]/g, '');
+  if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === '-.') return null;
+  const n = Number.parseFloat(cleaned);
+  return Number.isFinite(n) ? n : null;
+};
+
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const extractTag = (xml, tag) => {
@@ -91,6 +100,14 @@ const extractLocalizedText = (propertyXml, tagName) => {
   const node = extractTag(propertyXml, tagName);
   if (!node) return null;
   return pickLang(node, ['en', 'es', 'ru']) || pickAnyLang(node) || toText(node);
+};
+
+const extractDistanceMed = (propertyXml, baseTag) => {
+  const direct = toText(extractTag(propertyXml, `${baseTag}_med`));
+  if (direct) return direct;
+  const node = extractTag(propertyXml, baseTag);
+  if (!node) return null;
+  return toText(extractTag(node, 'med')) || toText(extractTag(node, 'unit')) || null;
 };
 
 const normalizeOperation = (priceFreqRaw) => {
@@ -248,7 +265,7 @@ async function upsertProperty(record) {
       record.hasPool,
       record.isNewBuild,
       null,
-      null,
+      record.areaTerrace,
 
       record.title,
       record.description,
@@ -316,6 +333,7 @@ async function run() {
       baths: toInt4(extractTag(block, 'baths')),
       areaBuilt: toInt4(extractTag(surfaceNode || '', 'built')),
       areaPlot: toInt4(extractTag(surfaceNode || '', 'plot')),
+      areaTerrace: toInt4(extractTag(surfaceNode || '', 'terrace')),
       floor: toInt4(extractTag(block, 'floor')),
       hasParking: Boolean(toText(pickAnyLang(extractTag(block, 'parking')))),
       hasPool: Boolean(toText(pickAnyLang(extractTag(block, 'pool')))),
@@ -335,11 +353,16 @@ async function run() {
         ref: toText(extractTag(block, 'ref')),
         priceFreq: priceFreqRaw,
         yearBuild: toInt4(extractTag(block, 'year_build')),
+        terrace: toInt4(extractTag(surfaceNode || '', 'terrace')),
         orientation: extractLocalizedText(block, 'orientation'),
-        distanceBeach: toInt4(extractTag(block, 'distance_beach')),
-        distanceAirport: toInt4(extractTag(block, 'distance_airport')),
-        distanceGolf: toInt4(extractTag(block, 'distance_golf')),
-        distanceAmenities: toInt4(extractTag(block, 'distance_amenities')),
+        distanceBeach: toNumber(extractTag(block, 'distance_beach')),
+        distanceBeachMed: extractDistanceMed(block, 'distance_beach'),
+        distanceAirport: toNumber(extractTag(block, 'distance_airport')),
+        distanceAirportMed: extractDistanceMed(block, 'distance_airport'),
+        distanceGolf: toNumber(extractTag(block, 'distance_golf')),
+        distanceGolfMed: extractDistanceMed(block, 'distance_golf'),
+        distanceAmenities: toNumber(extractTag(block, 'distance_amenities')),
+        distanceAmenitiesMed: extractDistanceMed(block, 'distance_amenities'),
         tags,
         url: pickLang(urlNode, ['en', 'es', 'ru'])
       }
