@@ -3,6 +3,7 @@ globalThis.File = File;
 import { OpenAI } from 'openai';
 // DB repository (Postgres)
 import { getAllProperties } from '../services/propertiesRepository.js';
+import { executeCanonicalQueryV1 } from '../services/canonicalQueryV1.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
@@ -548,12 +549,7 @@ const getAllNormalizedProperties = async () => {
 
 const findBestProperties = async (insights, limit = 1) => {
   const all = await getAllNormalizedProperties();
-  const ranked = all
-    .map((p) => ({ p, s: scoreProperty(p, insights) }))
-    .sort((a, b) => b.s - a.s)
-    .slice(0, limit)
-    .map(({ p }) => p);
-  return ranked;
+  return executeCanonicalQueryV1({ insights, properties: all, limit });
 };
 
 const getBaseUrl = (req) => {
@@ -3157,23 +3153,26 @@ ${factsList.join('\n')}
     if (show && !DISABLE_SERVER_UI) {
       // Начинаем новый "сеанс показа" — сбрасываем набор уже показанных в текущем слайдере
       session.shownSet = new Set();
-      // Формируем пул кандидатов: либо существующий, либо заново
-      let pool = [];
-      if (Array.isArray(session.lastCandidates) && session.lastCandidates.length) {
-        pool = session.lastCandidates.slice();
-      } else {
-        const ranked = await findBestProperties(session.insights, 10);
-        const all = ranked.length ? ranked : await getAllNormalizedProperties();
-        pool = all.map(p => p.id);
-      }
+      // Формируем пул кандидатов только через canonical_query_v1
+      const execution = await findBestProperties(session.insights, 10);
+      session.queryTraceV1 = {
+        sourceInsights: execution.sourceInsights,
+        canonicalPatch: execution.canonicalPatch,
+        preValidationQuery: execution.preValidationQuery,
+        postValidationQuery: execution.postValidationQuery,
+        droppedFields: execution.droppedFields,
+        missingFields: execution.missingFields,
+        matchedCount: execution.matchedCount
+      };
+      let pool = execution.candidates.map((p) => p.id);
       // Дедупликация пула
       pool = Array.from(new Set(pool));
       session.lastCandidates = pool;
       session.candidateIndex = 0;
       // Выбираем первый id из пула, которого нет в shownSet (она только что сброшена)
-      let pickedId = pool[0];
+      const pickedId = pool[0];
       const allNow = await getAllNormalizedProperties();
-      const candidate = allNow.find((p) => p.id === pickedId) || allNow[0];
+      const candidate = allNow.find((p) => p.id === pickedId);
       if (candidate) {
         session.shownSet.add(candidate.id);
         cards = [formatCardForClient(req, candidate)];
@@ -3343,7 +3342,8 @@ ${factsList.join('\n')}
         transcription: transcriptionTime,
         gpt: gptTime,
         total: totalTime
-      }
+      },
+      queryTraceV1: session.queryTraceV1 || null
     };
 
     // Patch (outside roadmap): Browser-visible compact debug (only under exact gate)
@@ -3667,18 +3667,25 @@ async function handleInteraction(req, res) {
       payload: { action }
     });
 
-    // Обеспечим список кандидатов в сессии
+    // Обеспечим список кандидатов в сессии только через canonical_query_v1
     if (!Array.isArray(session.lastCandidates) || !session.lastCandidates.length) {
-      const ranked = await findBestProperties(session.insights, 10);
-      // Если нет ничего по инсайтам — используем всю базу
-      const pool = ranked.length ? ranked : await getAllNormalizedProperties();
-      session.lastCandidates = pool.map(p => p.id);
+      const execution = await findBestProperties(session.insights, 10);
+      session.queryTraceV1 = {
+        sourceInsights: execution.sourceInsights,
+        canonicalPatch: execution.canonicalPatch,
+        preValidationQuery: execution.preValidationQuery,
+        postValidationQuery: execution.postValidationQuery,
+        droppedFields: execution.droppedFields,
+        missingFields: execution.missingFields,
+        matchedCount: execution.matchedCount
+      };
+      session.lastCandidates = execution.candidates.map((p) => p.id);
       session.candidateIndex = 0;
     } else if (session.lastCandidates.length < 2) {
-      // Гарантируем минимум 2 кандидата, расширив до всей базы (без дубликатов)
+      // Гарантируем минимум 2 кандидата, расширив выдачу того же canonical_query_v1 (без дубликатов)
       const set = new Set(session.lastCandidates);
-      const all = await getAllNormalizedProperties();
-      for (const p of all) { if (!set.has(p.id)) set.add(p.id); }
+      const execution = await findBestProperties(session.insights, 100);
+      for (const p of execution.candidates) { if (!set.has(p.id)) set.add(p.id); }
       session.lastCandidates = Array.from(set);
       if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
     }
@@ -3694,7 +3701,13 @@ async function handleInteraction(req, res) {
       }
       const all = await getAllNormalizedProperties();
       const p = all.find(x => x.id === id) || all[0];
-      if (!p) return res.status(404).json({ error: 'Карточка не найдена' });
+      if (!p) return res.json(withDebug({
+        ok: true,
+        assistantMessage: 'Не нашел точных совпадений. Уточните, пожалуйста, параметры поиска.',
+        card: null,
+        queryTraceV1: session.queryTraceV1 || null,
+        role: session.role
+      }));
       // Обновим индекс и отметим показанным
       session.candidateIndex = list.indexOf(id);
       if (!session.shownSet) session.shownSet = new Set();
@@ -3702,7 +3715,7 @@ async function handleInteraction(req, res) {
       const card = formatCardForClient(req, p);
       const lang = getUiLanguage(session);
       const assistantMessage = generateCardComment(lang, p);
-      return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage, card, queryTraceV1: session.queryTraceV1 || null, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'next') {
@@ -3710,13 +3723,13 @@ async function handleInteraction(req, res) {
       const list = session.lastCandidates || [];
       const len = list.length;
       if (!len) {
-        // крайний случай: вернём первый из базы
-        const all = await getAllNormalizedProperties();
-        const p = all[0];
-        const card = formatCardForClient(req, p);
-        const lang = getUiLanguage(session);
-        const assistantMessage = generateCardComment(lang, p);
-        return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
+        return res.json(withDebug({
+          ok: true,
+          assistantMessage: 'Не нашел точных совпадений. Уточните, пожалуйста, параметры поиска.',
+          card: null,
+          queryTraceV1: session.queryTraceV1 || null,
+          role: session.role
+        })); // 🆕 Sprint I: server-side role
       }
       // Если фронт прислал текущий variantId, делаем шаг относительно него
       let idx = list.indexOf(variantId);
@@ -3736,7 +3749,8 @@ async function handleInteraction(req, res) {
       }
       // Если все кандидаты уже показаны — расширим пул лучшими по инсайтам и возьмём первый новый
       if (steps >= len) {
-        const extended = (await findBestProperties(session.insights, 100)).map(p => p.id);
+        const extendedExec = await findBestProperties(session.insights, 100);
+        const extended = extendedExec.candidates.map((p) => p.id);
         const unseen = extended.find(cid => !session.shownSet.has(cid));
         if (unseen) {
           id = unseen;
@@ -3748,12 +3762,21 @@ async function handleInteraction(req, res) {
       }
       session.candidateIndex = list.indexOf(id);
       const all2 = await getAllNormalizedProperties();
-      const p = all2.find(x => x.id === id) || all2[0];
+      const p = all2.find(x => x.id === id);
+      if (!p) {
+        return res.json(withDebug({
+          ok: true,
+          assistantMessage: 'Не нашел точных совпадений. Уточните, пожалуйста, параметры поиска.',
+          card: null,
+          queryTraceV1: session.queryTraceV1 || null,
+          role: session.role
+        }));
+      }
       session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
       const lang = getUiLanguage(session);
       const assistantMessage = generateCardComment(lang, p);
-      return res.json(withDebug({ ok: true, assistantMessage, card, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage, card, queryTraceV1: session.queryTraceV1 || null, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     if (action === 'like') {
