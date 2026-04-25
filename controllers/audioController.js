@@ -474,6 +474,13 @@ const mapRowToProperty = (row) => {
   const tags = Array.isArray(rawObj?.tags)
     ? rawObj.tags.map((v) => String(v || '').trim()).filter(Boolean)
     : [];
+  const tagsI18n = rawObj?.tagsI18n && typeof rawObj.tagsI18n === 'object'
+    ? {
+        ru: Array.isArray(rawObj.tagsI18n.ru) ? rawObj.tagsI18n.ru.map((v) => String(v || '').trim()).filter(Boolean) : [],
+        en: Array.isArray(rawObj.tagsI18n.en) ? rawObj.tagsI18n.en.map((v) => String(v || '').trim()).filter(Boolean) : [],
+        es: Array.isArray(rawObj.tagsI18n.es) ? rawObj.tagsI18n.es.map((v) => String(v || '').trim()).filter(Boolean) : []
+      }
+    : null;
   const toInt = (v) => {
     if (v === null || v === undefined) return null;
     const n = Number.parseInt(String(v), 10);
@@ -528,6 +535,7 @@ const mapRowToProperty = (row) => {
         es: es ? String(es).trim() : null
       };
     })(),
+    tags_i18n: tagsI18n,
     images,
     tags,
   };
@@ -595,9 +603,22 @@ const formatCardForClient = (req, p) => {
     : null;
   const localizedDescription =
     (descriptionByLang && descriptionByLang[uiLang]) ||
+    (descriptionByLang && descriptionByLang.en) ||
     (descriptionByLang && descriptionByLang.ru) ||
     p.description ||
     null;
+  const tagsByLang = p.tags_i18n && typeof p.tags_i18n === 'object'
+    ? p.tags_i18n
+    : null;
+  const localizedTags = (
+    (tagsByLang && Array.isArray(tagsByLang[uiLang]) && tagsByLang[uiLang]) ||
+    (tagsByLang && Array.isArray(tagsByLang.en) && tagsByLang.en) ||
+    (tagsByLang && Array.isArray(tagsByLang.ru) && tagsByLang.ru) ||
+    (Array.isArray(p.tags) ? p.tags : [])
+  )
+    .map((v) => String(v || '').trim())
+    .filter(Boolean)
+    .slice(0, 4);
   return {
     id: p.id,
     // Левые поля (география)
@@ -632,9 +653,7 @@ const formatCardForClient = (req, p) => {
     listing_status: listingStatus,
     has_parking: p.has_parking === true,
     has_pool: p.has_pool === true,
-    tags: Array.isArray(p.tags)
-      ? p.tags.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 4)
-      : [],
+    tags: localizedTags,
     // Изображение
     images,
     image,

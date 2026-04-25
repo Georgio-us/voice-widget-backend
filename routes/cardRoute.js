@@ -115,6 +115,13 @@ const normalizeProperty = (p, uiLang = 'ru') => {
   const tags = Array.isArray(rawObj?.tags)
     ? rawObj.tags.map((v) => toText(v)).filter(Boolean).slice(0, 4)
     : [];
+  const tagsI18n = rawObj?.tagsI18n && typeof rawObj.tagsI18n === 'object'
+    ? {
+        ru: Array.isArray(rawObj.tagsI18n.ru) ? rawObj.tagsI18n.ru.map((v) => toText(v)).filter(Boolean) : [],
+        en: Array.isArray(rawObj.tagsI18n.en) ? rawObj.tagsI18n.en.map((v) => toText(v)).filter(Boolean) : [],
+        es: Array.isArray(rawObj.tagsI18n.es) ? rawObj.tagsI18n.es.map((v) => toText(v)).filter(Boolean) : []
+      }
+    : null;
   const year_built = toInt(p.building_year ?? rawObj?.yearBuild);
   const orientation = toText(rawObj?.orientation);
   const distance_beach = toInt(rawObj?.distanceBeach);
@@ -126,9 +133,16 @@ const normalizeProperty = (p, uiLang = 'ru') => {
     : null;
   const description = toText(
     (descriptionI18n && descriptionI18n[uiLang]) ||
+    (descriptionI18n && descriptionI18n.en) ||
     (descriptionI18n && descriptionI18n.ru) ||
     p.description
   );
+  const localizedTags = (
+    (tagsI18n && Array.isArray(tagsI18n[uiLang]) && tagsI18n[uiLang]) ||
+    (tagsI18n && Array.isArray(tagsI18n.en) && tagsI18n.en) ||
+    (tagsI18n && Array.isArray(tagsI18n.ru) && tagsI18n.ru) ||
+    tags
+  ).slice(0, 4);
 
   return {
     id,
@@ -163,7 +177,7 @@ const normalizeProperty = (p, uiLang = 'ru') => {
     // texts
     title,
     description,
-    tags,
+    tags: localizedTags,
 
     // images
     images

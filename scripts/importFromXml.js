@@ -96,6 +96,23 @@ const extractTagLabels = (propertyXml) => {
   return Array.from(new Set(labels));
 };
 
+const extractTagLabelsI18n = (propertyXml, langs = ['ru', 'en', 'es']) => {
+  const tagsNode = extractTag(propertyXml, 'tags');
+  const out = Object.fromEntries(langs.map((lang) => [lang, []]));
+  if (!tagsNode) return out;
+  const tagNodes = extractTags(tagsNode, 'tag');
+  for (const tagNode of tagNodes) {
+    for (const lang of langs) {
+      const value = normalizeTagLabel(extractTag(tagNode, lang));
+      if (value) out[lang].push(value);
+    }
+  }
+  for (const lang of langs) {
+    out[lang] = Array.from(new Set(out[lang]));
+  }
+  return out;
+};
+
 const extractLocalizedText = (propertyXml, tagName) => {
   const node = extractTag(propertyXml, tagName);
   if (!node) return null;
@@ -325,6 +342,7 @@ async function run() {
     const surfaceNode = extractTag(block, 'surface_area');
     const urlNode = extractTag(block, 'url');
     const tags = extractTagLabels(block);
+    const tagsI18n = extractTagLabelsI18n(block, ['ru', 'en', 'es']);
 
     const priceFreqRaw = toText(extractTag(block, 'price_freq'));
     const operation = normalizeOperation(priceFreqRaw);
@@ -374,6 +392,7 @@ async function run() {
         distanceGolfMed: extractDistanceMed(block, 'distance_golf'),
         distanceAmenities: toNumber(extractTag(block, 'distance_amenities')),
         distanceAmenitiesMed: extractDistanceMed(block, 'distance_amenities'),
+        tagsI18n,
         tags,
         url: pickLang(urlNode, ['en', 'es', 'ru'])
       }
