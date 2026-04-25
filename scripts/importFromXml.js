@@ -70,6 +70,23 @@ const pickAnyLang = (nodeXml) => {
   return pickLang(nodeXml, ['en', 'es', 'ru', 'no', 'de', 'fr', 'it', 'nl', 'da', 'fi', 'is', 'se', 'zh', 'pl', 'ca']);
 };
 
+const normalizeTagLabel = (v) => {
+  const s = toText(v);
+  if (!s) return null;
+  return s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || null;
+};
+
+const extractTagLabels = (propertyXml) => {
+  const tagsNode = extractTag(propertyXml, 'tags');
+  if (!tagsNode) return [];
+  const tagNodes = extractTags(tagsNode, 'tag');
+  const labels = tagNodes
+    .map((tagNode) => pickLang(tagNode, ['en', 'es', 'ru']) || pickAnyLang(tagNode) || normalizeTagLabel(tagNode))
+    .map(normalizeTagLabel)
+    .filter(Boolean);
+  return Array.from(new Set(labels));
+};
+
 const normalizeOperation = (priceFreqRaw) => {
   const f = String(priceFreqRaw || '').trim().toLowerCase();
   if (f === 'week') return 'rent';
@@ -274,6 +291,7 @@ async function run() {
     const descNode = extractTag(block, 'desc');
     const surfaceNode = extractTag(block, 'surface_area');
     const urlNode = extractTag(block, 'url');
+    const tags = extractTagLabels(block);
 
     const priceFreqRaw = toText(extractTag(block, 'price_freq'));
     const operation = normalizeOperation(priceFreqRaw);
@@ -302,6 +320,7 @@ async function run() {
       description: pickLang(descNode, ['ru', 'en', 'es']),
       yearBuild: toInt4(extractTag(block, 'year_build')),
       images: extractImages(block),
+      tags,
       raw: {
         source: 'xml-mediaelx',
         feedUrl: FEED_URL,
@@ -309,6 +328,7 @@ async function run() {
         id: toText(extractTag(block, 'id')),
         ref: toText(extractTag(block, 'ref')),
         priceFreq: priceFreqRaw,
+        tags,
         url: pickLang(urlNode, ['en', 'es', 'ru'])
       }
     };

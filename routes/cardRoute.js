@@ -94,6 +94,14 @@ const normalizeProperty = (p) => {
   // ---------- texts ----------
   const title = toText(p.title);
   const description = toText(p.description);
+  const rawObj = p.raw && typeof p.raw === 'object'
+    ? p.raw
+    : (typeof p.raw === 'string'
+        ? (() => { try { return JSON.parse(p.raw); } catch { return null; } })()
+        : null);
+  const tags = Array.isArray(rawObj?.tags)
+    ? rawObj.tags.map((v) => toText(v)).filter(Boolean).slice(0, 4)
+    : [];
 
   return {
     id,
@@ -122,6 +130,7 @@ const normalizeProperty = (p) => {
     // texts
     title,
     description,
+    tags,
 
     // images
     images

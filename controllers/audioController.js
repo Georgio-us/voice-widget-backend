@@ -466,6 +466,14 @@ const mapRowToProperty = (row) => {
     : (typeof row.images === 'string'
         ? (() => { try { return JSON.parse(row.images); } catch { return []; } })()
         : []);
+  const rawObj = row.raw && typeof row.raw === 'object'
+    ? row.raw
+    : (typeof row.raw === 'string'
+        ? (() => { try { return JSON.parse(row.raw); } catch { return null; } })()
+        : null);
+  const tags = Array.isArray(rawObj?.tags)
+    ? rawObj.tags.map((v) => String(v || '').trim()).filter(Boolean)
+    : [];
   return {
     // важный момент: используем external_id как основной id (совместимость со старым фронтом)
     id: row.external_id || String(row.id),
@@ -486,6 +494,7 @@ const mapRowToProperty = (row) => {
     is_new_build: row.is_new_build === true,
     description: row.description || null,
     images,
+    tags,
   };
 };
 
@@ -547,6 +556,9 @@ const formatCardForClient = (req, p) => {
     listing_status: listingStatus,
     has_parking: p.has_parking === true,
     has_pool: p.has_pool === true,
+    tags: Array.isArray(p.tags)
+      ? p.tags.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 4)
+      : [],
     // Изображение
     images,
     image,
