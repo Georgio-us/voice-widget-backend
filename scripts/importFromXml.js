@@ -102,6 +102,16 @@ const extractLocalizedText = (propertyXml, tagName) => {
   return pickLang(node, ['en', 'es', 'ru']) || pickAnyLang(node) || toText(node);
 };
 
+const extractLangMap = (nodeXml, langs = ['ru', 'en', 'es']) => {
+  const out = {};
+  if (!nodeXml) return out;
+  for (const lang of langs) {
+    const value = toText(extractTag(nodeXml, lang));
+    if (value) out[lang] = value;
+  }
+  return out;
+};
+
 const extractDistanceMed = (propertyXml, baseTag) => {
   const direct = toText(extractTag(propertyXml, `${baseTag}_med`));
   if (direct) return direct;
@@ -352,6 +362,7 @@ async function run() {
         id: toText(extractTag(block, 'id')),
         ref: toText(extractTag(block, 'ref')),
         priceFreq: priceFreqRaw,
+        descriptionI18n: extractLangMap(descNode, ['ru', 'en', 'es']),
         yearBuild: toInt4(extractTag(block, 'year_build')),
         terrace: toInt4(extractTag(surfaceNode || '', 'terrace')),
         orientation: extractLocalizedText(block, 'orientation'),

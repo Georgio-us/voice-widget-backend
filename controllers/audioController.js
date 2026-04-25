@@ -514,6 +514,20 @@ const mapRowToProperty = (row) => {
     has_pool: row.has_pool === true,
     is_new_build: row.is_new_build === true,
     description: row.description || null,
+    description_i18n: (() => {
+      const src = rawObj?.descriptionI18n && typeof rawObj.descriptionI18n === 'object'
+        ? rawObj.descriptionI18n
+        : rawObj;
+      const ru = src?.ru ?? src?.description_ru ?? null;
+      const en = src?.en ?? src?.description_en ?? null;
+      const es = src?.es ?? src?.description_es ?? null;
+      if (!ru && !en && !es) return null;
+      return {
+        ru: ru ? String(ru).trim() : null,
+        en: en ? String(en).trim() : null,
+        es: es ? String(es).trim() : null
+      };
+    })(),
     images,
     tags,
   };
@@ -540,7 +554,29 @@ const getBaseUrl = (req) => {
   return host ? `${proto}://${host}` : '';
 };
 
+const normalizeUiLang = (v) => {
+  const s = String(v || '').trim().slice(0, 2).toLowerCase();
+  if (s === 'en' || s === 'es') return s;
+  return 'ru';
+};
+
+const getRequestUiLang = (req) => {
+  const bodyLang = req?.body?.lang || req?.body?.language;
+  if (bodyLang) return normalizeUiLang(bodyLang);
+  const queryLang = req?.query?.lang || req?.query?.language;
+  if (queryLang) return normalizeUiLang(queryLang);
+  const sid = req?.body?.sessionId || req?.query?.sessionId;
+  if (sid && sessions.has(sid)) {
+    const sessionLang = sessions.get(sid)?.clientProfile?.language;
+    if (sessionLang) return normalizeUiLang(sessionLang);
+  }
+  const headerLang = req?.headers?.['x-widget-lang'] || req?.headers?.['accept-language'];
+  if (headerLang) return normalizeUiLang(String(headerLang).split(',')[0]);
+  return 'ru';
+};
+
 const formatCardForClient = (req, p) => {
+  const uiLang = getRequestUiLang(req);
   const baseUrl = getBaseUrl(req);
   const images = Array.isArray(p.images)
     ? p.images
@@ -554,6 +590,14 @@ const formatCardForClient = (req, p) => {
   const listingStatus = op === 'rent'
     ? 'RENT'
     : (p.is_new_build === true ? 'NEW BUILD' : 'RESALE');
+  const descriptionByLang = p.description_i18n && typeof p.description_i18n === 'object'
+    ? p.description_i18n
+    : null;
+  const localizedDescription =
+    (descriptionByLang && descriptionByLang[uiLang]) ||
+    (descriptionByLang && descriptionByLang.ru) ||
+    p.description ||
+    null;
   return {
     id: p.id,
     // Левые поля (география)
@@ -577,7 +621,7 @@ const formatCardForClient = (req, p) => {
     distance_amenities: p.distance_amenities ?? null,
     distance_amenities_med: p.distance_amenities_med ?? null,
     // Дополнительные поля для back-стороны карточки
-    description: p.description ?? null,
+    description: localizedDescription,
     area_m2: p.area_m2 ?? p?.specs?.area_m2 ?? null,
     plot_m2: p.plot_m2 ?? null,
     terrace_m2: p.terrace_m2 ?? null,

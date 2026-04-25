@@ -6,13 +6,27 @@ import {
 
 const router = express.Router();
 
+const normalizeUiLang = (v) => {
+  const s = String(v || '').trim().slice(0, 2).toLowerCase();
+  if (s === 'en' || s === 'es') return s;
+  return 'ru';
+};
+
+const getRequestUiLang = (req) => {
+  const queryLang = req?.query?.lang || req?.query?.language;
+  if (queryLang) return normalizeUiLang(queryLang);
+  const headerLang = req?.headers?.['x-widget-lang'] || req?.headers?.['accept-language'];
+  if (headerLang) return normalizeUiLang(String(headerLang).split(',')[0]);
+  return 'ru';
+};
+
 /**
  * Нормализация объекта из БД (Postgres)
  * + поддержка legacy-формата (если где-то ещё используется)
  * + приведение типов (int / boolean), чтобы UI и фильтры работали корректно
  * + trim/cleanup строк (убираем пробелы из XLSX типа "A102 ")
  */
-const normalizeProperty = (p) => {
+const normalizeProperty = (p, uiLang = 'ru') => {
 
   // ---------- helpers ----------
   const toText = (v) => {
@@ -93,7 +107,6 @@ const normalizeProperty = (p) => {
 
   // ---------- texts ----------
   const title = toText(p.title);
-  const description = toText(p.description);
   const rawObj = p.raw && typeof p.raw === 'object'
     ? p.raw
     : (typeof p.raw === 'string'
@@ -156,6 +169,7 @@ const normalizeProperty = (p) => {
 // Поиск по фильтрам
 router.get('/search', async (req, res) => {
   try {
+    const uiLang = getRequestUiLang(req);
     const { city, district, rooms, type, minPrice, maxPrice, limit = 10 } = req.query;
 
     const toInt = (v) => (v == null ? null : parseInt(String(v), 10));
@@ -165,7 +179,7 @@ router.get('/search', async (req, res) => {
 
     // Берём все объекты клиента demo из БД
     const rawList = await getAllProperties();
-    let list = rawList.map(normalizeProperty);
+    let list = rawList.map((item) => normalizeProperty(item, uiLang));
 
     // ---------- filters ----------
     if (city) {
@@ -205,6 +219,7 @@ router.get('/search', async (req, res) => {
 // Получить карточку по external_id
 router.get('/:id', async (req, res) => {
   try {
+    const uiLang = getRequestUiLang(req);
     // trim+upper чтобы /A102%20 работало как /A102
     const requestedId = String(req.params.id || '').trim().toUpperCase();
 
@@ -214,7 +229,7 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Not found' });
     }
 
-    const item = normalizeProperty(raw);
+    const item = normalizeProperty(raw, uiLang);
     res.json(item);
   } catch (err) {
     console.error('❌ Ошибка в /api/cards/:id:', err);
@@ -223,3 +238,11 @@ router.get('/:id', async (req, res) => {
 });
 
 export default router;
+  const descriptionI18n = rawObj?.descriptionI18n && typeof rawObj.descriptionI18n === 'object'
+    ? rawObj.descriptionI18n
+    : null;
+  const description = toText(
+    (descriptionI18n && descriptionI18n[uiLang]) ||
+    (descriptionI18n && descriptionI18n.ru) ||
+    p.description
+  );
