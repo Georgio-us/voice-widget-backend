@@ -1240,6 +1240,45 @@ const updateInsights = (sessionId, newMessage) => {
     }
   }
 
+  // 🆕 Доп. поля для candidate query (без смены основной 9-полевой модели прогресса)
+  if (insights.bathrooms === undefined || insights.bathrooms === null || insights.bathrooms === '') {
+    const m = text.match(/(\d+)\s*(сануз|ванн|bath|bathroom|bañ|bano)/i);
+    if (m) insights.bathrooms = String(m[1]);
+  }
+  if (insights.floor === undefined || insights.floor === null || insights.floor === '') {
+    const m = text.match(/(\d+)\s*(этаж|floor|planta)/i);
+    if (m) insights.floor = String(m[1]);
+  }
+  if (insights.plotArea === undefined || insights.plotArea === null || insights.plotArea === '') {
+    const m = text.match(/(\d+)\s*(м2|m2|m²|м²)\s*(участ|plot|parcela)/i);
+    if (m) insights.plotArea = String(m[1]);
+  }
+  if (!insights.orientation) {
+    if (/(восток|east|este|\be\b)/i.test(text)) insights.orientation = 'east';
+    else if (/(запад|west|oeste|\bw\b|\bo\b)/i.test(text)) insights.orientation = 'west';
+    else if (/(север|north|norte|\bn\b)/i.test(text)) insights.orientation = 'north';
+    else if (/(юг|south|sur|\bs\b)/i.test(text)) insights.orientation = 'south';
+  }
+  if (!insights.distanceBeach) {
+    const m = text.match(/(\d+(?:[.,]\d+)?)\s*(км|km|м|m|mts|метр)[^\n]{0,24}(мор|beach|playa)/i);
+    if (m) insights.distanceBeach = `${m[1]} ${m[2]}`;
+  }
+  if (!insights.distanceAirport) {
+    const m = text.match(/(\d+(?:[.,]\d+)?)\s*(км|km|м|m|mts|метр)[^\n]{0,24}(аэропорт|airport|aeropuerto)/i);
+    if (m) insights.distanceAirport = `${m[1]} ${m[2]}`;
+  }
+  if (insights.hasParking !== true && /(паркинг|гараж|parking|garage|garaje)/i.test(text)) insights.hasParking = true;
+  if (insights.hasPool !== true && /(бассейн|pool|piscina)/i.test(text)) insights.hasPool = true;
+  if (insights.hasTerrace !== true && /(террас|terrace|terraza|balcony|балкон)/i.test(text)) insights.hasTerrace = true;
+  if (!insights.features) {
+    const f = [];
+    if (/(sea\s*view|вид\s*на\s*море|vistas?\s+al\s+mar)/i.test(text)) f.push('sea_view');
+    if (/(near\s+the\s+sea|near\s+sea|рядом\s+с\s+морем|у\s+моря|cerca\s+del\s+mar)/i.test(text)) f.push('near_sea');
+    if (/(pool\s*view|вид\s*на\s*бассейн|vistas?\s+pool)/i.test(text)) f.push('pool_view');
+    if (/(mountain\s*view|вид\s*на\s*горы|vistas?\s+monta)/i.test(text)) f.push('mountain_view');
+    if (f.length) insights.features = f;
+  }
+
   // 📊 Обновляем прогресс по системе весов фронтенда
   const weights = {
     // Блок 1: Основная информация (33.3%)

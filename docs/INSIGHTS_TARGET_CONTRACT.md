@@ -33,21 +33,24 @@ Rules:
 
 All fields used in search must be canonicalized before query build.
 
-### Canonical types
+### Canonical types (agreed set)
 
 - `operation`: enum `sale | rent`
 - `type`: slug enum (`apartment`, `villa`, `townhouse`, `penthouse`, `commercial`, ...)
-- `city`: string slug/text (normalized comparison form)
-- `province`: string slug/text
+- `location`: broad location object/string (city/province/district/coast zone)
 - `rooms`: integer
 - `bathrooms`: integer
 - `maxPrice`: integer (EUR)
 - `maxArea`: integer (`m2`)
 - `plotArea`: integer (`m2`)
+- `floor`: integer
 - `hasParking`: boolean
 - `hasPool`: boolean
 - `hasTerrace`: boolean
-- `orientation`: enum/text normalized (`north`, `south`, `east`, `west`, `ne`, ...)
+- `orientation`: enum/text normalized (`north`, `south`, `east`, `west`, ...)
+- `distanceBeachKmMax`: number
+- `distanceAirportKmMax`: number
+- `features[]`: normalized tag slugs
 
 ### Normalization principles
 
@@ -58,24 +61,29 @@ All fields used in search must be canonicalized before query build.
 
 ## 2) Insights We MUST Collect
 
-Target insight schema (AI-only):
+Target insight schema (AI-only, 16 fields in selection path):
 
-- `operation` (sale/rent)
-- `type`
-- `location.city`
-- `location.province`
-- `rooms`
-- `bathrooms` (optional but supported)
-- `budget.maxPrice`
-- `area.maxArea`
-- `features.hasParking`
-- `features.hasPool`
-- `features.hasTerrace`
-- `timeline.urgency` (dialog only; not mandatory for query)
+1. `operation`
+2. `type`
+3. `location` (city/province/district/zone)
+4. `rooms`
+5. `bathrooms`
+6. `maxPrice` (from budget)
+7. `maxArea` (built area)
+8. `plotArea`
+9. `floor`
+10. `hasParking`
+11. `hasPool`
+12. `hasTerrace`
+13. `orientation`
+14. `distanceBeachKmMax`
+15. `distanceAirportKmMax`
+16. `features[]`
 
 Notes:
 1. `name` stays CRM/dialog field; not part of search query.
-2. `details/preferences` remain optional free-text and are not allowed to bypass canonical filters.
+2. `details/preferences` are allowed as extraction sources for canonical fields.
+3. Explicitly excluded from selection contract for now: `distanceGolf`, `distanceAmenities`.
 
 ## 3) Front Contract (What Frontend Accepts)
 
@@ -96,17 +104,21 @@ Frontend display target:
 | Business field | Feed/source | Front receives | Insight key | Query key | Candidate match rule |
 |---|---|---|---|---|---|
 | Rooms | `beds` / normalized `specs_rooms` | `rooms` | `rooms` | `rooms` | `candidate.rooms == query.rooms` |
-| Bathrooms | `baths` / `specs_bathrooms` | `bathrooms` | `bathrooms` | `bathrooms` (phase 2) | `candidate.bathrooms >= query.bathrooms` or exact (to decide) |
+| Bathrooms | `baths` / `specs_bathrooms` | `bathrooms` | `bathrooms` | `bathrooms` | `candidate.bathrooms >= query.bathrooms` |
 | Operation | `price_freq` -> `sale/rent` | `operation` | `operation` | `operation` | `candidate.operation == query.operation` |
 | Property type | `type/*` | `property_type` | `type` | `type` | mapped slug equality |
-| City | `town` | `city` | `location.city` | `city` | normalized contains/equality |
-| Province | `province` | `province` | `location.province` | `province` | normalized equality |
-| Budget | `price` | `priceEUR` | `budget.maxPrice` | `maxPrice` | `candidate.priceEUR <= maxPrice` |
-| Built area | `surface_area/built` | `area_m2` | `area.maxArea` | `maxArea` | `candidate.area_m2 <= maxArea` |
-| Plot area | `surface_area/plot` | `plot_m2` | optional | `plotMin/plotMax` (phase 3) | range match |
-| Parking | `parking` / tags/features | `has_parking` | `features.hasParking` | `hasParking` | boolean strict |
-| Pool | `pool` / tags/features | `has_pool` | `features.hasPool` | `hasPool` | boolean strict |
-| Terrace | `terrace` | `terrace_m2` / derived bool | `features.hasTerrace` | `hasTerrace` | `terrace_m2 > 0` or boolean |
+| Location | `town/province/location_detail` | `city/province/neighborhood` | `location` | `location` | normalized contains in city+district+neighborhood |
+| Budget | `price` | `priceEUR` | `maxPrice` | `maxPrice` | `candidate.priceEUR <= maxPrice` |
+| Built area | `surface_area/built` | `area_m2` | `maxArea` | `maxArea` | `candidate.area_m2 <= maxArea` |
+| Plot area | `surface_area/plot` | `plot_m2` | `plotArea` | `plotArea` | `candidate.plot_m2 >= query.plotArea` |
+| Floor | `floor` | `floor` | `floor` | `floor` | `candidate.floor == query.floor` |
+| Parking | `parking` / tags/features | `has_parking` | `hasParking` | `hasParking` | boolean strict |
+| Pool | `pool` / tags/features | `has_pool` | `hasPool` | `hasPool` | boolean strict |
+| Terrace | `terrace` | `terrace_m2` / derived bool | `hasTerrace` | `hasTerrace` | `candidate.terrace_m2 > 0` |
+| Orientation | `orientation` | `orientation` | `orientation` | `orientation` | normalized equality |
+| Distance to beach | `distanceBeach + distanceBeachMed` | `distance_beach(_med)` | `distanceBeachKmMax` | `distanceBeachKmMax` | normalized to km, `<=` |
+| Distance to airport | `distanceAirport + distanceAirportMed` | `distance_airport(_med)` | `distanceAirportKmMax` | `distanceAirportKmMax` | normalized to km, `<=` |
+| Features/tags | `features[]/tags[]` | `tags[]` | `features[]` | `features[]` | all requested feature slugs must match candidate tags |
 
 ## 5) Query Builder Contract (Target)
 
@@ -150,12 +162,12 @@ Expected chain:
 
 1. Introduce one canonical query builder module in backend.
 2. Route all search candidate generation through this module.
-3. Apply strict fields: `operation`, `type`, `city/province`, `rooms`, `maxPrice`, `maxArea`, `hasParking`, `hasPool`, `hasTerrace`.
+3. Apply selection fields from agreed set: `operation`, `type`, `location`, `rooms`, `bathrooms`, `maxPrice`, `maxArea`, `plotArea`, `floor`, `hasParking`, `hasPool`, `hasTerrace`, `orientation`, `distanceBeachKmMax`, `distanceAirportKmMax`, `features[]`.
 4. Add pre/post query snapshots to debug.
 
 ### Phase 2
 
-1. Add bathrooms/plot/orientation filters where reliable.
+1. Tighten extraction quality for all 16 fields from real dialog cases.
 2. Add per-field drop reasons.
 3. Align frontend debug to backend query snapshots as source of truth.
 
@@ -171,4 +183,3 @@ System is considered aligned when:
 2. same input insights always produce same post-validation query;
 3. candidate output is explainable against that query;
 4. debug shows real runtime chain from insights to matched cards.
-
