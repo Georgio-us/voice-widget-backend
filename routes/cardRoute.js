@@ -121,6 +121,14 @@ const normalizeProperty = (p, uiLang = 'ru') => {
   const distance_airport = toInt(rawObj?.distanceAirport);
   const distance_golf = toInt(rawObj?.distanceGolf);
   const distance_amenities = toInt(rawObj?.distanceAmenities);
+  const descriptionI18n = rawObj?.descriptionI18n && typeof rawObj.descriptionI18n === 'object'
+    ? rawObj.descriptionI18n
+    : null;
+  const description = toText(
+    (descriptionI18n && descriptionI18n[uiLang]) ||
+    (descriptionI18n && descriptionI18n.ru) ||
+    p.description
+  );
 
   return {
     id,
@@ -238,11 +246,3 @@ router.get('/:id', async (req, res) => {
 });
 
 export default router;
-  const descriptionI18n = rawObj?.descriptionI18n && typeof rawObj.descriptionI18n === 'object'
-    ? rawObj.descriptionI18n
-    : null;
-  const description = toText(
-    (descriptionI18n && descriptionI18n[uiLang]) ||
-    (descriptionI18n && descriptionI18n.ru) ||
-    p.description
-  );
