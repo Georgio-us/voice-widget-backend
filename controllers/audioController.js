@@ -474,6 +474,11 @@ const mapRowToProperty = (row) => {
   const tags = Array.isArray(rawObj?.tags)
     ? rawObj.tags.map((v) => String(v || '').trim()).filter(Boolean)
     : [];
+  const toInt = (v) => {
+    if (v === null || v === undefined) return null;
+    const n = Number.parseInt(String(v), 10);
+    return Number.isFinite(n) ? n : null;
+  };
   return {
     // важный момент: используем external_id как основной id (совместимость со старым фронтом)
     id: row.external_id || String(row.id),
@@ -489,6 +494,12 @@ const mapRowToProperty = (row) => {
     area_m2: row.specs_area_m2 != null ? Number(row.specs_area_m2) : null,
     plot_m2: row.specs_plot_m2 != null ? Number(row.specs_plot_m2) : null,
     floor: row.specs_floor != null ? Number(row.specs_floor) : null,
+    year_built: row.building_year != null ? Number(row.building_year) : toInt(rawObj?.yearBuild),
+    orientation: rawObj?.orientation ? String(rawObj.orientation).trim() : null,
+    distance_beach: toInt(rawObj?.distanceBeach),
+    distance_airport: toInt(rawObj?.distanceAirport),
+    distance_golf: toInt(rawObj?.distanceGolf),
+    distance_amenities: toInt(rawObj?.distanceAmenities),
     has_parking: row.has_parking === true,
     has_pool: row.has_pool === true,
     is_new_build: row.is_new_build === true,
@@ -545,6 +556,12 @@ const formatCardForClient = (req, p) => {
     priceEUR: p.priceEUR ?? p?.price?.amount ?? null,
     rooms: p.rooms ?? p?.specs?.rooms ?? null,
     floor: p.floor ?? p?.specs?.floor ?? null,
+    year_built: p.year_built ?? null,
+    orientation: p.orientation ?? null,
+    distance_beach: p.distance_beach ?? null,
+    distance_airport: p.distance_airport ?? null,
+    distance_golf: p.distance_golf ?? null,
+    distance_amenities: p.distance_amenities ?? null,
     // Дополнительные поля для back-стороны карточки
     description: p.description ?? null,
     area_m2: p.area_m2 ?? p?.specs?.area_m2 ?? null,

@@ -102,6 +102,12 @@ const normalizeProperty = (p) => {
   const tags = Array.isArray(rawObj?.tags)
     ? rawObj.tags.map((v) => toText(v)).filter(Boolean).slice(0, 4)
     : [];
+  const year_built = toInt(p.building_year ?? rawObj?.yearBuild);
+  const orientation = toText(rawObj?.orientation);
+  const distance_beach = toInt(rawObj?.distanceBeach);
+  const distance_airport = toInt(rawObj?.distanceAirport);
+  const distance_golf = toInt(rawObj?.distanceGolf);
+  const distance_amenities = toInt(rawObj?.distanceAmenities);
 
   return {
     id,
@@ -122,6 +128,12 @@ const normalizeProperty = (p) => {
     floor,
     balcony,
     terrace,
+    year_built,
+    orientation,
+    distance_beach,
+    distance_airport,
+    distance_golf,
+    distance_amenities,
 
     // price
     priceEUR,

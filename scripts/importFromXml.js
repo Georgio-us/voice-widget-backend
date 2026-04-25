@@ -87,6 +87,12 @@ const extractTagLabels = (propertyXml) => {
   return Array.from(new Set(labels));
 };
 
+const extractLocalizedText = (propertyXml, tagName) => {
+  const node = extractTag(propertyXml, tagName);
+  if (!node) return null;
+  return pickLang(node, ['en', 'es', 'ru']) || pickAnyLang(node) || toText(node);
+};
+
 const normalizeOperation = (priceFreqRaw) => {
   const f = String(priceFreqRaw || '').trim().toLowerCase();
   if (f === 'week') return 'rent';
@@ -328,6 +334,12 @@ async function run() {
         id: toText(extractTag(block, 'id')),
         ref: toText(extractTag(block, 'ref')),
         priceFreq: priceFreqRaw,
+        yearBuild: toInt4(extractTag(block, 'year_build')),
+        orientation: extractLocalizedText(block, 'orientation'),
+        distanceBeach: toInt4(extractTag(block, 'distance_beach')),
+        distanceAirport: toInt4(extractTag(block, 'distance_airport')),
+        distanceGolf: toInt4(extractTag(block, 'distance_golf')),
+        distanceAmenities: toInt4(extractTag(block, 'distance_amenities')),
         tags,
         url: pickLang(urlNode, ['en', 'es', 'ru'])
       }
