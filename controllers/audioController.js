@@ -498,7 +498,7 @@ const mapRowToProperty = (row) => {
     bathrooms: row.specs_bathrooms != null ? Number(row.specs_bathrooms) : null,
     area_m2: row.specs_area_m2 != null ? Number(row.specs_area_m2) : null,
     plot_m2: row.specs_plot_m2 != null ? Number(row.specs_plot_m2) : null,
-    terrace_m2: row.specs_terrace != null ? Number(row.specs_terrace) : toInt(rawObj?.terrace),
+    terrace_m2: toInt(rawObj?.terrace),
     floor: row.specs_floor != null ? Number(row.specs_floor) : null,
     year_built: row.building_year != null ? Number(row.building_year) : toInt(rawObj?.yearBuild),
     orientation: rawObj?.orientation ? String(rawObj.orientation).trim() : null,

@@ -265,7 +265,7 @@ async function upsertProperty(record) {
       record.hasPool,
       record.isNewBuild,
       null,
-      record.areaTerrace,
+      null,
 
       record.title,
       record.description,
