@@ -58,18 +58,13 @@ const normalizeOperation = (v) => {
 const normalizePropertyType = (v) => {
   const s = normalizeText(v);
   if (!s) return null;
-  const map = [
-    [/\b(apartment|apartamento|apartament|квартир|piso)\b/, 'apartment'],
-    [/\b(villa|вилл|casa)\b/, 'villa'],
-    [/\b(penthouse|atico|пентхаус)\b/, 'penthouse'],
-    [/\b(townhouse|adosado|таунхаус)\b/, 'townhouse'],
-    [/\b(commercial|local|коммерц)\b/, 'commercial'],
-    [/\b(studio|estudio|студи)\b/, 'studio'],
-    [/\b(room|habitacion|комнат)\b/, 'room']
-  ];
-  for (const [re, slug] of map) {
-    if (re.test(s)) return slug;
-  }
+  if (/(apartment|apartamento|apartament|piso|квартир|апартамент)/.test(s)) return 'apartment';
+  if (/(villa|casa|вилл|дом)/.test(s)) return 'villa';
+  if (/(penthouse|atico|атико|пентхаус)/.test(s)) return 'penthouse';
+  if (/(townhouse|adosado|таунхаус)/.test(s)) return 'townhouse';
+  if (/(commercial|local|коммерц)/.test(s)) return 'commercial';
+  if (/(studio|estudio|студи)/.test(s)) return 'studio';
+  if (/(room|habitacion|комнат)/.test(s)) return 'room';
   return s;
 };
 

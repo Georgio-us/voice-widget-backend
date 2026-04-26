@@ -971,45 +971,19 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
     }
   }
 
-  // 3. 💰 Тип операции (покупка/аренда) — RU + EN + ES
-  if (!insights.operation) {
-    const operationPatterns = [
-      // RU покупка
-      /(купить|покуп[каеи]|куплю|приобрести|приобретение)/i,
-      /(покупк[аеуи]|в\s*покупку)/i,
-      /(купил|хочу\s+купить|планирую\s+купить)/i,
-      /(инвестиц|инвестировать)/i,
-      // RU аренда
-      /(снять|аренд[аеуио]*|арендовать|сдать)/i,
-      /(в\s*аренду|на\s*аренду|под\s*аренду)/i,
-      /(съем|снимать|найм)/i,
-      // EN
-      /\b(buy|buying|purchase|purchasing|invest|investment)\b/i,
-      /\b(rent|renting|lease|leasing|rental)\b/i,
-      // ES
-      /\b(comprar|compra|invertir|inversi[oó]n)\b/i,
-      /\b(alquilar|alquiler|arrendar|arriendo)\b/i
-    ];
+  // 3. 💰 Тип операции (покупка/аренда) — explicit > default(sale)
+  const hasRentIntent = /(снять|аренд[аеуио]*|арендовать|сдать|в\s*аренду|на\s*аренду|под\s*аренду|съем|снимать|найм|\b(rent|renting|lease|leasing|rental)\b|\b(alquilar|alquiler|arrendar|arriendo)\b)/i.test(text);
+  const hasSaleIntent = /(купить|покуп[каеи]|куплю|приобрести|приобретение|покупк[аеуи]|в\s*покупку|купил|хочу\s+купить|планирую\s+купить|инвестиц|инвестировать|\b(buy|buying|purchase|purchasing|invest|investment)\b|\b(comprar|compra|invertir|inversi[oó]n)\b)/i.test(text);
 
-    for (const pattern of operationPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const matched = (match[1] || match[0]).toLowerCase();
-        if (/купи|покуп|приобр|инвест|buy|purchase|invest|comprar|compra|invertir/.test(matched)) {
-          if (/купи|покуп|приобр|инвест/.test(matched)) insights.operation = 'покупка';
-          else if (/buy|purchase|invest/.test(matched)) insights.operation = 'buy';
-          else insights.operation = 'compra';
-        } else if (/снять|аренд|съем|найм|rent|lease|alquilar|alquiler|arrendar/.test(matched)) {
-          if (/снять|аренд|съем|найм/.test(matched)) insights.operation = 'аренда';
-          else if (/rent|lease/.test(matched)) insights.operation = 'rent';
-          else insights.operation = 'alquiler';
-        }
-        if (insights.operation) {
-          console.log(`✅ Найдена операция: ${insights.operation}`);
-          break;
-        }
-      }
-    }
+  if (hasRentIntent) {
+    insights.operation = 'аренда';
+    console.log(`✅ Найдена операция: ${insights.operation}`);
+  } else if (hasSaleIntent) {
+    insights.operation = 'покупка';
+    console.log(`✅ Найдена операция: ${insights.operation}`);
+  } else if (!insights.operation) {
+    insights.operation = 'покупка'; // default: sale
+    console.log(`✅ Операция по умолчанию: ${insights.operation}`);
   }
 
   // 4. 💵 Бюджет — RU + EN + ES
