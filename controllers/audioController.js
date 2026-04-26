@@ -986,68 +986,111 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
     console.log(`✅ Операция по умолчанию: ${insights.operation}`);
   }
 
-  // 4. 💵 Бюджет — RU + EN + ES
+  // 4. 💵 Бюджет — контекст + диапазоны + operation
   if (!insights.budget) {
-    // Если площадь уже известна, извлекаем её числовое значение,
-    // чтобы не дублировать одно и то же число как budget и area.
-    let areaNumber = null;
-    if (insights.area && typeof insights.area === 'string') {
-      const m = insights.area.match(/(\d+)/);
-      if (m) {
-        const n = Number(m[1]);
-        if (!Number.isNaN(n)) areaNumber = n;
+    const opNorm = insights.operation === 'аренда' ? 'rent' : 'sale';
+    const lower = String(text || '').toLowerCase();
+
+    const budgetMarkerRe = /(бюджет|стоимост|цена|price|budget|cost|presupuesto|precio|до|от|around|about|up\s*to|hasta|max|maximum|minimum|minimo|min|maximo|aprox|примерно|около|где-?то|в\s*месяц|per\s*month|al\s*mes)/i;
+    const currencyOrKRe = /(€|евро|eur|euro|k|к|тыс\.?|тысяч|thousand|mil(?:es)?)/i;
+    const areaMarkerRe = /(м2|м²|кв\.?\s*м|квадрат|метр|sqm|sq\.?\s*m|metros?\s*cuadr)/i;
+    const roomsMarkerRe = /(комнат|спальн|bedroom|bedrooms|habitaci[oó]n|habitaciones|dormitorio|rooms?\b)/i;
+
+    const parseNumeric = (rawNum, rawSuffix = '') => {
+      let token = String(rawNum || '').trim();
+      if (!token) return null;
+      token = token.replace(/\s+/g, '');
+      let value;
+      if (/^\d{1,3}(?:[.,]\d{3})+$/.test(token)) value = Number(token.replace(/[.,]/g, ''));
+      else value = Number(token.replace(',', '.'));
+      if (!Number.isFinite(value)) return null;
+      value = Math.round(value);
+
+      const suffix = String(rawSuffix || '').toLowerCase();
+      const hasThousandSuffix = /(k|к|тыс|тысяч|thousand|mil)/i.test(suffix);
+      if (hasThousandSuffix && value < 10000) value = value * 1000;
+      return value;
+    };
+
+    const shouldAcceptBudget = (value, hasBudgetContext) => {
+      if (!Number.isFinite(value) || value <= 0) return false;
+      if (opNorm === 'sale') {
+        if (value < 10000) return false;
+        return hasBudgetContext || value >= 10000;
+      }
+      // rent
+      if (value < 1000) return false;
+      if (value <= 9999) return hasBudgetContext;
+      return true;
+    };
+
+    const candidates = [];
+    const addCandidate = (value, index, matchedText, strongContext = false) => {
+      if (!Number.isFinite(value)) return;
+      const from = Math.max(0, index - 24);
+      const to = Math.min(lower.length, index + String(matchedText || '').length + 24);
+      const windowText = lower.slice(from, to);
+      const hasBudgetContext = strongContext || budgetMarkerRe.test(windowText) || currencyOrKRe.test(windowText);
+      const hasAreaContext = areaMarkerRe.test(windowText);
+      const hasRoomsContext = roomsMarkerRe.test(windowText);
+      if ((hasAreaContext || hasRoomsContext) && !hasBudgetContext) return;
+      if (!shouldAcceptBudget(value, hasBudgetContext)) return;
+      candidates.push({ value, index, hasBudgetContext });
+    };
+
+    const patterns = [
+      {
+        re: /(бюджет|budget|presupuesto|цена|price|стоимость)[^\d]{0,18}(\d+(?:[ \t.,]\d{3})*|\d+)(?:\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?))?\s*(€|евро|eur|euro)?/gi,
+        getValue: (m) => parseNumeric(m[2], `${m[3] || ''} ${m[4] || ''}`),
+        strongContext: true
+      },
+      {
+        re: /(\d+(?:[ \t.,]\d{3})*|\d+)(?:\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?))?\s*(€|евро|eur|euro)\b/gi,
+        getValue: (m) => parseNumeric(m[1], `${m[2] || ''} ${m[3] || ''}`),
+        strongContext: true
+      },
+      {
+        re: /(\d+(?:[ \t.,]\d{3})*|\d+)(?:\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?))?[^\n]{0,14}(бюджет|budget|presupuesto|цена|price|стоимость)/gi,
+        getValue: (m) => parseNumeric(m[1], m[2] || ''),
+        strongContext: true
+      },
+      {
+        re: /(от|до|around|about|up\s*to|hasta|aprox(?:imadamente)?|примерно|около|где-?то)[^\d]{0,10}(\d+(?:[ \t.,]\d{3})*|\d+)(?:\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?))?\s*(€|евро|eur|euro)?/gi,
+        getValue: (m) => parseNumeric(m[2], `${m[3] || ''} ${m[4] || ''}`),
+        strongContext: false
+      }
+    ];
+
+    for (const rule of patterns) {
+      let m;
+      while ((m = rule.re.exec(text)) !== null) {
+        const value = rule.getValue(m);
+        addCandidate(value, m.index, m[0], rule.strongContext);
       }
     }
 
-    const budgetPatterns = [
-      // RU
-      /(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i,
-      /(\d+[\d\s]*)\s*(евро|€|euro)/i,
-      /(от\s*)?(\d+)[\s-]*(\d+)?\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i,
-      /(около|примерно|где-?то|приблизительно)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)?\s*(евро|€|euro)?/i,
-      /(до|максимум|не\s*больше)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i,
-      // EN
-      /(\d+[\d\s,]*)\s*(thousand|k)\s*(euro|€|eur)?/i,
-      /(\d+[\d\s,]*)\s*(euro|€|eur)/i,
-      /(up\s*to|max|around|about)\s*(\d+[\d\s,]*)\s*(k|thousand)?\s*(euro|€)?/i,
-      // ES
-      /(\d+[\d\s.]*)\s*(mil|miles|k)\s*(euro|€|eur)?/i,
-      /(\d+[\d\s.]*)\s*(euro|€|eur)/i,
-      /(hasta|m[aá]ximo|alrededor\s*de|unos?)\s*(\d+[\d\s.]*)\s*(mil|k)?\s*(euro|€)?/i
-    ];
-
-    for (const pattern of budgetPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        let amount = '';
-        let numberIndex = 1;
-        for (let i = 1; i < match.length; i++) {
-          if (match[i] && /\d/.test(match[i])) {
-            numberIndex = i;
-            break;
-          }
-        }
-        let number = match[numberIndex];
-        if (number) {
-          number = number.replace(/[\s,]/g, '');
-          const raw = match[0].toLowerCase();
-          if (/^\d+\.\d{3}$/.test(number)) number = number.replace('.', '');
-          const isThousands = /тысяч|тыс|\bк\b|\bk\b|\dк\b|\dk\b|thousand|mil|miles/.test(raw) && !/^\d+0{3,}$/.test(number);
-          amount = isThousands ? `${number}000` : number;
-
-          // Если найденный бюджет по числу совпадает с уже известной площадью — пропускаем,
-          // чтобы одно и то же число (например, 45) не стало и area, и budget.
-          const amountNumber = Number(amount);
-          if (!Number.isNaN(amountNumber) && areaNumber != null && amountNumber === areaNumber) {
-            console.log(`⚠️ Пропускаем бюджет ${amountNumber} €, так как совпадает с площадью ${insights.area}`);
-            break;
-          }
-
-          insights.budget = `${amount} €`;
-          console.log(`✅ Найден бюджет: ${insights.budget}`);
-          break;
-        }
+    // fallback по диапазонам, если бюджетный контекст есть, но регулярки выше не сработали
+    if (!candidates.length && budgetMarkerRe.test(lower)) {
+      const nums = String(text).match(/\d+(?:[ \t.,]\d{3})*|\d+/g) || [];
+      for (const rawNum of nums) {
+        const value = parseNumeric(rawNum, '');
+        if (!Number.isFinite(value)) continue;
+        if (value >= 1 && value <= 9) continue; // rooms
+        if (value >= 10 && value <= 999) continue; // area
+        if (opNorm === 'sale' && value < 10000) continue;
+        if (opNorm === 'rent' && value < 1000) continue;
+        candidates.push({ value, index: lower.indexOf(rawNum), hasBudgetContext: true });
       }
+    }
+
+    if (candidates.length) {
+      candidates.sort((a, b) => {
+        if (a.hasBudgetContext !== b.hasBudgetContext) return a.hasBudgetContext ? -1 : 1;
+        return a.index - b.index;
+      });
+      const best = candidates[0];
+      insights.budget = `${best.value} €`;
+      console.log(`✅ Найден бюджет: ${insights.budget}`);
     }
   }
 
