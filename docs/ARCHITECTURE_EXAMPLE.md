@@ -93,3 +93,15 @@ Applied:
 Result:
 
 Debug chain focuses on business fields only; budget shorthand is normalized more reliably for query building.
+
+### Iteration 3 (2026-04-26)
+
+Applied:
+
+1. Candidate pool is now built on every turn (not only on explicit `show` intent).
+2. `queryTraceV1` now carries candidate ids for deterministic debug pool visibility.
+3. Location extraction switched from Valencia-specific regex list to feed-driven lexicon (DB + aliases).
+
+Result:
+
+`Candidate pool` in debug is available as soon as at least one meaningful insight is extracted, and location matching is aligned with feed locations.

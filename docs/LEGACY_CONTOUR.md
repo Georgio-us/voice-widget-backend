@@ -75,6 +75,17 @@ Search-related cleanup:
 
 1. Backend extraction no longer recalculates/persists `insights.progress`.
 
+### Iteration 3 (2026-04-26)
+
+Removed from active extraction strategy:
+
+1. Valencia-only location regex dictionary as primary location source.
+
+Replaced with:
+
+1. Feed-driven location lexicon (loaded from DB rows, cached).
+2. Thin alias layer for common RU variants (Torrevieja/Calpe/Alicante/etc).
+
 ## Practical Decision For Next Iterations
 
 1. No full deletion required in one step.

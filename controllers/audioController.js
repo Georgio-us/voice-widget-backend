@@ -779,8 +779,85 @@ const addPostHandoffEnrichment = (session, source, content, meta = {}) => {
   console.log(`📝 [Sprint III] Post-handoff enrichment добавлен (source: ${source}, сессия ${session.sessionId?.slice(-8) || 'unknown'})`);
 };
 
-// 🧠 Улучшенная функция извлечения insights (9 параметров)
-const updateInsights = (sessionId, newMessage) => {
+const normalizeLookupText = (value) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/[^\p{L}\p{N}\s-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+let locationLexiconCache = { ts: 0, list: [] };
+
+const buildLocationLexicon = (rows = []) => {
+  const out = new Map();
+  const add = (name, canonical = null) => {
+    const raw = String(name || '').trim();
+    if (!raw) return;
+    const key = normalizeLookupText(raw);
+    if (!key || key.length < 3) return;
+    if (!out.has(key)) out.set(key, canonical || raw);
+  };
+
+  rows.forEach((row) => {
+    add(row?.location_city);
+    add(row?.location_district);
+    add(row?.location_neighborhood);
+    const raw = row?.raw && typeof row.raw === 'object' ? row.raw : null;
+    add(raw?.town);
+    add(raw?.province);
+    add(raw?.costa);
+    add(raw?.locationDetail);
+  });
+
+  const aliases = [
+    ['торревьеха', 'Torrevieja'], ['торревьех', 'Torrevieja'],
+    ['аликанте', 'Alicante'], ['аликанты', 'Alicante'],
+    ['бенидорм', 'Benidorm'],
+    ['кальпе', 'Calpe'], ['кальпа', 'Calpe'], ['кальпы', 'Calpe'],
+    ['мурсия', 'Murcia'],
+    ['орихуэла', 'Orihuela'], ['ориуэла', 'Orihuela'],
+    ['орихуэла коста', 'Orihuela-Costa'], ['ориуэла коста', 'Orihuela-Costa'],
+    ['лос алькасарес', 'Los Alcazares'],
+    ['пунта прима', 'Punta Prima'],
+    ['вильямартин', 'Villamartin'], ['вилламартин', 'Villamartin'],
+    ['ла зения', 'La Zenia'],
+    ['коста бланка', 'Costa Blanca'], ['коста брава', 'Costa Brava'], ['коста дель соль', 'Costa del Sol']
+  ];
+  aliases.forEach(([k, v]) => add(k, v));
+
+  return Array.from(out.entries())
+    .map(([key, canonical]) => ({ key, canonical }))
+    .sort((a, b) => b.key.length - a.key.length);
+};
+
+const getLocationLexicon = async () => {
+  const now = Date.now();
+  if (locationLexiconCache.list.length && now - locationLexiconCache.ts < 10 * 60 * 1000) {
+    return locationLexiconCache.list;
+  }
+  try {
+    const rows = await getAllProperties();
+    locationLexiconCache = { ts: now, list: buildLocationLexicon(Array.isArray(rows) ? rows : []) };
+  } catch (e) {
+    console.warn('⚠️ Failed to refresh location lexicon:', e?.message || e);
+  }
+  return locationLexiconCache.list;
+};
+
+const detectLocationFromLexicon = (text, lexicon = []) => {
+  const norm = normalizeLookupText(text);
+  if (!norm || !lexicon.length) return null;
+  for (const item of lexicon) {
+    if (item?.key && norm.includes(item.key)) return item.canonical;
+  }
+  return null;
+};
+
+// 🧠 Улучшенная функция извлечения insights
+const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
   const session = sessions.get(sessionId);
   if (!session) return;
   
@@ -1000,65 +1077,12 @@ const updateInsights = (sessionId, newMessage) => {
     }
   }
 
-  // 5. 📍 Район/локация — RU + EN + ES (районы Валенсии и общие)
+  // 5. 📍 Локация — feed-driven lexicon
   if (!insights.location) {
-    const locationPatterns = [
-      // RU
-      /(центр[ае]?|исторический\s*центр|старый\s*город)/i,
-      /(русаф[аеы]?|russafa)/i,
-      /(алавес|alavés)/i,
-      /(кабаньял|cabanyal|кабанал)/i,
-      /(бенимаклет|benimaclet)/i,
-      /(патраикс|patraix)/i,
-      /(camins|каминс)/i,
-      /(побленоу|poblats\s*del\s*sud)/i,
-      /(экстрамурс|extramurs)/i,
-      /(пла\s*дель\s*реаль|pla\s*del\s*real)/i,
-      /(ла\s*сайдиа|la\s*saïdia)/i,
-      /(морской|побережье|у\s*моря|пляж)/i,
-      /(район[еа]?\s*(\w+))/i,
-      /(зон[аеу]\s*(\w+))/i,
-      /(недалеко\s*от\s*(\w+))/i,
-      // EN
-      /\b(center|centre|downtown|city\s*center)\b/i,
-      /\b(ruzafa|russafa)\b/i,
-      /\b(cabanyal)\b/i,
-      /\b(benimaclet)\b/i,
-      /\b(patraix)\b/i,
-      /\b(extramurs)\b/i,
-      /\b(beach|sea|coast|by\s*the\s*sea)\b/i,
-      // ES
-      /\b(centro|centro\s*hist[oó]rico)\b/i,
-      /\b(ruzafa)\b/i,
-      /\b(cabanyal|el\s*cabanyal)\b/i,
-      /\b(benimaclet)\b/i,
-      /\b(patraix)\b/i,
-      /\b(extramurs)\b/i,
-      /\b(playa|mar|costas?)\b/i
-    ];
-
-    for (const pattern of locationPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const location = (match[1] || match[0]).toLowerCase();
-        if (location.includes('центр')) insights.location = 'Центр';
-        else if (location.includes('русаф') || location.includes('russafa') || location.includes('ruzafa')) insights.location = location.includes('русаф') ? 'Русафа' : 'Ruzafa';
-        else if (location.includes('алавес')) insights.location = 'Алавес';
-        else if (location.includes('кабаньял') || location.includes('кабанал') || location.includes('cabanyal')) insights.location = location.includes('cabanyal') ? 'Cabanyal' : 'Кабаньял';
-        else if (location.includes('бенимаклет') || location.includes('benimaclet')) insights.location = location.includes('benimaclet') ? 'Benimaclet' : 'Бенимаклет';
-        else if (location.includes('патраикс') || location.includes('patraix')) insights.location = location.includes('patraix') ? 'Patraix' : 'Патраикс';
-        else if (location.includes('camins') || location.includes('каминс')) insights.location = 'Camins al Grau';
-        else if (location.includes('побленоу')) insights.location = 'Побленоу';
-        else if (location.includes('экстрамурс') || location.includes('extramurs')) insights.location = location.includes('extramurs') ? 'Extramurs' : 'Экстрамурс';
-        else if (location.includes('морской') || location.includes('пляж') || location.includes('beach') || location.includes('sea') || location.includes('playa') || location.includes('mar')) insights.location = location.includes('playa') || location.includes('mar') ? 'Playa' : (location.includes('beach') || location.includes('sea') ? 'Beach' : 'У моря');
-        else if (location.includes('center') || location.includes('centre') || location.includes('downtown')) insights.location = 'Center';
-        else if (location.includes('centro')) insights.location = 'Centro';
-        else if (match[2]) insights.location = match[2];
-        if (insights.location) {
-          console.log(`✅ Найдена локация: ${insights.location}`);
-          break;
-        }
-      }
+    const detected = detectLocationFromLexicon(newMessage, locationLexicon);
+    if (detected) {
+      insights.location = detected;
+      console.log(`✅ Найдена локация: ${insights.location}`);
     }
   }
 
@@ -2355,7 +2379,8 @@ const transcribeAndRespond = async (req, res) => {
     }
 
     addMessageToSession(sessionId, 'user', transcription);
-    updateInsights(sessionId, transcription);
+    const locationLexicon = await getLocationLexicon();
+    await updateInsights(sessionId, transcription, locationLexicon);
     
     // 🆕 Sprint V: детекция reference intent в сообщении пользователя (без интерпретации)
     // 🔧 Hotfix: Reference Detector Stabilization (Roadmap v2)
@@ -3090,6 +3115,20 @@ ${factsList.join('\n')}
     // UI extras and cards container
     let cards = [];
     let ui = undefined;
+    // Always build candidate pool (independent from "show" command).
+    const baseExecution = await findBestProperties(session.insights, 100);
+    session.queryTraceV1 = {
+      sourceInsights: baseExecution.sourceInsights,
+      canonicalPatch: baseExecution.canonicalPatch,
+      preValidationQuery: baseExecution.preValidationQuery,
+      postValidationQuery: baseExecution.postValidationQuery,
+      droppedFields: baseExecution.droppedFields,
+      missingFields: baseExecution.missingFields,
+      matchedCount: baseExecution.matchedCount,
+      candidateIds: Array.isArray(baseExecution.candidates) ? baseExecution.candidates.map((p) => p.id) : []
+    };
+    session.lastCandidates = Array.from(new Set((baseExecution.candidates || []).map((p) => p.id)));
+    if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
     // (удалено) парсинг inline lead из текста и сигналы формы
    /*
     * УДАЛЁН БЛОК «текстового списка вариантов» (preview-список).
@@ -3116,26 +3155,14 @@ ${factsList.join('\n')}
     if (show && !DISABLE_SERVER_UI) {
       // Начинаем новый "сеанс показа" — сбрасываем набор уже показанных в текущем слайдере
       session.shownSet = new Set();
-      // Формируем пул кандидатов только через canonical_query_v1
-      const execution = await findBestProperties(session.insights, 10);
-      session.queryTraceV1 = {
-        sourceInsights: execution.sourceInsights,
-        canonicalPatch: execution.canonicalPatch,
-        preValidationQuery: execution.preValidationQuery,
-        postValidationQuery: execution.postValidationQuery,
-        droppedFields: execution.droppedFields,
-        missingFields: execution.missingFields,
-        matchedCount: execution.matchedCount
-      };
-      let pool = execution.candidates.map((p) => p.id);
+      let pool = (baseExecution.candidates || []).map((p) => p.id);
       // Дедупликация пула
       pool = Array.from(new Set(pool));
       session.lastCandidates = pool;
       session.candidateIndex = 0;
       // Выбираем первый id из пула, которого нет в shownSet (она только что сброшена)
       const pickedId = pool[0];
-      const allNow = await getAllNormalizedProperties();
-      const candidate = allNow.find((p) => p.id === pickedId);
+      const candidate = (baseExecution.candidates || []).find((p) => p.id === pickedId);
       if (candidate) {
         session.shownSet.add(candidate.id);
         cards = [formatCardForClient(req, candidate)];
