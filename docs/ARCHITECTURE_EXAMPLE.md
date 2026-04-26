@@ -81,3 +81,15 @@ Applied:
 Result:
 
 Search path is now closer to target deterministic chain (`text -> extraction -> insights -> canonical -> candidates`).
+
+### Iteration 2 (2026-04-26)
+
+Applied:
+
+1. Budget extraction improved for shorthand formats (`100k`, `100к`, `100 тыс`).
+2. Insight `progress` removed from active backend extraction state.
+3. Debug/UX no longer uses progress-based percentage logic in active path.
+
+Result:
+
+Debug chain focuses on business fields only; budget shorthand is normalized more reliably for query building.

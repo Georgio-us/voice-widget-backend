@@ -208,7 +208,6 @@ const getOrCreateSession = (sessionId) => {
         details: null,        // 11% (детали локации: возле парка, пересечение улиц)
         preferences: null,    // 11%
         
-        progress: 0
       },
       // 🆕 Sprint II / Block A: allowedFactsSnapshot (разрешённые факты для AI)
       // Формируется только после подтверждённого показа карточки (ui_card_rendered)
@@ -951,7 +950,7 @@ const updateInsights = (sessionId, newMessage) => {
 
     const budgetPatterns = [
       // RU
-      /(\d+[\d\s]*)\s*(тысяч?|тыс\.?)\s*(евро|€|euro)/i,
+      /(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i,
       /(\d+[\d\s]*)\s*(евро|€|euro)/i,
       /(от\s*)?(\d+)[\s-]*(\d+)?\s*(тысяч?|тыс\.?|к)\s*(евро|€|euro)?/i,
       /(около|примерно|где-?то|приблизительно)\s*(\d+[\d\s]*)\s*(тысяч?|тыс\.?|к)?\s*(евро|€|euro)?/i,
@@ -982,7 +981,7 @@ const updateInsights = (sessionId, newMessage) => {
           number = number.replace(/[\s,]/g, '');
           const raw = match[0].toLowerCase();
           if (/^\d+\.\d{3}$/.test(number)) number = number.replace('.', '');
-          const isThousands = /тысяч|тыс|\bk\b|thousand|mil|miles/.test(raw) && !/^\d+0{3,}$/.test(number);
+          const isThousands = /тысяч|тыс|\bк\b|\bk\b|\dк\b|\dk\b|thousand|mil|miles/.test(raw) && !/^\d+0{3,}$/.test(number);
           amount = isThousands ? `${number}000` : number;
 
           // Если найденный бюджет по числу совпадает с уже известной площадью — пропускаем,
@@ -1279,37 +1278,6 @@ const updateInsights = (sessionId, newMessage) => {
     if (f.length) insights.features = f;
   }
 
-  // 📊 Обновляем прогресс по системе весов фронтенда
-  const weights = {
-    // Блок 1: Основная информация (33.3%)
-    name: 11,
-    operation: 11,
-    budget: 11,
-    
-    // Блок 2: Параметры недвижимости (33.3%)
-    type: 11,
-    location: 11,
-    rooms: 11,
-    
-    // Блок 3: Детали и предпочтения (33.3%)
-    area: 11,
-    details: 11,
-    preferences: 11
-  };
-  
-  let totalProgress = 0;
-  let filledFields = 0;
-  
-  for (const [field, weight] of Object.entries(weights)) {
-    if (insights[field] && insights[field].trim()) {
-      totalProgress += weight;
-      filledFields++;
-    }
-  }
-  
-  insights.progress = Math.min(totalProgress, 99); // максимум 99%
-  
-  console.log(`📊 Прогресс понимания: ${insights.progress}% (${filledFields}/9 полей заполнено)`);
   console.log(`🔍 Текущие insights:`, insights);
 };
 
@@ -1458,26 +1426,7 @@ ${conversationHistory}
     }
 
     if (updated) {
-      // Пересчитываем прогресс по системе весов фронтенда
-      const weights = {
-        name: 11, operation: 11, budget: 11,
-        type: 11, location: 11, rooms: 11,
-        area: 11, details: 11, preferences: 11
-      };
-      
-      let totalProgress = 0;
-      let filledFields = 0;
-      
-      for (const [field, weight] of Object.entries(weights)) {
-        if (session.insights[field] && session.insights[field].trim()) {
-          totalProgress += weight;
-          filledFields++;
-        }
-      }
-      
-      session.insights.progress = Math.min(totalProgress, 99);
-      
-      console.log(`🚀 GPT анализ завершен. Прогресс: ${session.insights.progress}% (${filledFields}/9 полей)`);
+      console.log(`🚀 GPT анализ завершен.`);
       console.log(`📊 Обновленные insights:`, session.insights);
     } else {
       console.log(`ℹ️ GPT не нашел новой информации для обновления`);
@@ -1970,28 +1919,6 @@ const mapClientProfileToInsights = (clientProfile, insights) => {
   if (clientProfile.urgency && /сроч/i.test(String(clientProfile.urgency))) {
     insights.preferences = 'срочный поиск';
   }
-  // Пересчёт прогресса
-  const weights = {
-    name: 11,
-    operation: 11,
-    budget: 11,
-    type: 11,
-    location: 11,
-    rooms: 11,
-    area: 11,
-    details: 11,
-    preferences: 11
-  };
-  let totalProgress = 0;
-  let filledFields = 0;
-  for (const [field, weight] of Object.entries(weights)) {
-    const val = insights[field];
-    if (val != null && String(val).trim()) {
-      totalProgress += weight;
-      filledFields++;
-    }
-  }
-  insights.progress = Math.min(totalProgress, 99);
 };
 
 // 🆕 Sprint V: детекция reference в тексте пользователя (без интерпретации)
@@ -3164,8 +3091,6 @@ ${factsList.join('\n')}
     let cards = [];
     let ui = undefined;
     // (удалено) парсинг inline lead из текста и сигналы формы
-    const enoughContext = session.insights?.progress >= 66;
-
    /*
     * УДАЛЁН БЛОК «текстового списка вариантов» (preview-список).
     *

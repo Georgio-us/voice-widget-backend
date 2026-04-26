@@ -64,6 +64,17 @@ Still present (non-search, to clean later in slices):
 3. META parsing and profile updates for orchestration/logging.
 4. Reference fallback and debug trace infrastructure.
 
+### Iteration 2 (2026-04-26)
+
+Removed from active UX/debug contract:
+
+1. Progress percentage usage in debug extraction history.
+2. Progress-based status logic in details/context screen update flow.
+
+Search-related cleanup:
+
+1. Backend extraction no longer recalculates/persists `insights.progress`.
+
 ## Practical Decision For Next Iterations
 
 1. No full deletion required in one step.
