@@ -975,15 +975,17 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
   const hasRentIntent = /(снять|аренд[аеуио]*|арендовать|сдать|в\s*аренду|на\s*аренду|под\s*аренду|съем|снимать|найм|\b(rent|renting|lease|leasing|rental)\b|\b(alquilar|alquiler|arrendar|arriendo)\b)/i.test(text);
   const hasSaleIntent = /(купить|покуп[каеи]|куплю|приобрести|приобретение|покупк[аеуи]|в\s*покупку|купил|хочу\s+купить|планирую\s+купить|инвестиц|инвестировать|\b(buy|buying|purchase|purchasing|invest|investment)\b|\b(comprar|compra|invertir|inversi[oó]n)\b)/i.test(text);
 
-  if (hasRentIntent) {
-    insights.operation = 'аренда';
-    console.log(`✅ Найдена операция: ${insights.operation}`);
-  } else if (hasSaleIntent) {
-    insights.operation = 'покупка';
-    console.log(`✅ Найдена операция: ${insights.operation}`);
-  } else if (!insights.operation) {
-    insights.operation = 'покупка'; // default: sale
-    console.log(`✅ Операция по умолчанию: ${insights.operation}`);
+  if (!insights.operation) {
+    if (hasRentIntent) {
+      insights.operation = 'аренда';
+      console.log(`✅ Найдена операция: ${insights.operation}`);
+    } else if (hasSaleIntent) {
+      insights.operation = 'покупка';
+      console.log(`✅ Найдена операция: ${insights.operation}`);
+    } else {
+      insights.operation = 'покупка'; // default: sale
+      console.log(`✅ Операция по умолчанию: ${insights.operation}`);
+    }
   }
 
   // 4. 💵 Бюджет — контекст + диапазоны + operation
@@ -1307,9 +1309,9 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
     const m = text.match(/(\d+(?:[.,]\d+)?)\s*(км|km|м|m|mts|метр)[^\n]{0,24}(аэропорт|airport|aeropuerto)/i);
     if (m) insights.distanceAirport = `${m[1]} ${m[2]}`;
   }
-  if (insights.hasParking !== true && /(паркинг|гараж|parking|garage|garaje)/i.test(text)) insights.hasParking = true;
-  if (insights.hasPool !== true && /(бассейн|pool|piscina)/i.test(text)) insights.hasPool = true;
-  if (insights.hasTerrace !== true && /(террас|terrace|terraza|balcony|балкон)/i.test(text)) insights.hasTerrace = true;
+  if ((insights.hasParking === undefined || insights.hasParking === null || insights.hasParking === '') && /(паркинг|гараж|parking|garage|garaje)/i.test(text)) insights.hasParking = true;
+  if ((insights.hasPool === undefined || insights.hasPool === null || insights.hasPool === '') && /(бассейн|pool|piscina)/i.test(text)) insights.hasPool = true;
+  if ((insights.hasTerrace === undefined || insights.hasTerrace === null || insights.hasTerrace === '') && /(террас|terrace|terraza|balcony|балкон)/i.test(text)) insights.hasTerrace = true;
   if (!insights.features) {
     const f = [];
     if (/(sea\s*view|вид\s*на\s*море|vistas?\s+al\s+mar)/i.test(text)) f.push('sea_view');
@@ -1458,11 +1460,9 @@ ${conversationHistory}
         console.log(`✅ GPT обновил ${field}: ${extractedData[field]}`);
       }
       
-      // Если GPT нашел исправления для существующих данных
+      // Rewrite policy: в рамках текущего поиска уже заполненные поля не перезаписываем.
       if (extractedData[field] && session.insights[field] && extractedData[field] !== session.insights[field]) {
-        console.log(`🔄 GPT предлагает исправить ${field}: ${session.insights[field]} → ${extractedData[field]}`);
-        session.insights[field] = extractedData[field];
-        updated = true;
+        console.log(`⏭️ GPT предложил ${field}: ${session.insights[field]} → ${extractedData[field]}, но перезапись запрещена policy`);
       }
     }
 
