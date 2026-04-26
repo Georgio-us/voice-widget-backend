@@ -37,6 +37,16 @@ const parseMaxInt = (v) => {
   return Math.max(...nums);
 };
 
+const parseMinInt = (v) => {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.round(v);
+  const nums = (String(v).replace(/\s/g, '').match(/\d+/g) || [])
+    .map((x) => Number.parseInt(x, 10))
+    .filter(Number.isFinite);
+  if (!nums.length) return null;
+  return Math.min(...nums);
+};
+
 const normalizeOperation = (v) => {
   const s = normalizeText(v);
   if (!s) return null;
@@ -224,13 +234,13 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   if (Number.isInteger(bathrooms) && bathrooms > 0) canonicalPatch.bathrooms = bathrooms;
   else missingFields.push('bathrooms');
 
-  const maxPrice = parseMaxInt(sourceInsights.budget);
-  if (Number.isInteger(maxPrice) && maxPrice > 0) canonicalPatch.maxPrice = maxPrice;
-  else missingFields.push('maxPrice');
+  const minPrice = parseMinInt(sourceInsights.budget);
+  if (Number.isInteger(minPrice) && minPrice > 0) canonicalPatch.minPrice = minPrice;
+  else missingFields.push('minPrice');
 
-  const maxArea = parseMaxInt(sourceInsights.area);
-  if (Number.isInteger(maxArea) && maxArea > 0) canonicalPatch.maxArea = maxArea;
-  else missingFields.push('maxArea');
+  const minArea = parseMinInt(sourceInsights.area);
+  if (Number.isInteger(minArea) && minArea > 0) canonicalPatch.minArea = minArea;
+  else missingFields.push('minArea');
 
   const plotArea = parseMaxInt(sourceInsights.plotArea ?? inferred.plotArea);
   if (Number.isInteger(plotArea) && plotArea > 0) canonicalPatch.plotArea = plotArea;
@@ -322,8 +332,8 @@ export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit 
   if (q.location) filtered = filtered.filter((p) => matchLocation(p, q.location));
   if (Number.isInteger(q.rooms)) filtered = filtered.filter((p) => Number(p.rooms) === q.rooms);
   if (Number.isInteger(q.bathrooms)) filtered = filtered.filter((p) => Number(p.bathrooms) >= q.bathrooms);
-  if (Number.isInteger(q.maxPrice)) filtered = filtered.filter((p) => Number(p.priceEUR) <= q.maxPrice);
-  if (Number.isInteger(q.maxArea)) filtered = filtered.filter((p) => Number(p.area_m2) <= q.maxArea);
+  if (Number.isInteger(q.minPrice)) filtered = filtered.filter((p) => Number(p.priceEUR) >= q.minPrice);
+  if (Number.isInteger(q.minArea)) filtered = filtered.filter((p) => Number(p.area_m2) >= q.minArea);
   if (Number.isInteger(q.plotArea)) filtered = filtered.filter((p) => Number(p.plot_m2) >= q.plotArea);
   if (Number.isInteger(q.floor)) filtered = filtered.filter((p) => Number(p.floor) === q.floor);
   if (q.hasParking === true) filtered = filtered.filter((p) => p.has_parking === true);

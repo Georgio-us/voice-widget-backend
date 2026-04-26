@@ -2910,10 +2910,8 @@ const transcribeAndRespond = async (req, res) => {
       console.error('❌ Failed to append user message to session log:', err);
     });
 
-    // 🤖 Проверяем, нужен ли GPT анализ каждые 5 сообщений
-    if (ENABLE_PERIODIC_ANALYSIS) {
-      await checkForGPTAnalysis(sessionId);
-    }
+    // Legacy cleanup (Iteration 1):
+    // Periodic GPT re-analysis every 5 messages is disabled to keep extraction deterministic.
 
     // const totalProps = properties.length; // устарело – переезд на БД
     const detectedLangFromText = (() => {
@@ -3139,8 +3137,9 @@ ${factsList.join('\n')}
         if (meta && typeof meta.stage === 'string' && allowedStages.has(meta.stage)) {
           session.stage = meta.stage;
         }
-        // Синхронизация с insights и пересчёт прогресса
-        mapClientProfileToInsights(session.clientProfile, session.insights);
+        // Legacy cleanup (Iteration 1):
+        // META/clientProfile no longer mutates insights.
+        // Search path must depend on extraction->insights only.
         // Компактный лог обновления профиля и стадии
         const profileLog = {
           language: session.clientProfile.language,
