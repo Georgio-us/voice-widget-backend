@@ -1042,6 +1042,12 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
 
     const patterns = [
       {
+        // compact shorthand: 100к / 120k -> budget
+        re: /\b(\d{2,4})\s*[кk]\b/gi,
+        getValue: (m) => parseNumeric(m[1], m[0]),
+        strongContext: true
+      },
+      {
         re: /(бюджет|budget|presupuesto|цена|price|стоимость)[^\d]{0,18}(\d+(?:[ \t.,]\d{3})*|\d+)(?:\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?))?\s*(€|евро|eur|euro)?/gi,
         getValue: (m) => parseNumeric(m[2], `${m[3] || ''} ${m[4] || ''}`),
         strongContext: true
@@ -1108,6 +1114,7 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
   // 🆕 6. 🏠 Количество комнат — RU + EN + ES
   if (!insights.rooms) {
     const roomPatterns = [
+      /\b([1-9])\s*[кk]\b/i, // 2к / 3k -> rooms shorthand
       /(студи[юя]|studio|estudio)/i,
       /(\d+)[\s-]*(комнат[ауыйе]*|спален|bedroom|bedrooms|habitaci[oó]n|habitaciones)/i,
       /(одн[ауо][\s-]*комнат|однушк|1[\s-]*комнат)/i,
