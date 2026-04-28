@@ -1449,7 +1449,7 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
     // "near sea" is a feature, not a location.
     if (typeof sanitized.location === 'string') {
       const locNorm = normalizeLookupText(sanitized.location);
-      if (/(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa)/i.test(locNorm)) {
+      if (/(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa|побереж|coast|costa|costa blanca|costa brava|costa del sol)/i.test(locNorm)) {
         const features = Array.isArray(sanitized.features) ? sanitized.features.slice() : [];
         if (!features.includes('near_sea')) features.push('near_sea');
         sanitized.features = features;

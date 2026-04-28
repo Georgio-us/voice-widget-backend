@@ -72,6 +72,12 @@ const normalizeLocation = (v) => {
   const raw = toText(v);
   if (!raw) return null;
   const n = normalizeText(raw);
+  const genericCoastTerms = new Set([
+    'побережье', 'на побережье', 'у побережья',
+    'coast', 'near coast', 'on the coast',
+    'costa', 'costa blanca', 'costa brava', 'costa del sol'
+  ]);
+  if (genericCoastTerms.has(n)) return null;
   const aliases = new Map([
     ['торревьеха', 'torrevieja'],
     ['аликанте', 'alicante'],
@@ -236,6 +242,12 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   }
 
   if (sourceInsights.location) {
+    const locNorm = normalizeText(sourceInsights.location);
+    const coastLike = /(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa|побереж|coast|costa)/.test(locNorm);
+    if (coastLike) {
+      const f = mergeFeatures(sourceInsights.features, 'near_sea', inferred.features);
+      if (f.length) canonicalPatch.features = f;
+    }
     const loc = normalizeLocation(sourceInsights.location);
     if (loc?.normalized) {
       if (/(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa)/.test(loc.normalized)) {
@@ -244,8 +256,9 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
       } else {
         canonicalPatch.location = loc;
       }
+    } else if (!coastLike) {
+      droppedFields.push({ field: 'location', reason: 'invalid_location', value: sourceInsights.location });
     }
-    else droppedFields.push({ field: 'location', reason: 'invalid_location', value: sourceInsights.location });
   } else {
     missingFields.push('location');
   }
