@@ -108,6 +108,23 @@ Current scoring uses:
 Not currently used in score:
 - `operation`, `type`, `area`, `details`, `preferences`, `name`.
 
+### Canonical location/feature behavior (current)
+
+1. `insights.location` is currently a single input and may contain city/province/micro-location text.
+2. Canonical layer converts coast-like phrases (`возле моря`, `near sea`, `cerca del mar`, `coast`) into `features.near_sea`.
+3. Coast-like phrases are excluded from `location` filter token.
+4. This mapping is active in runtime query path and visible in debug (`location parsing` + `canonicalPatch.features`).
+5. Open issue (not fully closed): some beach-adjacent phrases (`возле пляжа`, `рядом с пляжем`) may still leak into `location` instead of `features.near_sea`; this is tracked for the next extraction hardening step.
+
+### Feed reality constraint (current estyle dataset)
+
+1. Raw feed snapshot in DB does not expose separate `town/province/location_detail/costa` keys in `raw`.
+2. Effective geo source for runtime is normalized DB columns:
+   - `location_city`
+   - `location_district` (used as province-level field in current mapping)
+   - `location_neighborhood`
+3. Because of this, location semantics must be reconstructed at canonical level (city/province/location parsing) rather than read directly from `raw` keys.
+
 ### Interaction flow (`POST /api/audio/interaction`)
 
 - Builds/uses `session.lastCandidates` from ranked list (or full DB fallback).
@@ -127,6 +144,20 @@ Not currently used in score:
 - Status: removed from execution contract and runtime payload contract.
 - `insights -> canonical -> queryTraceV1 -> candidates` is the active source-of-truth chain.
 - Legacy internals may still exist in code but are non-execution.
+
+### Assistant prompt stack (runtime)
+
+Current active assistant prompt stack is intentionally minimal:
+1. base personality prompt
+2. execution lock instruction
+3. language instruction
+4. user/assistant dialog history
+
+Disabled in active main-call path:
+1. RMV3 server facts system message
+2. RMV3 guardrails system message
+3. allowed-facts injected system block
+4. post-handoff injected system block
 
 ### mode
 

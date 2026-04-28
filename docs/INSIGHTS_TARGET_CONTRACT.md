@@ -58,6 +58,7 @@ All fields used in search must be canonicalized before query build.
 2. Booleans: map `yes/true/1` -> `true`, `no/false/0` -> `false`.
 3. Enums/slugs: map multilingual labels to one internal value.
 4. Text locations: keep source text but also compute normalized compare form.
+5. Coastal phrases (`near sea`, `возле моря`, `cerca del mar`) are NOT location; they must map to `features[]` (slug `near_sea`).
 
 ## 2) Insights We MUST Collect
 
@@ -119,6 +120,10 @@ Frontend display target:
 | Distance to beach | `distanceBeach + distanceBeachMed` | `distance_beach(_med)` | `distanceBeachKmMax` | `distanceBeachKmMax` | normalized to km, `<=` |
 | Distance to airport | `distanceAirport + distanceAirportMed` | `distance_airport(_med)` | `distanceAirportKmMax` | `distanceAirportKmMax` | normalized to km, `<=` |
 | Features/tags | `features[]/tags[]` | `tags[]` | `features[]` | `features[]` | all requested feature slugs must match candidate tags |
+
+Location semantic note:
+1. `city/province/micro-location` must be parsed as separate meanings even if stored in one insight field today.
+2. `near_sea` is always feature semantics, never city/province/location.
 
 ## 5) Query Builder Contract (Target)
 

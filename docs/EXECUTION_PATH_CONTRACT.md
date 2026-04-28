@@ -56,6 +56,23 @@ Debug must show runtime truth, not inferred UI state:
 
 Debug may show `stage/role/meta` only in separate `metadata` section clearly marked as non-search.
 
+## Prompt Orchestration Lock
+
+Main assistant runtime call uses only:
+1. `BASE_SYSTEM_PROMPT`
+2. `EXECUTION_LOCKED` instruction
+3. language instruction
+4. chronological `user/assistant` dialog history
+
+Disabled from active main-call prompt path:
+1. `RMV3_SERVER_FACTS_V1` system message
+2. `RMV3_GUARDRAILS_V1` system message
+3. `allowedFactsSnapshot` extra system instruction
+4. `post-handoff` extra system instruction
+
+Reason:
+These layers are legacy orchestration/diagnostic context and can introduce behavioral noise unrelated to deterministic extraction/query contract.
+
 ## Acceptance Criteria
 
 Contract is considered enforced when:

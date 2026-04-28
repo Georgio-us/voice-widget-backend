@@ -81,12 +81,19 @@ Scope now:
    - `stage/role/meta` removed from runtime execution contract;
    - `stage/role` removed from runtime frontend payload/debug contract;
    - interaction role transitions disabled in active runtime path.
+10. Assistant prompt path trimmed:
+   - removed `RMV3_SERVER_FACTS_V1` + `RMV3_GUARDRAILS_V1` from active main-call prompt;
+   - removed `allowedFactsSnapshot` and `post-handoff` system injections from active main-call prompt;
+   - main assistant temperature reduced from `0.5` to `0.4`.
 
 ## Where We Stop In This Session
 
 Baseline is working and testable on live deploy.
 
 Next coding slice (planned):
-1. fine-tune relaxed order/weights from real zero-result transcripts;
-2. decide which fields remain strictly core vs always-relaxed;
-3. only after this, continue CRM outbound contract work (`docs/LEAD_CRM_CONTRACT.md`), currently deferred.
+1. fix open coastal-phrase extraction gap:
+   - phrases like `возле пляжа` / `рядом с пляжем` must always map to `features.near_sea`
+   - and must never be persisted as `location`.
+2. fine-tune relaxed order/weights from real zero-result transcripts;
+3. decide which fields remain strictly core vs always-relaxed;
+4. only after this, continue CRM outbound contract work (`docs/LEAD_CRM_CONTRACT.md`), currently deferred.

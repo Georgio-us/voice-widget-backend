@@ -3102,53 +3102,6 @@ const transcribeAndRespond = async (req, res) => {
       return ''; // неизвестный язык — без инструкции
     })();
 
-    // 🆕 Sprint II / Block A: добавляем allowedFactsSnapshot в контекст модели (если есть факты)
-    const allowedFactsInstruction = (() => {
-      const snapshot = session.allowedFactsSnapshot || {};
-      const hasFacts = snapshot && Object.keys(snapshot).length > 0 && Object.values(snapshot).some(v => v !== null && v !== undefined);
-      
-      if (!hasFacts) {
-        return null; // Если snapshot пустой, не добавляем инструкцию
-      }
-      
-      // Формируем список фактов для модели
-      const factsList = [];
-      if (snapshot.city) factsList.push(`Город: ${snapshot.city}`);
-      if (snapshot.district) factsList.push(`Район: ${snapshot.district}`);
-      if (snapshot.neighborhood) factsList.push(`Район/квартал: ${snapshot.neighborhood}`);
-      if (snapshot.priceEUR) factsList.push(`Цена: ${snapshot.priceEUR} €`);
-      if (snapshot.rooms) factsList.push(`Количество комнат: ${snapshot.rooms}`);
-      if (snapshot.floor) factsList.push(`Этаж: ${snapshot.floor}`);
-      if (snapshot.hasImage) factsList.push(`Есть изображения: да`);
-      
-      if (factsList.length === 0) {
-        return null;
-      }
-      
-      return `РАЗРЕШЁННЫЕ ФАКТЫ О ПОКАЗАННОЙ КАРТОЧКЕ:
-${factsList.join('\n')}
-
-ВАЖНО: Ты можешь говорить только об этих фактах. Не упоминай характеристики объекта, которых нет в списке выше. Можешь интерпретировать, сравнивать, советовать, но не добавляй новых фактов.`;
-    })();
-
-    // 🆕 Sprint III: post-handoff mode instruction для AI
-    const postHandoffInstruction = (() => {
-      if (!session.handoffDone) {
-        return null; // До handoff — инструкция не нужна
-      }
-      
-      return `РЕЖИМ POST-HANDOFF:
-Ты находишься в post-handoff режиме. Данные лида уже заморожены и не могут быть изменены.
-
-ОГРАНИЧЕНИЯ:
-- Не собирай контакт заново (имя, телефон, email).
-- Не утверждай, что лид передан менеджеру, если это не подтверждено явно.
-- Факты об объектах недвижимости — только из allowedFactsSnapshot (если он предоставлен выше), иначе не упоминай конкретные характеристики объектов.
-- Можешь отвечать на вопросы и помогать, но не обновляй профиль клиента или insights.
-
-Продолжай диалог естественно, но соблюдай эти ограничения.`;
-    })();
-
     // RMv3 / Sprint 4 / Task 4.1: полный контекст диалога для LLM (user + assistant)
     // ВАЖНО:
     // - порядок сообщений сохраняем хронологический (как в session.messages)
@@ -3167,8 +3120,6 @@ ${factsList.join('\n')}
         content: executionInstruction
       },
       ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
-      ...(allowedFactsInstruction ? [{ role: 'system', content: allowedFactsInstruction }] : []),
-      ...(postHandoffInstruction ? [{ role: 'system', content: postHandoffInstruction }] : []),
       ...dialogMessages
     ];
 
@@ -3176,36 +3127,11 @@ ${factsList.join('\n')}
     
     // 🔄 Используем retry для GPT API
     // RMv3 / Sprint 1: transient LLM Context Pack + [CTX] log (infrastructure only)
-    llmContextPackForMainCall = buildLlmContextPack(session, sessionId, 'main');
-    logCtx(llmContextPackForMainCall);
-    const factsMsg = buildLlmFactsSystemMessage(llmContextPackForMainCall);
-    const guardMsg = buildRmv3GuardrailsSystemMessage();
-    // RMv3 / Sprint 2 / Task 5: expose clarificationMode + diagnostics (only if active)
-    const shapedForDiag = buildShapedFactsPackForLLM(llmContextPackForMainCall);
-    if (shapedForDiag?.clarificationMode === true) {
-      const reasons = [];
-      if (shapedForDiag?.ref?.ambiguity === true) reasons.push('ambiguity');
-      if (shapedForDiag?.ref?.clarificationRequired === true) reasons.push('clarificationRequired');
-      if (shapedForDiag?.ref?.clarificationBoundaryActive === true) reasons.push('clarificationBoundary');
-      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-        session.debugTrace = { items: [] };
-      }
-      session.debugTrace.items.push({
-        type: 'clarification_mode_exposed',
-        at: Date.now(),
-        payload: {
-          active: true,
-          reasons
-        }
-      });
-      const sid = String(sessionId || '').slice(-8) || 'unknown';
-      console.log(`[CLARIFICATION_MODE] sid=${sid} reasons=${reasons.join(',')}`);
-    }
     const completion = await callOpenAIWithRetry(() => 
       openai.chat.completions.create({
-        messages: [factsMsg, guardMsg, ...messages],
+        messages,
         model: 'gpt-4o-mini',
-        temperature: 0.5,
+        temperature: 0.4,
         stream: false
       }), 2, 'GPT'
     );
