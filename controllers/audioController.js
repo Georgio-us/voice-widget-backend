@@ -3002,8 +3002,8 @@ const transcribeAndRespond = async (req, res) => {
       refFallbackSummary.clampApplied = clampApplied === true;
     }
     
-    // 🆕 Sprint III: переход role по событию user_message
-    transitionRole(session, 'user_message');
+    // Legacy isolation: role transitions are disabled in execution path.
+    // Role/stage/meta must not influence deterministic search runtime.
 
     // Логируем сообщение пользователя (event-level logging - существующая телеметрия)
     const audioDurationMs = req.file ? null : null; // TODO: можно добавить извлечение длительности из аудио
@@ -3073,8 +3073,8 @@ const transcribeAndRespond = async (req, res) => {
       return detectedLangFromText || 'ru';
     })();
 
-    // Обновляем стадию и язык перед GPT
-    session.stage = determineStage(session.clientProfile, session.stage, session.messages);
+    // Execution-path lock: stage is not used for prompt orchestration.
+    // Keep language sync only.
     // Для аудио синхронизируем язык профиля с фактически распознанной речью.
     // Для текста сохраняем прежнее поведение (устанавливаем только если ещё не задан).
     if (req.file && detectedLangFromText) {
@@ -3086,29 +3086,13 @@ const transcribeAndRespond = async (req, res) => {
     // Базовый системный промпт (личность Джона)
     const baseSystemPrompt = BASE_SYSTEM_PROMPT;
 
-    // Инструкции по стадии и формат ответа
-    const stageInstruction = (() => {
-      if (session.stage === 'intro') {
-        return `Режим: INTRO.
-Задача: коротко поприветствовать и понять, с какой задачей по недвижимости обращается клиент.
+    // Execution instruction (stage-free): no orchestration states in prompt.
+    const executionInstruction = `Режим: EXECUTION_LOCKED.
+Задача: вести диалог как помощник по недвижимости и отвечать по контексту запроса пользователя.
 Ограничения UX:
 - Не задавай более одного явного вопроса в одном ответе.
-- Не задавай подряд несколько узких анкетных вопросов — приоритет живой диалог.`;
-      }
-      if (session.stage === 'qualification') {
-        return `Режим: QUALIFICATION.
-Задача: естественно собрать недостающие параметры профиля (location, budget, purpose и т.п.).
-Ограничения UX:
-- Не задавай более одного явного вопроса в одном ответе.
-- Не задавай подряд несколько узких анкетных вопросов — приоритет живой диалог.`;
-      }
-      return `Режим: MATCHING_CLOSING.
-Задача: опираться на уже известный профиль, предлагать направления/варианты и мягко предлагать следующий шаг.
-Ограничения UX:
-- Не задавай более одного явного вопроса в одном ответе.
-- Не задавай подряд несколько узких анкетных вопросов — приоритет живой диалог.
-- CTA допустим только если заполнены хотя бы location и бюджет и уже был обмен несколькими репликами.`;
-    })();
+- Не задавай подряд несколько узких анкетных вопросов.
+- Не используй stage/role/meta как основу ответа.`;
 
     // Инструкция по языку ответа (если определён)
     const languageInstruction = (() => {
@@ -3117,18 +3101,6 @@ const transcribeAndRespond = async (req, res) => {
       if (lang === 'ru' || !lang) return 'Отвечай преимущественно на русском.';
       return ''; // неизвестный язык — без инструкции
     })();
-
-    const outputFormatInstruction = `Формат ответа строго двухчастный:
-1) Текст для пользователя.
-2) Строка ---META---
-3) JSON:
-{
-  "clientProfileDelta": {
-    // только обновляемые поля профиля, без null и undefined
-  },
-  "stage": "intro" | "qualification" | "matching_closing"
-}
-Если нечего обновлять, пришли "clientProfileDelta": {}.`;
 
     // 🆕 Sprint II / Block A: добавляем allowedFactsSnapshot в контекст модели (если есть факты)
     const allowedFactsInstruction = (() => {
@@ -3192,7 +3164,7 @@ ${factsList.join('\n')}
       },
       {
         role: 'system',
-        content: `${stageInstruction}\n\n${outputFormatInstruction}`
+        content: executionInstruction
       },
       ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
       ...(allowedFactsInstruction ? [{ role: 'system', content: allowedFactsInstruction }] : []),
@@ -3241,7 +3213,7 @@ ${factsList.join('\n')}
     const gptTime = Date.now() - gptStart;
 
     const fullModelText = completion.choices[0].message.content.trim();
-    const { assistantText, meta } = extractAssistantAndMeta(fullModelText);
+    const { assistantText } = extractAssistantAndMeta(fullModelText);
     let botResponse = assistantText || fullModelText;
     // Bonus: после ответа GPT подтверждаем язык сессии по распознанному языку пользовательского текста.
     if (detectedLangFromText) {
@@ -3258,48 +3230,7 @@ ${factsList.join('\n')}
       console.log(`[MISMATCH] sid=${String(sessionId || '').slice(-8) || 'unknown'} bind=${bindCardId || 'null'} spoke=${spoke.cardId || 'null'} focus=${session.currentFocusCard?.cardId || 'null'} lastShown=${session.lastShown?.cardId || 'null'} rule=${rule || 'null'}`);
     }
 
-    // META обработка: clientProfileDelta + stage
-    try {
-      const clientProfileDelta = meta?.clientProfileDelta && typeof meta.clientProfileDelta === 'object'
-        ? meta.clientProfileDelta
-        : {};
-      
-      // 🆕 Sprint III: после handoff не обновляем clientProfile и insights, только логируем в enrichment
-      if (session.handoffDone) {
-        addPostHandoffEnrichment(session, 'assistant_meta', JSON.stringify({
-          clientProfileDelta: clientProfileDelta,
-          stage: meta?.stage || null
-        }), {
-          role: session.role,
-          stage: session.stage
-        });
-      } else {
-        // До handoff: обновляем как раньше
-        const updatedProfile = mergeClientProfile(session.clientProfile, clientProfileDelta);
-        session.clientProfile = updatedProfile;
-        // Валидируем и принимаем stage из META (если прислали)
-        const allowedStages = new Set(['intro', 'qualification', 'matching_closing']);
-        if (meta && typeof meta.stage === 'string' && allowedStages.has(meta.stage)) {
-          session.stage = meta.stage;
-        }
-        // Legacy cleanup (Iteration 1):
-        // META/clientProfile no longer mutates insights.
-        // Search path must depend on extraction->insights only.
-        // Компактный лог обновления профиля и стадии
-        const profileLog = {
-          language: session.clientProfile.language,
-          location: session.clientProfile.location,
-          budgetMin: session.clientProfile.budgetMin,
-          budgetMax: session.clientProfile.budgetMax,
-          purpose: session.clientProfile.purpose,
-          propertyType: session.clientProfile.propertyType,
-          urgency: session.clientProfile.urgency
-        };
-        console.log(`🧩 Профиль обновлён [${String(sessionId).slice(-8)}]: ${JSON.stringify(profileLog)} | stage: ${session.stage}`);
-      }
-    } catch (e) {
-      console.log('ℹ️ META отсутствует или невалидна, продолжаем без обновления профиля');
-    }
+    // Execution-path lock: META/profile/stage orchestration is ignored in search runtime.
 
     // 🔎 Детектор намерения/вариантов
     const { show, variants } = detectCardIntent(transcription);
@@ -3511,8 +3442,6 @@ ${factsList.join('\n')}
       messageCount: session.messages.length,
       inputType,
       clientProfile: session.clientProfile,
-      stage: session.stage,
-      role: session.role, // 🆕 Sprint I: server-side role
       insights: session.insights, // 🆕 Теперь содержит все 9 параметров
       // ui пропускается, если undefined; cards может быть пустым массивом
       cards: DISABLE_SERVER_UI ? [] : cards,
@@ -3716,8 +3645,6 @@ const getSessionInfo = (req, res) => {
   res.json({
     sessionId,
     clientProfile: session.clientProfile,
-    stage: session.stage,
-    role: session.role, // 🆕 Sprint I: server-side role
     insights: session.insights, // 🆕 Теперь содержит все 9 параметров
     messageCount: session.messages.length,
     lastActivity: session.lastActivity,
@@ -3894,8 +3821,7 @@ async function handleInteraction(req, res) {
         ok: true,
         assistantMessage: 'Не нашел точных совпадений. Уточните, пожалуйста, параметры поиска.',
         card: null,
-        queryTraceV1: session.queryTraceV1 || null,
-        role: session.role
+        queryTraceV1: session.queryTraceV1 || null
       }));
       // Обновим индекс и отметим показанным
       session.candidateIndex = list.indexOf(id);
@@ -3904,7 +3830,7 @@ async function handleInteraction(req, res) {
       const card = formatCardForClient(req, p);
       const lang = getUiLanguage(session);
       const assistantMessage = generateCardComment(lang, p);
-      return res.json(withDebug({ ok: true, assistantMessage, card, queryTraceV1: session.queryTraceV1 || null, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage, card, queryTraceV1: session.queryTraceV1 || null }));
     }
 
     if (action === 'next') {
@@ -3916,9 +3842,8 @@ async function handleInteraction(req, res) {
           ok: true,
           assistantMessage: 'Не нашел точных совпадений. Уточните, пожалуйста, параметры поиска.',
           card: null,
-          queryTraceV1: session.queryTraceV1 || null,
-          role: session.role
-        })); // 🆕 Sprint I: server-side role
+          queryTraceV1: session.queryTraceV1 || null
+        }));
       }
       // Если фронт прислал текущий variantId, делаем шаг относительно него
       let idx = list.indexOf(variantId);
@@ -3957,15 +3882,14 @@ async function handleInteraction(req, res) {
           ok: true,
           assistantMessage: 'Не нашел точных совпадений. Уточните, пожалуйста, параметры поиска.',
           card: null,
-          queryTraceV1: session.queryTraceV1 || null,
-          role: session.role
+          queryTraceV1: session.queryTraceV1 || null
         }));
       }
       session.shownSet.add(p.id);
       const card = formatCardForClient(req, p);
       const lang = getUiLanguage(session);
       const assistantMessage = generateCardComment(lang, p);
-      return res.json(withDebug({ ok: true, assistantMessage, card, queryTraceV1: session.queryTraceV1 || null, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage, card, queryTraceV1: session.queryTraceV1 || null }));
     }
 
     if (action === 'like') {
@@ -3974,7 +3898,7 @@ async function handleInteraction(req, res) {
       if (variantId) session.liked.push(variantId);
       const count = session.liked.length;
       const msg = `Супер, сохранил! Могу предложить записаться на просмотр или показать ещё варианты. Что выберем? (понравилось: ${count})`;
-      return res.json(withDebug({ ok: true, assistantMessage: msg, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true, assistantMessage: msg }));
     }
 
     // RMv3 / Sprint 1 / Task 1: факт выбора карточки пользователем (UI "Выбрать") — server-first
@@ -4003,7 +3927,7 @@ async function handleInteraction(req, res) {
       // при новом handoff сбрасываем cancel-факт (если был)
       session.handoff.canceled = false;
       session.handoff.canceledAt = null;
-      return res.json(withDebug({ ok: true, role: session.role }));
+      return res.json(withDebug({ ok: true }));
     }
 
     // RMv3 / Sprint 2 / Task 2.4: server-fact cancel из in-dialog lead block
@@ -4026,7 +3950,7 @@ async function handleInteraction(req, res) {
       session.selectedCard.cardId = null;
       session.selectedCard.selectedAt = null;
       session.handoff.cardId = null;
-      return res.json(withDebug({ ok: true, role: session.role }));
+      return res.json(withDebug({ ok: true }));
     }
 
     // 🆕 Sprint I: подтверждение факта рендера карточки в UI
@@ -4045,8 +3969,7 @@ async function handleInteraction(req, res) {
       session.lastShown.cardId = variantId;
       session.lastShown.updatedAt = Date.now();
       
-      // 🆕 Sprint III: переход role по событию ui_card_rendered
-      transitionRole(session, 'ui_card_rendered');
+      // Legacy isolation: role transitions disabled for interaction events.
       
       // 🆕 Sprint II / Block A: наполняем allowedFactsSnapshot фактами показанной карточки
       try {
@@ -4080,7 +4003,7 @@ async function handleInteraction(req, res) {
       }
       
       console.log(`✅ [Sprint I] Карточка ${variantId} зафиксирована как показанная в UI (сессия ${sessionId.slice(-8)})`);
-      return res.json(withDebug({ ok: true, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true }));
     }
 
     // 🆕 Sprint IV: обработка события ui_slider_started для фиксации активности slider
@@ -4091,14 +4014,13 @@ async function handleInteraction(req, res) {
       session.sliderContext.active = true;
       session.sliderContext.updatedAt = Date.now();
       console.log(`📱 [Sprint IV] Slider стал активным (сессия ${sessionId.slice(-8)})`);
-      return res.json(withDebug({ ok: true, role: session.role }));
+      return res.json(withDebug({ ok: true }));
     }
 
     // 🆕 Sprint III: обработка события ui_slider_ended для перехода role
     // 🆕 Sprint IV: также обновляем sliderContext при завершении slider
     if (action === 'ui_slider_ended') {
-      // 🆕 Sprint III: переход role по событию ui_slider_ended
-      transitionRole(session, 'ui_slider_ended');
+      // Legacy isolation: role transitions disabled for interaction events.
       
       // 🆕 Sprint IV: обновляем sliderContext
       if (!session.sliderContext) {
@@ -4108,7 +4030,7 @@ async function handleInteraction(req, res) {
       session.sliderContext.updatedAt = Date.now();
       console.log(`📱 [Sprint IV] Slider стал неактивным (сессия ${sessionId.slice(-8)})`);
       
-      return res.json(withDebug({ ok: true, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug({ ok: true }));
     }
 
     // 🆕 Sprint IV: обработка события ui_focus_changed для фиксации текущей карточки в фокусе
@@ -4135,7 +4057,7 @@ async function handleInteraction(req, res) {
       };
       
       console.log(`🎯 [Sprint IV] Focus изменён на карточку ${trimmedCardId} (сессия ${sessionId.slice(-8)})`);
-      return res.json(withDebug({ ok: true, role: session.role }));
+      return res.json(withDebug({ ok: true }));
     }
 
     // 🆕 Sprint VII / Task #1: Unknown UI Action Capture (diagnostics only)
@@ -4149,7 +4071,7 @@ async function handleInteraction(req, res) {
       payload: req.body ? { ...req.body } : null,
       detectedAt: Date.now()
     });
-    return res.json(withDebug({ ok: true, role: session.role }));
+    return res.json(withDebug({ ok: true }));
   } catch (e) {
     console.error('interaction error:', e);
     res.status(500).json({ error: 'internal' });

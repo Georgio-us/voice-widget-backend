@@ -4,6 +4,8 @@ Last updated: 2026-04-28
 Branch: `Split`
 Status: XML baseline is live; priority is deterministic AI extraction -> canonical query -> stable candidate pool.
 
+Primary contract reference: `docs/EXECUTION_PATH_CONTRACT.md` (locked runtime path).
+
 ## Current Environment Snapshot (non-secret)
 
 - Backend URL: `https://voice-widget-backend-estyle.up.railway.app`
