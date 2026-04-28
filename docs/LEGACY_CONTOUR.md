@@ -105,6 +105,16 @@ Canonical guards and relaxed behavior:
 3. Added relaxed fallback chain when strict result is empty.
 4. Added `queryTraceV1.relaxed` for visibility of dropped relaxed filters.
 
+### Iteration 6 (2026-04-28, cleanup milestone)
+
+Execution-path isolation completed:
+
+1. Removed stage-based prompt orchestration from main assistant runtime path.
+2. Removed META output requirement from main assistant prompt.
+3. Disabled runtime role transitions on main user-message and interaction events.
+4. Removed `stage`/`role` from runtime API response payloads (`/upload`, `/interaction`, `/session/:id` contract scope used by frontend).
+5. Frontend debug cleaned from `stage`/`role` as search diagnostics inputs.
+
 ## Practical Decision For Next Iterations
 
 1. No full deletion required in one step.

@@ -77,6 +77,10 @@ Scope now:
 6. Sale low-budget leak fixed in canonical (`2500` for sale is dropped from query).
 7. Relaxed chain implemented and exposed in `queryTraceV1.relaxed`.
 8. Live smoke tests confirm stable flow and reproducible candidate traces.
+9. Legacy orchestration isolation milestone:
+   - `stage/role/meta` removed from runtime execution contract;
+   - `stage/role` removed from runtime frontend payload/debug contract;
+   - interaction role transitions disabled in active runtime path.
 
 ## Where We Stop In This Session
 

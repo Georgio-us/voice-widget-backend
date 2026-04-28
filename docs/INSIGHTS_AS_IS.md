@@ -1,6 +1,6 @@
 # Insights AS-IS (Estyle)
 
-Last updated: 2026-04-28  
+Last updated: 2026-04-28 (post legacy-cleanup milestone)  
 Branch: `Split`  
 Scope: current runtime behavior without refactor.
 
@@ -38,14 +38,10 @@ Frontend keeps the same shape in `modules/understanding-manager.js`.
    - `rules` -> `updateInsights(...)` only,
    - `llm` -> schema-first LLM extraction only,
    - `hybrid` -> LLM then rules.
-4. Main assistant call returns text and optional `---META---` block.
-5. Backend parses META via `extractAssistantAndMeta(...)`:
-   - merges `meta.clientProfileDelta` into `session.clientProfile`;
-   - may set `session.stage` from `meta.stage`;
-   - then maps profile back into insights via `mapClientProfileToInsights(...)`.
-6. Backend returns response payload with `insights`, `stage`, `role`, `cards`, `ui`, `tokens`, `timing`, etc.
-7. Frontend `api-client` consumes payload and updates `understanding` from `data.insights`.
-8. Optional: frontend `loadSessionInfo()` imports stored server `insights`/`stage`/`role` from `/api/audio/session/:sessionId`.
+4. Main assistant call returns plain assistant text (META orchestration ignored in execution path).
+5. Backend returns response payload with `insights`, `cards`, `ui`, `tokens`, `timing`, `queryTraceV1`, `extraction`.
+6. Frontend `api-client` consumes payload and updates `understanding` from `data.insights`.
+7. Optional: frontend `loadSessionInfo()` imports stored server `insights` from `/api/audio/session/:sessionId`.
 
 ## extractions_current
 
@@ -68,14 +64,13 @@ Current insight mutations come from multiple independent sources.
 - Notes:
 - no-overwrite policy blocks rewrites of already filled fields.
 
-### Source C: META -> `clientProfileDelta` (backend orchestration only)
+### Source C: META / Stage / Role orchestration
 
-- Trigger: assistant response includes `---META---` JSON.
-- Type: LLM-guided profile delta + deterministic mapping.
-- Fields touched:
-  - `session.clientProfile` only (search path no longer mutates insights from META/profile).
+- Status: excluded from active execution path.
 - Notes:
-  - kept for orchestration/debug; excluded from active search mutation path.
+  - kept only as legacy internals where still present in code;
+  - no longer used as runtime inputs to query/candidate path;
+  - not returned in primary runtime payload contract.
 
 ### Source D: Session hydration on frontend (`loadSessionInfo`) 
 
@@ -127,19 +122,11 @@ Not currently used in score:
 
 ## meta / stage / mode AS-IS
 
-### meta
+### meta / stage / role
 
-- Parsed from assistant output by `extractAssistantAndMeta(...)`.
-- Used to update `clientProfile` and sometimes `stage`.
-- Indirectly affects insights through profile->insights mapping.
-
-### stage
-
-- Session field initialized as `intro`.
-- Updated by:
-  - `determineStage(...)` (rule-based),
-  - accepted `meta.stage` values (`intro`, `qualification`, `matching_closing`).
-- Returned to frontend and visible in debug metadata.
+- Status: removed from execution contract and runtime payload contract.
+- `insights -> canonical -> queryTraceV1 -> candidates` is the active source-of-truth chain.
+- Legacy internals may still exist in code but are non-execution.
 
 ### mode
 
@@ -155,7 +142,10 @@ Multiple writers update insights in one flow:
 3. META client profile mapping,
 4. frontend session hydration/normalization.
 
-Because of this, the final insight snapshot can differ between turns even for similar input.
+Current determinism baseline is improved:
+1. extraction updates insights;
+2. canonical builds query from insights;
+3. stage/role/meta do not alter query path.
 
 ## Determinization Target (next step, not implemented here)
 
