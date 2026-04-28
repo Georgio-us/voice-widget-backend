@@ -259,8 +259,21 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   else missingFields.push('bathrooms');
 
   const minPrice = parseMinInt(sourceInsights.budget);
-  if (Number.isInteger(minPrice) && minPrice > 0) canonicalPatch.minPrice = minPrice;
-  else missingFields.push('minPrice');
+  if (Number.isInteger(minPrice) && minPrice > 0) {
+    const op = canonicalPatch.operation || null;
+    if (op === 'sale') {
+      if (minPrice >= 10000) canonicalPatch.minPrice = minPrice;
+      else droppedFields.push({ field: 'minPrice', reason: 'sale_budget_too_low', value: sourceInsights.budget });
+    } else if (op === 'rent') {
+      if (minPrice < 10000) canonicalPatch.minPrice = minPrice;
+      else droppedFields.push({ field: 'minPrice', reason: 'rent_budget_too_high', value: sourceInsights.budget });
+    } else {
+      // If operation is unknown, keep previous permissive behavior.
+      canonicalPatch.minPrice = minPrice;
+    }
+  } else {
+    missingFields.push('minPrice');
+  }
 
   const minArea = parseMinInt(sourceInsights.area);
   if (Number.isInteger(minArea) && minArea > 0) canonicalPatch.minArea = minArea;
