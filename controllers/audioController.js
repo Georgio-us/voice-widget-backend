@@ -1346,6 +1346,18 @@ const INSIGHT_FIELDS_V1 = [
 
 const isEmptyInsightValue = (v) => v === undefined || v === null || v === '';
 
+const inferTypeFromText = (text = '') => {
+  const s = String(text || '').toLowerCase();
+  if (!s) return null;
+  if (/(квартир|апартамент|apartment|apartamento|piso)/i.test(s)) return 'квартира';
+  if (/(вилл|villa|casa|дом)/i.test(s)) return 'вилла';
+  if (/(таунхаус|townhouse|adosado)/i.test(s)) return 'таунхаус';
+  if (/(пентхаус|penthouse|atico|ático)/i.test(s)) return 'пентхаус';
+  if (/(студи|studio|estudio)/i.test(s)) return 'студия';
+  if (/(коммер|commercial|local)/i.test(s)) return 'коммерческая';
+  return null;
+};
+
 const applyInsightsPatchNoOverwrite = (targetInsights, patch = {}, sourceTag = 'unknown') => {
   if (!targetInsights || !patch || typeof patch !== 'object') return [];
   const applied = [];
@@ -1433,6 +1445,18 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
       }
       sanitized[key] = value;
     }
+
+    // "near sea" is a feature, not a location.
+    if (typeof sanitized.location === 'string') {
+      const locNorm = normalizeLookupText(sanitized.location);
+      if (/(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa)/i.test(locNorm)) {
+        const features = Array.isArray(sanitized.features) ? sanitized.features.slice() : [];
+        if (!features.includes('near_sea')) features.push('near_sea');
+        sanitized.features = features;
+        delete sanitized.location;
+      }
+    }
+
     return sanitized;
   } catch (e) {
     console.log(`⚠️ LLM extraction failed: ${e?.message || 'unknown error'}`);
@@ -1458,6 +1482,16 @@ const runExtractionPipeline = async (sessionId, newMessage, locationLexicon = []
       if (isEmptyInsightValue(before[key]) && !isEmptyInsightValue(session.insights[key])) {
         if (!applied.includes(key)) applied.push(key);
       }
+    }
+  }
+
+  // Fallback: if type is still empty but clearly present in text, fill once.
+  if (isEmptyInsightValue(session.insights?.type)) {
+    const inferredType = inferTypeFromText(newMessage);
+    if (inferredType) {
+      session.insights.type = inferredType;
+      if (!applied.includes('type')) applied.push('type');
+      console.log(`✅ [fallback] inferred type: ${inferredType}`);
     }
   }
 

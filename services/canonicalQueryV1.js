@@ -71,9 +71,31 @@ const normalizePropertyType = (v) => {
 const normalizeLocation = (v) => {
   const raw = toText(v);
   if (!raw) return null;
+  const n = normalizeText(raw);
+  const aliases = new Map([
+    ['торревьеха', 'torrevieja'],
+    ['аликанте', 'alicante'],
+    ['бенидорм', 'benidorm'],
+    ['кальпе', 'calpe'],
+    ['кальпа', 'calpe'],
+    ['мурсия', 'murcia'],
+    ['орихуэла', 'orihuela'],
+    ['ориуэла', 'orihuela'],
+    ['орихуэла коста', 'orihuela costa'],
+    ['ориуэла коста', 'orihuela costa'],
+    ['пунта прима', 'punta prima'],
+    ['вилламартин', 'villamartin'],
+    ['вильямартин', 'villamartin'],
+    ['ла зения', 'la zenia'],
+    ['лос алькасарес', 'los alcazares'],
+    ['коста бланка', 'costa blanca'],
+    ['коста брава', 'costa brava'],
+    ['коста дель соль', 'costa del sol']
+  ]);
+  const alias = aliases.get(n);
   return {
     raw,
-    normalized: normalizeText(raw)
+    normalized: alias || n
   };
 };
 
@@ -215,7 +237,14 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
 
   if (sourceInsights.location) {
     const loc = normalizeLocation(sourceInsights.location);
-    if (loc?.normalized) canonicalPatch.location = loc;
+    if (loc?.normalized) {
+      if (/(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa)/.test(loc.normalized)) {
+        const f = mergeFeatures(sourceInsights.features, 'near_sea', inferred.features);
+        if (f.length) canonicalPatch.features = f;
+      } else {
+        canonicalPatch.location = loc;
+      }
+    }
     else droppedFields.push({ field: 'location', reason: 'invalid_location', value: sourceInsights.location });
   } else {
     missingFields.push('location');
@@ -264,7 +293,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   if (Number.isFinite(distanceAirportKmMax) && distanceAirportKmMax > 0) canonicalPatch.distanceAirportKmMax = Number(distanceAirportKmMax);
   else missingFields.push('distanceAirportKmMax');
 
-  const features = mergeFeatures(sourceInsights.features, inferred.features);
+  const features = mergeFeatures(canonicalPatch.features, sourceInsights.features, inferred.features);
   if (features.length) canonicalPatch.features = features;
   else missingFields.push('features');
 
