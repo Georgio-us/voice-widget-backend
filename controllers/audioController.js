@@ -11,6 +11,8 @@ import { appendMessage } from '../services/sessionLogger.js';
 import { sendSessionActivityStartToTelegram, updateSessionActivityFinalToTelegram } from '../services/telegramNotifier.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const ENABLE_PERIODIC_ANALYSIS = String(process.env.ENABLE_PERIODIC_ANALYSIS || '').trim() === '1';
+const EXTRACTION_MODE = String(process.env.EXTRACTION_MODE || 'rules').trim().toLowerCase(); // rules | llm | hybrid
+const LLM_EXTRACTION_MODEL = String(process.env.LLM_EXTRACTION_MODEL || 'gpt-4o-mini').trim();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
@@ -74,6 +76,11 @@ const getLatestMatchRuleId = (session) => {
     }
   }
   return null;
+};
+
+const getExtractionMode = () => {
+  if (EXTRACTION_MODE === 'llm' || EXTRACTION_MODE === 'hybrid') return EXTRACTION_MODE;
+  return 'rules';
 };
 
 // 🆕 Sprint II / Block A: Allowed Facts Schema — явный список разрешённых фактов для AI
@@ -1331,6 +1338,132 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
   console.log(`🔍 Текущие insights:`, insights);
 };
 
+const INSIGHT_FIELDS_V1 = [
+  'operation', 'type', 'location', 'rooms', 'bathrooms', 'budget', 'area', 'plotArea', 'floor',
+  'hasParking', 'hasPool', 'hasTerrace', 'orientation', 'distanceBeach', 'distanceAirport',
+  'features', 'details', 'preferences', 'name'
+];
+
+const isEmptyInsightValue = (v) => v === undefined || v === null || v === '';
+
+const applyInsightsPatchNoOverwrite = (targetInsights, patch = {}, sourceTag = 'unknown') => {
+  if (!targetInsights || !patch || typeof patch !== 'object') return [];
+  const applied = [];
+  for (const key of INSIGHT_FIELDS_V1) {
+    if (!(key in patch)) continue;
+    if (!isEmptyInsightValue(targetInsights[key])) continue;
+    const next = patch[key];
+    if (isEmptyInsightValue(next)) continue;
+    targetInsights[key] = next;
+    applied.push(key);
+  }
+  if (applied.length) {
+    console.log(`✅ [${sourceTag}] applied fields: ${applied.join(', ')}`);
+  }
+  return applied;
+};
+
+const extractInsightsWithLLM = async (session, newMessage, locationLexicon = []) => {
+  if (!session || !newMessage) return {};
+  const current = session.insights || {};
+  const emptyFields = INSIGHT_FIELDS_V1.filter((k) => isEmptyInsightValue(current[k]));
+  if (!emptyFields.length) return {};
+
+  const locationsSample = Array.isArray(locationLexicon) ? locationLexicon.slice(0, 180) : [];
+  const system = [
+    'You are a strict extraction engine for real estate search.',
+    'Return ONLY valid JSON object (no markdown, no explanation).',
+    'Extract ONLY missing fields from user text.',
+    'Do NOT overwrite already filled fields.',
+    '',
+    'Output keys allowed:',
+    INSIGHT_FIELDS_V1.join(', '),
+    '',
+    'Value rules:',
+    '- operation: "покупка" or "аренда"',
+    '- budget: like "100000 €"',
+    '- rooms: like "2 комнаты"',
+    '- area: like "50 м²"',
+    '- bathrooms/floor/plotArea: numeric-like strings allowed',
+    '- hasParking/hasPool/hasTerrace: boolean true only when explicit',
+    '- location: short location text from message; prefer values close to known feed locations when possible',
+    '- features: array of slugs if explicit',
+    '',
+    'If a field is unclear, omit it from JSON.'
+  ].join('\n');
+
+  const userPayload = {
+    message: String(newMessage),
+    existingInsights: current,
+    emptyFields,
+    knownLocationsSample: locationsSample
+  };
+
+  try {
+    const completion = await callOpenAIWithRetry(() =>
+      openai.chat.completions.create({
+        model: LLM_EXTRACTION_MODEL,
+        temperature: 0,
+        max_tokens: 320,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: JSON.stringify(userPayload) }
+        ]
+      }), 2, 'LLM-Extraction'
+    );
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw || typeof raw !== 'string') return {};
+    const cleaned = raw.replace(/```json\s*|\s*```/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+    const sanitized = {};
+    for (const key of INSIGHT_FIELDS_V1) {
+      if (!(key in parsed)) continue;
+      const value = parsed[key];
+      if (isEmptyInsightValue(value)) continue;
+      if (key === 'features') {
+        if (Array.isArray(value)) sanitized[key] = value.filter((x) => typeof x === 'string' && x.trim()).slice(0, 8);
+        continue;
+      }
+      if (key === 'hasParking' || key === 'hasPool' || key === 'hasTerrace') {
+        if (value === true) sanitized[key] = true;
+        continue;
+      }
+      sanitized[key] = value;
+    }
+    return sanitized;
+  } catch (e) {
+    console.log(`⚠️ LLM extraction failed: ${e?.message || 'unknown error'}`);
+    return {};
+  }
+};
+
+const runExtractionPipeline = async (sessionId, newMessage, locationLexicon = []) => {
+  const session = sessions.get(sessionId);
+  if (!session) return [];
+  const mode = getExtractionMode();
+  const applied = [];
+
+  if (mode === 'llm' || mode === 'hybrid') {
+    const llmPatch = await extractInsightsWithLLM(session, newMessage, locationLexicon);
+    applied.push(...applyInsightsPatchNoOverwrite(session.insights, llmPatch, 'llm'));
+  }
+
+  if (mode === 'rules' || mode === 'hybrid') {
+    const before = { ...session.insights };
+    await updateInsights(sessionId, newMessage, locationLexicon);
+    for (const key of INSIGHT_FIELDS_V1) {
+      if (isEmptyInsightValue(before[key]) && !isEmptyInsightValue(session.insights[key])) {
+        if (!applied.includes(key)) applied.push(key);
+      }
+    }
+  }
+
+  return Array.from(new Set(applied));
+};
+
 // 🤖 [DEPRECATED] GPT анализатор для извлечения insights (9 параметров)
 // Основной механизм анализа теперь через META-JSON в ответе модели внутри основного диалога.
 const analyzeContextWithGPT = async (sessionId) => {
@@ -2404,7 +2537,9 @@ const transcribeAndRespond = async (req, res) => {
 
     addMessageToSession(sessionId, 'user', transcription);
     const locationLexicon = await getLocationLexicon();
-    await updateInsights(sessionId, transcription, locationLexicon);
+    const extractedFields = await runExtractionPipeline(sessionId, transcription, locationLexicon);
+    session.lastExtractionMode = getExtractionMode();
+    session.lastExtractedFields = extractedFields;
     
     // 🆕 Sprint V: детекция reference intent в сообщении пользователя (без интерпретации)
     // 🔧 Hotfix: Reference Detector Stabilization (Roadmap v2)
@@ -3357,7 +3492,11 @@ ${factsList.join('\n')}
         gpt: gptTime,
         total: totalTime
       },
-      queryTraceV1: session.queryTraceV1 || null
+      queryTraceV1: session.queryTraceV1 || null,
+      extraction: {
+        mode: session.lastExtractionMode || getExtractionMode(),
+        appliedFields: Array.isArray(session.lastExtractedFields) ? session.lastExtractedFields : []
+      }
     };
 
     // Patch (outside roadmap): Browser-visible compact debug (only under exact gate)
