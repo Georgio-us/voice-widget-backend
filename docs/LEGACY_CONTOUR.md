@@ -1,6 +1,6 @@
 # Legacy Contour (Search vs Orchestration)
 
-Last updated: 2026-04-26
+Last updated: 2026-04-28
 Branch: `Split`
 Status: boundary document for cleanup decisions.
 
@@ -85,6 +85,25 @@ Replaced with:
 
 1. Feed-driven location lexicon (loaded from DB rows, cached).
 2. Thin alias layer for common RU variants (Torrevieja/Calpe/Alicante/etc).
+
+### Iteration 4 (2026-04-28)
+
+Extraction path hardened:
+
+1. Added runtime extraction mode switch: `rules | llm | hybrid`.
+2. In active environment, extraction is now `llm`-first and no-overwrite.
+3. Added extraction trace in API/debug (`mode`, `appliedFields`).
+
+### Iteration 5 (2026-04-28)
+
+Canonical guards and relaxed behavior:
+
+1. Budget leak protection by operation:
+   - sale budgets below `10000` dropped from query;
+   - rent budgets above/equal `10000` dropped from query.
+2. Added core softening (`*0.8`) for `minPrice`, `minArea`, `plotArea`.
+3. Added relaxed fallback chain when strict result is empty.
+4. Added `queryTraceV1.relaxed` for visibility of dropped relaxed filters.
 
 ## Practical Decision For Next Iterations
 

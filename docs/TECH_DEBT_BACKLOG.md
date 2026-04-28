@@ -1,8 +1,13 @@
 # Tech Debt Backlog (Estyle)
 
-Last updated: 2026-04-22
+Last updated: 2026-04-28
 Branch: `Split`
 Purpose: deferred tasks that are important but intentionally postponed.
+
+## Scope Note (2026-04-28)
+
+Active work is now extraction/canonical quality for live XML search.
+Items not related to this track (including CRM outbound integration details) stay deferred until search stability is accepted.
 
 ## P1 — XML Sync Automation (deferred)
 

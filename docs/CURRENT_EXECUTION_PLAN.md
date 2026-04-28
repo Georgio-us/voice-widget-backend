@@ -1,8 +1,8 @@
 # Current Execution Plan (Estyle)
 
-Last updated: 2026-04-23
+Last updated: 2026-04-28
 Branch: `Split`
-Status: XML baseline is live; current priority is CRM-ready lead payload contract.
+Status: XML baseline is live; priority is deterministic AI extraction -> canonical query -> stable candidate pool.
 
 ## Current Environment Snapshot (non-secret)
 
@@ -45,25 +45,42 @@ Status: XML baseline is live; current priority is CRM-ready lead payload contrac
 
 ## Current Investigation Focus
 
-Goal of current iteration: define and implement CRM-ready lead contract for Mediaelx.
+Goal of current iteration: stabilize selection quality for real XML inventory under LLM extraction.
 
-Primary artifact:
-1. `docs/LEAD_CRM_CONTRACT.md`
+Primary runtime path:
+1. `input -> extraction(mode) -> insights -> canonicalQueryV1 -> candidate pool`.
 
 Scope now:
-1. unify lead JSON shape for all widget lead entry points.
-2. add `ai_notes`/`summary` based on dialog insights.
-3. guarantee `propertyId` propagation for object-context leads.
-4. prepare stable outbound-ready payload (without enabling outbound call yet).
+1. `EXTRACTION_MODE` switch (`rules | llm | hybrid`) in backend runtime.
+2. strict no-overwrite insights policy (fill empty only).
+3. canonical budget guard by operation:
+   - sale accepts only `>= 10000`;
+   - rent accepts `< 10000` (current product rule).
+4. location/type normalization fixes for RU/ES/EN variants.
+5. relaxed fallback chain (drop non-core constraints progressively when strict gives 0).
+6. softening of core numeric constraints for recall:
+   - `minPrice = minPrice * 0.8`
+   - `minArea = minArea * 0.8`
+   - `plotArea = plotArea * 0.8`
+
+## Work Completed In This Track (2026-04-26 .. 2026-04-28)
+
+1. LLM schema-first extraction pipeline added with runtime mode switch.
+2. Debug now returns extraction mode + applied fields.
+3. Budget shorthand parsing fixed (`100к`, `100k`), room shorthand fixed (`2к`).
+4. Type fallback and near-sea routing fixed:
+   - `квартира` -> `type=apartment`;
+   - `возле моря` -> `features.near_sea` (not location).
+5. RU location aliases normalized for canonical matching (`Торревьеха` -> `torrevieja`, etc.).
+6. Sale low-budget leak fixed in canonical (`2500` for sale is dropped from query).
+7. Relaxed chain implemented and exposed in `queryTraceV1.relaxed`.
+8. Live smoke tests confirm stable flow and reproducible candidate traces.
 
 ## Where We Stop In This Session
 
-Planning phase complete for CRM lead payload.
+Baseline is working and testable on live deploy.
 
 Next coding slice (planned):
-1. extend `POST /api/leads` input contract with optional `summary` / `aiNotes` / `insights`.
-2. implement server-side `ai_notes` builder from `session_logs` fallback + request payload.
-3. persist enriched payload in `lead_requests.extra` (or dedicated columns in follow-up migration).
-4. wire frontend lead forms to pass `propertyId` from active/selected card context.
-5. add one stable outbound payload builder (pure function) and log-ready preview for CRM handoff.
-6. update onboarding docs with final lead schema and webhook integration steps.
+1. fine-tune relaxed order/weights from real zero-result transcripts;
+2. decide which fields remain strictly core vs always-relaxed;
+3. only after this, continue CRM outbound contract work (`docs/LEAD_CRM_CONTRACT.md`), currently deferred.

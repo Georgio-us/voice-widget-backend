@@ -1,6 +1,6 @@
 # Insights Target Contract (TO-BE)
 
-Last updated: 2026-04-25  
+Last updated: 2026-04-28  
 Branch: `Split`  
 Status: design baseline for phased implementation.
 
@@ -40,8 +40,8 @@ All fields used in search must be canonicalized before query build.
 - `location`: broad location object/string (city/province/district/coast zone)
 - `rooms`: integer
 - `bathrooms`: integer
-- `maxPrice`: integer (EUR)
-- `maxArea`: integer (`m2`)
+- `minPrice`: integer (EUR)
+- `minArea`: integer (`m2`)
 - `plotArea`: integer (`m2`)
 - `floor`: integer
 - `hasParking`: boolean
@@ -68,8 +68,8 @@ Target insight schema (AI-only, 16 fields in selection path):
 3. `location` (city/province/district/zone)
 4. `rooms`
 5. `bathrooms`
-6. `maxPrice` (from budget)
-7. `maxArea` (built area)
+6. `minPrice` (from budget)
+7. `minArea` (built area)
 8. `plotArea`
 9. `floor`
 10. `hasParking`
@@ -108,8 +108,8 @@ Frontend display target:
 | Operation | `price_freq` -> `sale/rent` | `operation` | `operation` | `operation` | `candidate.operation == query.operation` |
 | Property type | `type/*` | `property_type` | `type` | `type` | mapped slug equality |
 | Location | `town/province/location_detail` | `city/province/neighborhood` | `location` | `location` | normalized contains in city+district+neighborhood |
-| Budget | `price` | `priceEUR` | `maxPrice` | `maxPrice` | `candidate.priceEUR <= maxPrice` |
-| Built area | `surface_area/built` | `area_m2` | `maxArea` | `maxArea` | `candidate.area_m2 <= maxArea` |
+| Budget | `price` | `priceEUR` | `minPrice` | `minPrice` | `candidate.priceEUR >= minPrice` |
+| Built area | `surface_area/built` | `area_m2` | `minArea` | `minArea` | `candidate.area_m2 >= minArea` |
 | Plot area | `surface_area/plot` | `plot_m2` | `plotArea` | `plotArea` | `candidate.plot_m2 >= query.plotArea` |
 | Floor | `floor` | `floor` | `floor` | `floor` | `candidate.floor == query.floor` |
 | Parking | `parking` / tags/features | `has_parking` | `hasParking` | `hasParking` | boolean strict |
@@ -132,11 +132,28 @@ Validation rules:
 2. drop conflicting values (with explicit reason).
 3. keep only supported fields for current search backend stage.
 
+Budget guard (current product rule):
+1. `operation=sale` -> accept budget only if `minPrice >= 10000`.
+2. `operation=rent` -> accept budget only if `minPrice < 10000`.
+3. invalid budget is dropped with explicit `droppedFields.reason`.
+
 ## 6) Candidate Builder Contract (Target)
 
 1. Build candidate pool from DB using `postValidationQuery`.
 2. Return ordered candidates with deterministic sort.
 3. Attach lightweight `matchReport` for debug (which constraints passed/failed/skipped).
+4. If strict result is empty, apply relaxed chain by dropping non-core constraints step-by-step.
+
+Current relaxed drop order:
+1. `hasParking`
+2. `hasTerrace`
+3. `distanceBeachKmMax`
+4. `distanceAirportKmMax`
+5. `hasPool`
+6. `features`
+7. `bathrooms`
+8. `floor`
+9. `orientation`
 
 Minimum response shape (search path):
 - `query`: post-validation query
@@ -162,7 +179,7 @@ Expected chain:
 
 1. Introduce one canonical query builder module in backend.
 2. Route all search candidate generation through this module.
-3. Apply selection fields from agreed set: `operation`, `type`, `location`, `rooms`, `bathrooms`, `maxPrice`, `maxArea`, `plotArea`, `floor`, `hasParking`, `hasPool`, `hasTerrace`, `orientation`, `distanceBeachKmMax`, `distanceAirportKmMax`, `features[]`.
+3. Apply selection fields from agreed set: `operation`, `type`, `location`, `rooms`, `bathrooms`, `minPrice`, `minArea`, `plotArea`, `floor`, `hasParking`, `hasPool`, `hasTerrace`, `orientation`, `distanceBeachKmMax`, `distanceAirportKmMax`, `features[]`.
 4. Add pre/post query snapshots to debug.
 
 ### Phase 2

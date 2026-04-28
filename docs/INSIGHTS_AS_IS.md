@@ -1,6 +1,6 @@
 # Insights AS-IS (Estyle)
 
-Last updated: 2026-04-25  
+Last updated: 2026-04-28  
 Branch: `Split`  
 Scope: current runtime behavior without refactor.
 
@@ -26,7 +26,6 @@ This file captures:
 - `area`
 - `details`
 - `preferences`
-- `progress`
 
 Backend initializes this shape in `controllers/audioController.js` (`getOrCreateSession`).
 Frontend keeps the same shape in `modules/understanding-manager.js`.
@@ -35,7 +34,10 @@ Frontend keeps the same shape in `modules/understanding-manager.js`.
 
 1. User message arrives to `POST /api/audio/upload` (`routes/audioRoute.js` -> `transcribeAndRespond`).
 2. Backend writes user message into in-memory session and calls `updateInsights(sessionId, transcription)`.
-3. `updateInsights(...)` performs rule/regex extraction, then GPT-assisted extraction update (same function).
+3. `runExtractionPipeline(...)` selects extraction mode:
+   - `rules` -> `updateInsights(...)` only,
+   - `llm` -> schema-first LLM extraction only,
+   - `hybrid` -> LLM then rules.
 4. Main assistant call returns text and optional `---META---` block.
 5. Backend parses META via `extractAssistantAndMeta(...)`:
    - merges `meta.clientProfileDelta` into `session.clientProfile`;
@@ -58,28 +60,22 @@ Current insight mutations come from multiple independent sources.
   - extraction logic is multilingual and keyword-based;
   - many fields are set only if currently empty (`if (!insights.<field>)`).
 
-### Source B: GPT-assisted extraction inside `updateInsights(...)` (backend)
+### Source B: Schema-first LLM extraction (backend)
 
-- Trigger: same request path, after rule extraction.
-- Type: probabilistic (LLM JSON extraction).
-- Fields touched: same insight fields, with selective overwrite behavior.
+- Trigger: same request path inside `runExtractionPipeline(...)`.
+- Type: probabilistic (LLM JSON extraction with strict key sanitization).
+- Fields touched: target insight fields, fill-empty only (no-overwrite policy).
 - Notes:
-  - can propose corrections/overwrites vs already set values;
-  - creates non-determinism vs pure regex-only path.
+- no-overwrite policy blocks rewrites of already filled fields.
 
-### Source C: META -> `clientProfileDelta` -> `mapClientProfileToInsights(...)` (backend)
+### Source C: META -> `clientProfileDelta` (backend orchestration only)
 
 - Trigger: assistant response includes `---META---` JSON.
 - Type: LLM-guided profile delta + deterministic mapping.
-- Fields touched (direct mapping):
-  - `budget` (from `budgetMin/budgetMax`),
-  - `location`,
-  - `type` (`propertyType`),
-  - `operation` (from `purpose` mapping),
-  - `preferences` (urgency -> "срочный поиск"),
-  - `progress` recalculation.
+- Fields touched:
+  - `session.clientProfile` only (search path no longer mutates insights from META/profile).
 - Notes:
-  - this is a second write-path after `updateInsights(...)` in the same request lifecycle.
+  - kept for orchestration/debug; excluded from active search mutation path.
 
 ### Source D: Session hydration on frontend (`loadSessionInfo`) 
 
