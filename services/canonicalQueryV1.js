@@ -360,43 +360,90 @@ const byDeterministicOrder = (a, b) => {
 
 export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit = 10 } = {}) => {
   const trace = buildCanonicalQueryV1(insights);
-  const q = trace.postValidationQuery || {};
+  const pre = trace.preValidationQuery || {};
+  const q = { ...trace.postValidationQuery };
 
-  let filtered = Array.isArray(properties) ? properties.slice() : [];
+  // Business softening for core numeric constraints.
+  if (Number.isInteger(q.minPrice) && q.minPrice > 0) q.minPrice = Math.max(1, Math.floor(q.minPrice * 0.8));
+  if (Number.isInteger(q.minArea) && q.minArea > 0) q.minArea = Math.max(1, Math.floor(q.minArea * 0.8));
+  if (Number.isInteger(q.plotArea) && q.plotArea > 0) q.plotArea = Math.max(1, Math.floor(q.plotArea * 0.8));
 
-  if (q.operation) filtered = filtered.filter((p) => String(p.operation || '').toLowerCase() === q.operation);
-  if (q.type) filtered = filtered.filter((p) => candidateTypeSlug(p) === q.type);
-  if (q.location) filtered = filtered.filter((p) => matchLocation(p, q.location));
-  if (Number.isInteger(q.rooms)) filtered = filtered.filter((p) => Number(p.rooms) === q.rooms);
-  if (Number.isInteger(q.bathrooms)) filtered = filtered.filter((p) => Number(p.bathrooms) >= q.bathrooms);
-  if (Number.isInteger(q.minPrice)) filtered = filtered.filter((p) => Number(p.priceEUR) >= q.minPrice);
-  if (Number.isInteger(q.minArea)) filtered = filtered.filter((p) => Number(p.area_m2) >= q.minArea);
-  if (Number.isInteger(q.plotArea)) filtered = filtered.filter((p) => Number(p.plot_m2) >= q.plotArea);
-  if (Number.isInteger(q.floor)) filtered = filtered.filter((p) => Number(p.floor) === q.floor);
-  if (q.hasParking === true) filtered = filtered.filter((p) => p.has_parking === true);
-  if (q.hasPool === true) filtered = filtered.filter((p) => p.has_pool === true);
-  if (q.hasTerrace === true) filtered = filtered.filter((p) => candidateHasTerrace(p));
-  if (q.orientation) filtered = filtered.filter((p) => candidateOrientation(p) === q.orientation);
+  const all = Array.isArray(properties) ? properties.slice() : [];
 
-  if (Number.isFinite(q.distanceBeachKmMax)) {
-    filtered = filtered.filter((p) => {
-      const d = candidateDistanceKm(p.distance_beach, p.distance_beach_med);
-      return Number.isFinite(d) && d <= q.distanceBeachKmMax;
-    });
-  }
+  const applyByQuery = (source, query, skip = new Set()) => {
+    let filtered = source.slice();
 
-  if (Number.isFinite(q.distanceAirportKmMax)) {
-    filtered = filtered.filter((p) => {
-      const d = candidateDistanceKm(p.distance_airport, p.distance_airport_med);
-      return Number.isFinite(d) && d <= q.distanceAirportKmMax;
-    });
-  }
+    // Core strict
+    if (query.operation) filtered = filtered.filter((p) => String(p.operation || '').toLowerCase() === query.operation);
+    if (query.type) filtered = filtered.filter((p) => candidateTypeSlug(p) === query.type);
+    if (query.location) filtered = filtered.filter((p) => matchLocation(p, query.location));
+    if (Number.isInteger(query.rooms)) filtered = filtered.filter((p) => Number(p.rooms) === query.rooms);
+    if (Number.isInteger(query.minPrice)) filtered = filtered.filter((p) => Number(p.priceEUR) >= query.minPrice);
+    if (Number.isInteger(query.minArea)) filtered = filtered.filter((p) => Number(p.area_m2) >= query.minArea);
+    if (Number.isInteger(query.plotArea)) filtered = filtered.filter((p) => Number(p.plot_m2) >= query.plotArea);
 
-  if (Array.isArray(q.features) && q.features.length) {
-    filtered = filtered.filter((p) => {
-      const featureSet = candidateFeatureSet(p);
-      return q.features.every((slug) => featureSet.has(slug));
-    });
+    // Relaxed-able
+    if (!skip.has('bathrooms') && Number.isInteger(query.bathrooms)) filtered = filtered.filter((p) => Number(p.bathrooms) >= query.bathrooms);
+    if (!skip.has('floor') && Number.isInteger(query.floor)) filtered = filtered.filter((p) => Number(p.floor) === query.floor);
+    if (!skip.has('hasParking') && query.hasParking === true) filtered = filtered.filter((p) => p.has_parking === true);
+    if (!skip.has('hasPool') && query.hasPool === true) filtered = filtered.filter((p) => p.has_pool === true);
+    if (!skip.has('hasTerrace') && query.hasTerrace === true) filtered = filtered.filter((p) => candidateHasTerrace(p));
+    if (!skip.has('orientation') && query.orientation) filtered = filtered.filter((p) => candidateOrientation(p) === query.orientation);
+
+    if (!skip.has('distanceBeachKmMax') && Number.isFinite(query.distanceBeachKmMax)) {
+      filtered = filtered.filter((p) => {
+        const d = candidateDistanceKm(p.distance_beach, p.distance_beach_med);
+        return Number.isFinite(d) && d <= query.distanceBeachKmMax;
+      });
+    }
+
+    if (!skip.has('distanceAirportKmMax') && Number.isFinite(query.distanceAirportKmMax)) {
+      filtered = filtered.filter((p) => {
+        const d = candidateDistanceKm(p.distance_airport, p.distance_airport_med);
+        return Number.isFinite(d) && d <= query.distanceAirportKmMax;
+      });
+    }
+
+    if (!skip.has('features') && Array.isArray(query.features) && query.features.length) {
+      filtered = filtered.filter((p) => {
+        const featureSet = candidateFeatureSet(p);
+        return query.features.every((slug) => featureSet.has(slug));
+      });
+    }
+
+    return filtered;
+  };
+
+  const relaxOrder = [
+    'hasParking',
+    'hasTerrace',
+    'distanceBeachKmMax',
+    'distanceAirportKmMax',
+    'hasPool',
+    'features',
+    'bathrooms',
+    'floor',
+    'orientation'
+  ];
+  const hasRelaxedInQuery = relaxOrder.some((k) => q[k] !== undefined && q[k] !== null && q[k] !== false);
+  const droppedRelaxed = [];
+  let filtered = applyByQuery(all, q, new Set());
+  let usedRelaxedFallback = false;
+
+  if (filtered.length === 0 && hasRelaxedInQuery) {
+    usedRelaxedFallback = true;
+    const skip = new Set();
+    for (const key of relaxOrder) {
+      if (!(key in q) || q[key] === null || q[key] === undefined || q[key] === false) continue;
+      skip.add(key);
+      const probe = applyByQuery(all, q, skip);
+      droppedRelaxed.push(key);
+      if (probe.length > 0) {
+        filtered = probe;
+        break;
+      }
+      filtered = probe;
+    }
   }
 
   const ordered = filtered.sort(byDeterministicOrder);
@@ -405,6 +452,15 @@ export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit 
 
   return {
     ...trace,
+    preValidationQuery: { ...pre },
+    postValidationQuery: { ...q },
+    relaxed: {
+      used: usedRelaxedFallback,
+      dropped: droppedRelaxed,
+      message: usedRelaxedFallback
+        ? 'Точные совпадения не найдены, показаны ближайшие по ослабленным параметрам.'
+        : null
+    },
     matchedCount: ordered.length,
     candidates
   };

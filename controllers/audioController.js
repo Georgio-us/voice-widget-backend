@@ -3317,6 +3317,7 @@ ${factsList.join('\n')}
       postValidationQuery: baseExecution.postValidationQuery,
       droppedFields: baseExecution.droppedFields,
       missingFields: baseExecution.missingFields,
+      relaxed: baseExecution.relaxed || null,
       matchedCount: baseExecution.matchedCount,
       candidateIds: Array.isArray(baseExecution.candidates) ? baseExecution.candidates.map((p) => p.id) : []
     };
@@ -3864,6 +3865,7 @@ async function handleInteraction(req, res) {
         postValidationQuery: execution.postValidationQuery,
         droppedFields: execution.droppedFields,
         missingFields: execution.missingFields,
+        relaxed: execution.relaxed || null,
         matchedCount: execution.matchedCount
       };
       session.lastCandidates = execution.candidates.map((p) => p.id);
