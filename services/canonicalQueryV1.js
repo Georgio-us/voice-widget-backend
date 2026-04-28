@@ -105,6 +105,85 @@ const normalizeLocation = (v) => {
   };
 };
 
+const LOCATION_PROVINCES = new Set(['alicante', 'murcia', 'valencia']);
+
+const CITY_TO_PROVINCE = new Map([
+  ['alicante', 'alicante'],
+  ['valencia', 'valencia'],
+  ['torrevieja', 'alicante'],
+  ['benidorm', 'alicante'],
+  ['calpe', 'alicante'],
+  ['orihuela', 'alicante'],
+  ['orihuela costa', 'alicante'],
+  ['pilar de la horadada', 'alicante'],
+  ['san miguel de salinas', 'alicante'],
+  ['guardamar', 'alicante'],
+  ['guardamar del segura', 'alicante'],
+  ['los alcazares', 'murcia'],
+  ['san pedro del pinatar', 'murcia'],
+  ['paterna', 'valencia'],
+  ['torrent', 'valencia']
+]);
+
+const MICRO_LOCATION_HINTS = [
+  'punta prima',
+  'villamartin',
+  'la zenia',
+  'cabo roig',
+  'playa flamenca',
+  'los balcones',
+  'campoamor',
+  'las colinas golf',
+  'las ramblas',
+  'la mata',
+  'ciudad quesada',
+  'lomas de cabo roig',
+  'finestrat',
+  'blue lagoon',
+  'los altos'
+];
+
+const parseLocationSemantics = (rawValue) => {
+  const raw = toText(rawValue);
+  const normalized = normalizeText(raw);
+  const out = {
+    raw: raw || null,
+    normalized: normalized || null,
+    city: null,
+    province: null,
+    location: null,
+    featureHints: []
+  };
+  if (!normalized) return out;
+
+  if (/(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa|побереж|coast|costa)/.test(normalized)) {
+    out.featureHints.push('near_sea');
+  }
+
+  if (CITY_TO_PROVINCE.has(normalized)) {
+    out.city = normalized;
+    out.province = CITY_TO_PROVINCE.get(normalized) || null;
+    return out;
+  }
+
+  if (LOCATION_PROVINCES.has(normalized)) {
+    // Ambiguous city/province names (Alicante/Valencia): keep city-first intent + province link.
+    out.city = normalized;
+    out.province = normalized;
+    return out;
+  }
+
+  if (MICRO_LOCATION_HINTS.some((x) => normalized.includes(x))) {
+    out.location = normalized;
+    return out;
+  }
+
+  // Default interpretation: city-first, with optional province autolink if known.
+  out.city = normalized;
+  out.province = CITY_TO_PROVINCE.get(normalized) || null;
+  return out;
+};
+
 const normalizeOrientation = (v) => {
   const s = normalizeText(v);
   if (!s) return null;
@@ -224,6 +303,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   const canonicalPatch = {};
   const droppedFields = [];
   const missingFields = [];
+  let locationSemantics = null;
 
   if (sourceInsights.operation) {
     const op = normalizeOperation(sourceInsights.operation);
@@ -242,20 +322,20 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   }
 
   if (sourceInsights.location) {
-    const locNorm = normalizeText(sourceInsights.location);
-    const coastLike = /(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa|побереж|coast|costa)/.test(locNorm);
+    locationSemantics = parseLocationSemantics(sourceInsights.location);
+    const coastLike = Array.isArray(locationSemantics?.featureHints) && locationSemantics.featureHints.includes('near_sea');
     if (coastLike) {
       const f = mergeFeatures(sourceInsights.features, 'near_sea', inferred.features);
       if (f.length) canonicalPatch.features = f;
     }
-    const loc = normalizeLocation(sourceInsights.location);
+    const chosenLocationToken =
+      locationSemantics?.city ||
+      locationSemantics?.location ||
+      locationSemantics?.province ||
+      null;
+    const loc = normalizeLocation(chosenLocationToken || sourceInsights.location);
     if (loc?.normalized) {
-      if (/(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa)/.test(loc.normalized)) {
-        const f = mergeFeatures(sourceInsights.features, 'near_sea', inferred.features);
-        if (f.length) canonicalPatch.features = f;
-      } else {
-        canonicalPatch.location = loc;
-      }
+      canonicalPatch.location = loc;
     } else if (!coastLike) {
       droppedFields.push({ field: 'location', reason: 'invalid_location', value: sourceInsights.location });
     }
@@ -328,6 +408,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
 
   return {
     sourceInsights,
+    locationSemantics,
     canonicalPatch,
     preValidationQuery,
     postValidationQuery,
