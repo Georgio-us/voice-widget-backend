@@ -1344,6 +1344,53 @@ const INSIGHT_FIELDS_V1 = [
   'features', 'details', 'preferences', 'name'
 ];
 
+const COASTAL_FEATURE_RE = /(возле моря|у моря|рядом с морем|возле пляжа|рядом с пляжем|near sea|near the sea|near beach|near the beach|cerca del mar|cerca de la playa|playa|пляж|побереж|coast|costa)/i;
+
+const EXTRACTION_LOCATION_ALIASES = new Map([
+  ['торревьеха', 'Torrevieja'],
+  ['торревьехе', 'Torrevieja'],
+  ['аликанте', 'Alicante'],
+  ['бенидорм', 'Benidorm'],
+  ['кальпе', 'Calpe'],
+  ['кальпа', 'Calpe'],
+  ['мурсия', 'Murcia'],
+  ['валенсия', 'Valencia'],
+  ['валенсии', 'Valencia'],
+  ['орихуэла', 'Orihuela'],
+  ['ориуэла', 'Orihuela'],
+  ['пунта прима', 'Punta Prima'],
+  ['вильямартин', 'Villamartin'],
+  ['вилламартин', 'Villamartin'],
+  ['ла зения', 'La Zenia'],
+  ['лос алькасарес', 'Los Alcazares']
+]);
+
+const detectCitiesFromText = (text = '', locationLexicon = []) => {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+  const lexiconMap = new Map();
+  for (const item of Array.isArray(locationLexicon) ? locationLexicon : []) {
+    const key = normalizeLookupText(item);
+    if (key && !lexiconMap.has(key)) lexiconMap.set(key, String(item).trim());
+  }
+  const parts = raw.split(/,|;|\/|\s+(?:и|или|or|y)\s+/gi).map((x) => x.trim()).filter(Boolean);
+  const cities = [];
+  for (const part of parts) {
+    const n = normalizeLookupText(part);
+    if (!n || COASTAL_FEATURE_RE.test(n)) continue;
+    const alias = EXTRACTION_LOCATION_ALIASES.get(n);
+    if (alias) {
+      cities.push(alias);
+      continue;
+    }
+    const fromLexicon = lexiconMap.get(n);
+    if (fromLexicon && !/(costa|coast|пляж|побереж|near sea|near beach)/i.test(normalizeLookupText(fromLexicon))) {
+      cities.push(fromLexicon);
+    }
+  }
+  return Array.from(new Set(cities));
+};
+
 const isEmptyInsightValue = (v) => v === undefined || v === null || v === '';
 
 const inferTypeFromText = (text = '') => {
@@ -1449,12 +1496,25 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
     // "near sea" is a feature, not a location.
     if (typeof sanitized.location === 'string') {
       const locNorm = normalizeLookupText(sanitized.location);
-      if (/(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa|побереж|coast|costa|costa blanca|costa brava|costa del sol)/i.test(locNorm)) {
+      if (COASTAL_FEATURE_RE.test(locNorm)) {
         const features = Array.isArray(sanitized.features) ? sanitized.features.slice() : [];
         if (!features.includes('near_sea')) features.push('near_sea');
         sanitized.features = features;
         delete sanitized.location;
       }
+    }
+
+    // Guard 1: coastal phrasing in message must map to near_sea feature.
+    if (COASTAL_FEATURE_RE.test(String(newMessage || ''))) {
+      const features = Array.isArray(sanitized.features) ? sanitized.features.slice() : [];
+      if (!features.includes('near_sea')) features.push('near_sea');
+      sanitized.features = features;
+    }
+
+    // Guard 2: preserve multi-city intent from raw message (no early collapse to one city).
+    const citiesDetected = detectCitiesFromText(newMessage, locationLexicon);
+    if (citiesDetected.length >= 2) {
+      sanitized.location = citiesDetected.join(' и ');
     }
 
     return sanitized;
@@ -3169,6 +3229,7 @@ const transcribeAndRespond = async (req, res) => {
     const baseExecution = await findBestProperties(session.insights, 100);
     session.queryTraceV1 = {
       sourceInsights: baseExecution.sourceInsights,
+      locationSemantics: baseExecution.locationSemantics || null,
       canonicalPatch: baseExecution.canonicalPatch,
       preValidationQuery: baseExecution.preValidationQuery,
       postValidationQuery: baseExecution.postValidationQuery,
@@ -3713,6 +3774,7 @@ async function handleInteraction(req, res) {
       const execution = await findBestProperties(session.insights, 10);
       session.queryTraceV1 = {
         sourceInsights: execution.sourceInsights,
+        locationSemantics: execution.locationSemantics || null,
         canonicalPatch: execution.canonicalPatch,
         preValidationQuery: execution.preValidationQuery,
         postValidationQuery: execution.postValidationQuery,

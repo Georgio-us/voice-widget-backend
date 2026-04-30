@@ -102,6 +102,9 @@ Latest coding slice applied (2026-04-30):
    - matching priority is `cities[]` first.
 4. city->province fallback message added for UI:
    - short info hint emitted via query trace: `По городу пусто · ищем по провинции`.
+5. extraction guard hardening:
+   - if user text has coastal phrase (`near beach/возле пляжа`), enforce `features.near_sea`;
+   - if user text has multiple cities, preserve multi-city location phrase (no early collapse to first city).
 
 Next coding slice (planned):
 1. city/province explicit semantics in debug + controlled fallback policy;
