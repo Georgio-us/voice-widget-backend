@@ -37,7 +37,9 @@ All fields used in search must be canonicalized before query build.
 
 - `operation`: enum `sale | rent`
 - `type`: slug enum (`apartment`, `villa`, `townhouse`, `penthouse`, `commercial`, ...)
-- `location`: broad location object/string (city/province/district/coast zone)
+- `location`: legacy single location token (kept for compatibility)
+- `cities[]`: normalized city list (city-first matching)
+- `province`: normalized province fallback
 - `rooms`: integer or integer array
 - `bathrooms`: integer
 - `minPrice`: integer (EUR)
@@ -66,20 +68,22 @@ Target insight schema (AI-only, 16 fields in selection path):
 
 1. `operation`
 2. `type`
-3. `location` (city/province/district/zone)
-4. `rooms`
-5. `bathrooms`
-6. `minPrice` (from budget)
-7. `minArea` (built area)
-8. `plotArea`
-9. `floor`
-10. `hasParking`
-11. `hasPool`
-12. `hasTerrace`
-13. `orientation`
-14. `distanceBeachKmMax`
-15. `distanceAirportKmMax`
-16. `features[]`
+3. `location` (legacy compatibility field)
+4. `cities[]` (primary city scope)
+5. `province` (fallback scope)
+6. `rooms`
+7. `bathrooms`
+8. `minPrice` (from budget)
+9. `minArea` (built area)
+10. `plotArea`
+11. `floor`
+12. `hasParking`
+13. `hasPool`
+14. `hasTerrace`
+15. `orientation`
+16. `distanceBeachKmMax`
+17. `distanceAirportKmMax`
+18. `features[]`
 
 Notes:
 1. `name` stays CRM/dialog field; not part of search query.

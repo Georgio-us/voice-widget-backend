@@ -35,6 +35,19 @@ const parseUniquePositiveInts = (v) => {
   return Array.from(new Set(nums));
 };
 
+const parseLocationTokens = (rawValue) => {
+  const raw = toText(rawValue);
+  if (!raw) return [];
+  return Array.from(
+    new Set(
+      raw
+        .split(/,|;|\/|\s+(?:и|или|or|y)\s+/gi)
+        .map((x) => normalizeLocationToken(x))
+        .filter(Boolean)
+    )
+  );
+};
+
 const parseFirstFloat = (v) => {
   if (v === null || v === undefined) return null;
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -177,6 +190,7 @@ const parseLocationSemantics = (rawValue) => {
   const out = {
     raw: raw || null,
     normalized: normalized || null,
+    cities: [],
     city: null,
     province: null,
     location: null,
@@ -188,7 +202,29 @@ const parseLocationSemantics = (rawValue) => {
     out.featureHints.push('near_sea');
   }
 
+  const tokens = parseLocationTokens(raw);
+  if (tokens.length > 1) {
+    const cities = [];
+    const provinces = new Set();
+    for (const token of tokens) {
+      if (CITY_TO_PROVINCE.has(token)) {
+        cities.push(token);
+        provinces.add(CITY_TO_PROVINCE.get(token));
+        continue;
+      }
+      if (LOCATION_PROVINCES.has(token)) {
+        provinces.add(token);
+      }
+    }
+    if (cities.length > 0) {
+      out.cities = Array.from(new Set(cities));
+      if (provinces.size === 1) out.province = Array.from(provinces)[0];
+      return out;
+    }
+  }
+
   if (CITY_TO_PROVINCE.has(normalized)) {
+    out.cities = [normalized];
     out.city = normalized;
     out.province = CITY_TO_PROVINCE.get(normalized) || null;
     return out;
@@ -196,6 +232,7 @@ const parseLocationSemantics = (rawValue) => {
 
   if (LOCATION_PROVINCES.has(normalized)) {
     // Ambiguous city/province names (Alicante/Valencia): keep city-first intent + province link.
+    out.cities = [normalized];
     out.city = normalized;
     out.province = normalized;
     return out;
@@ -362,16 +399,22 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
       if (f.length) canonicalPatch.features = f;
     }
     if (!coastLike) {
-      const chosenLocationToken =
-        locationSemantics?.city ||
-        locationSemantics?.location ||
-        locationSemantics?.province ||
-        null;
-      const loc = normalizeLocation(chosenLocationToken || sourceInsights.location);
-      if (loc?.normalized) {
-        canonicalPatch.location = loc;
+      const cityList = Array.isArray(locationSemantics?.cities) ? locationSemantics.cities.filter(Boolean) : [];
+      if (cityList.length > 0) {
+        canonicalPatch.cities = cityList;
+        if (locationSemantics?.province) canonicalPatch.province = locationSemantics.province;
       } else {
-        droppedFields.push({ field: 'location', reason: 'invalid_location', value: sourceInsights.location });
+        const chosenLocationToken =
+          locationSemantics?.city ||
+          locationSemantics?.location ||
+          locationSemantics?.province ||
+          null;
+        const loc = normalizeLocation(chosenLocationToken || sourceInsights.location);
+        if (loc?.normalized) {
+          canonicalPatch.location = loc;
+        } else {
+          droppedFields.push({ field: 'location', reason: 'invalid_location', value: sourceInsights.location });
+        }
       }
     }
   } else {
@@ -467,6 +510,18 @@ const matchLocation = (candidate, loc) => {
   return !!hay && hay.includes(loc.normalized);
 };
 
+const matchCity = (candidate, citySlug) => {
+  const city = normalizeLocationToken(candidate?.city || candidate?.location_city || '');
+  if (!city || !citySlug) return false;
+  return city === citySlug;
+};
+
+const matchProvince = (candidate, provinceSlug) => {
+  const province = normalizeLocationToken(candidate?.district || candidate?.location_district || '');
+  if (!province || !provinceSlug) return false;
+  return province === provinceSlug;
+};
+
 const candidateDistanceKm = (value, unit) => toDistanceKm(value, unit);
 
 const candidateFeatureSet = (candidate) => {
@@ -506,7 +561,15 @@ export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit 
     // Core strict
     if (query.operation) filtered = filtered.filter((p) => String(p.operation || '').toLowerCase() === query.operation);
     if (query.type) filtered = filtered.filter((p) => candidateTypeSlug(p) === query.type);
-    if (query.location) filtered = filtered.filter((p) => matchLocation(p, query.location));
+    if (Array.isArray(query.cities) && query.cities.length) {
+      const citySet = new Set(query.cities.map((c) => normalizeLocationToken(c)).filter(Boolean));
+      if (citySet.size > 0) filtered = filtered.filter((p) => citySet.has(normalizeLocationToken(p?.city || p?.location_city || '')));
+    } else if (query.location) {
+      filtered = filtered.filter((p) => matchLocation(p, query.location));
+    }
+    if (query.province && (!Array.isArray(query.cities) || query.cities.length === 0)) {
+      filtered = filtered.filter((p) => matchProvince(p, query.province));
+    }
     if (Number.isInteger(query.rooms)) {
       filtered = filtered.filter((p) => Number(p.rooms) === query.rooms);
     } else if (Array.isArray(query.rooms) && query.rooms.length) {
@@ -568,8 +631,23 @@ export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit 
   ];
   const hasRelaxedInQuery = relaxOrder.some((k) => q[k] !== undefined && q[k] !== null && q[k] !== false);
   const droppedRelaxed = [];
-  let filtered = applyByQuery(all, q, new Set());
   let usedRelaxedFallback = false;
+  let filtered = applyByQuery(all, q, new Set());
+  let locationScope = Array.isArray(q.cities) && q.cities.length ? 'city' : (q.province ? 'province' : null);
+  let locationFallbackMessage = null;
+
+  if (filtered.length === 0 && Array.isArray(q.cities) && q.cities.length && q.province) {
+    const provinceFallbackQuery = { ...q };
+    delete provinceFallbackQuery.cities;
+    const provinceProbe = applyByQuery(all, provinceFallbackQuery, new Set());
+    if (provinceProbe.length > 0) {
+      filtered = provinceProbe;
+      usedRelaxedFallback = true;
+      droppedRelaxed.push('cities');
+      locationScope = 'province_fallback';
+      locationFallbackMessage = 'По городу пусто · ищем по провинции';
+    }
+  }
 
   if (filtered.length === 0 && hasRelaxedInQuery) {
     usedRelaxedFallback = true;
@@ -599,8 +677,11 @@ export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit 
       used: usedRelaxedFallback,
       dropped: droppedRelaxed,
       message: usedRelaxedFallback
-        ? 'Точные совпадения не найдены, показаны ближайшие по ослабленным параметрам.'
-        : null
+      ? (locationFallbackMessage ? null : 'Точные совпадения не найдены, показаны ближайшие по ослабленным параметрам.')
+      : null
+      ,
+      locationScope,
+      locationFallbackMessage
     },
     matchedCount: ordered.length,
     candidates

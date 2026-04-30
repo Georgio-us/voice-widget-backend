@@ -97,6 +97,11 @@ Latest coding slice applied (2026-04-30):
 2. rooms canonical now supports multi-value:
    - `rooms` can be scalar (`2`) or array (`[1,2]`);
    - candidate filter supports `IN` match for array mode.
+3. city-first multi-city canonical support added:
+   - `location` phrase can produce `cities[]` + optional `province`;
+   - matching priority is `cities[]` first.
+4. city->province fallback message added for UI:
+   - short info hint emitted via query trace: `По городу пусто · ищем по провинции`.
 
 Next coding slice (planned):
 1. city/province explicit semantics in debug + controlled fallback policy;
