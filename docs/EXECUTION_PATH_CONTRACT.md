@@ -34,8 +34,11 @@ These values may exist for UX/logging only, but MUST NOT participate in:
 ## Extraction Contract
 
 1. Extraction writes only to `insights`.
-2. Rewrite policy (current): fill-empty-only, no overwrite in same search cycle.
-3. Runtime mode is explicit (`EXTRACTION_MODE`), and active mode MUST be returned in debug.
+2. Rewrite policy (current): deterministic field-level `fill/rewrite`.
+3. If a field is present in current extraction patch, it is updated (rewritten).
+4. If a field is absent in current extraction patch, existing value is preserved.
+5. Array fields (`features`, `locationsRaw`, `rooms[]`) use `replace` (no merge).
+6. Runtime mode is explicit (`EXTRACTION_MODE`), and active mode MUST be returned in debug.
 
 ## Canonical Contract
 
@@ -44,6 +47,9 @@ These values may exist for UX/logging only, but MUST NOT participate in:
 3. Invalid fields are dropped with explicit reason in `droppedFields`.
 4. Search policy is applied here (budget guards, softening, relaxed chain).
 5. `rooms` may be scalar or array; filter semantics are `==` for scalar and `IN` for array.
+6. `operation` default is `sale` when unresolved/empty.
+7. If `operation=rent` conflicts with sale-range budget (`>=10000`), operation is reset (dropped) and default `sale` applies.
+8. Unknown multi-location token sets from `locationsRaw` MUST NOT pass as free-text `location` filter.
 
 ## Debug Contract
 

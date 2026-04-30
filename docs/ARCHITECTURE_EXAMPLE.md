@@ -1,6 +1,6 @@
 # Architecture Example (Canonical Search Flow)
 
-Last updated: 2026-04-26
+Last updated: 2026-04-30
 Branch: `Split`
 Status: target execution model for deterministic AI-only selection.
 
@@ -13,7 +13,7 @@ Define one linear path from user request to candidate cards, without hidden side
 1. Client sends message (voice or text).
 2. System converts input to text (voice -> transcription, text -> raw text).
 3. Extraction reads text and fills agreed search fields (up to 16 fields).
-4. Filled values are written into `insights` state (accumulative between turns).
+4. Filled values are written into `insights` state using deterministic `fill/rewrite` patch policy.
 5. Canonical mapper normalizes `insights` into one search-safe query object.
 6. Filter engine applies this query to properties dataset.
 7. Candidate pool is produced and ordered.
@@ -34,6 +34,13 @@ Define one linear path from user request to candidate cards, without hidden side
 
 Search behavior must depend only on extracted/normalized business fields (rooms, budget, location, features, etc.), not on dialog orchestration metadata.
 
+## Rewrite Rule (Current Runtime)
+
+1. Field present in extraction patch -> write/overwrite this field in `insights`.
+2. Field absent in extraction patch -> preserve previous value.
+3. Array fields (`features`, `locationsRaw`, `rooms[]`) are replaced, not merged.
+4. Query is rebuilt from updated insights every turn.
+
 ## Pricing/Area Rule (Current Iteration)
 
 Current deterministic rule:
@@ -44,6 +51,7 @@ Current deterministic rule:
    - `price >= minPrice`
    - `area >= minArea`
 4. `maxPrice/maxArea` are intentionally not used in this phase.
+5. `operation` defaults to `sale` when unresolved.
 
 ## Example (2-room)
 

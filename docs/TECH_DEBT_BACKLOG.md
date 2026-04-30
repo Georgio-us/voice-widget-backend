@@ -1,6 +1,6 @@
 # Tech Debt Backlog (Estyle)
 
-Last updated: 2026-04-28
+Last updated: 2026-04-30
 Branch: `Split`
 Purpose: deferred tasks that are important but intentionally postponed.
 
@@ -48,3 +48,17 @@ XML import is currently manual. This risks stale listings and inconsistent clien
 
 1. Add heartbeat/notification on failed import runs.
 2. Add dashboard-style SQL/metrics snippet for quick health checks.
+
+## P1 — Selection Runtime Stability Flags (active)
+
+1. Room extraction ambiguity in single-pass utterances:
+- some phrasings still collapse multi-room intent into scalar despite array support in canonical.
+
+2. Location recognition robustness for noisy ASR:
+- unknown tokens are now dropped safely, but false negatives can reduce recall until user уточняет город.
+
+3. Prompt/legacy residue in monolithic controller:
+- runtime path is locked, but `stage/role/meta` code still exists in controller and logs, increasing maintenance risk.
+
+4. Query trace consistency for mixed request types:
+- `interaction_show/next` can reflect previously built candidate pools; when debugging, always compare with latest `/upload` turn trace.

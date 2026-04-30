@@ -91,7 +91,7 @@ Replaced with:
 Extraction path hardened:
 
 1. Added runtime extraction mode switch: `rules | llm | hybrid`.
-2. In active environment, extraction is now `llm`-first and no-overwrite.
+2. In active environment, extraction is now `llm`-first.
 3. Added extraction trace in API/debug (`mode`, `appliedFields`).
 
 ### Iteration 5 (2026-04-28)
@@ -114,6 +114,15 @@ Execution-path isolation completed:
 3. Disabled runtime role transitions on main user-message and interaction events.
 4. Removed `stage`/`role` from runtime API response payloads (`/upload`, `/interaction`, `/session/:id` contract scope used by frontend).
 5. Frontend debug cleaned from `stage`/`role` as search diagnostics inputs.
+
+### Iteration 7 (2026-04-30)
+
+Extraction/runtime contract updates:
+
+1. Switched from no-overwrite to deterministic `fill/rewrite` patch policy.
+2. Disabled text show-intent trigger (`покажи/show/muestra`) for opening cards; UX action-message path is primary.
+3. Added `locationsRaw` as explicit extraction source and canonical priority (`locationsRaw -> location`).
+4. Unknown multi-location token sets are dropped from query instead of leaking as free-text location filter.
 
 ## Practical Decision For Next Iterations
 

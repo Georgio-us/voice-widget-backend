@@ -1,6 +1,6 @@
 # Insights AS-IS (Estyle)
 
-Last updated: 2026-04-28 (post legacy-cleanup milestone)  
+Last updated: 2026-04-30 (post deterministic rewrite + location contract hardening)  
 Branch: `Split`  
 Scope: current runtime behavior without refactor.
 
@@ -14,18 +14,29 @@ This file captures:
 3. what is actually used to form candidate selection/query;
 4. where `meta/stage/mode` are involved today.
 
-## Current Insight Shape (canonical target)
+## Current Insight Shape (runtime)
 
 `session.insights` (backend + frontend understanding target):
-- `name`
 - `operation`
-- `budget`
 - `type`
 - `location`
+- `locationsRaw`
 - `rooms`
+- `bathrooms`
+- `budget`
 - `area`
+- `plotArea`
+- `floor`
+- `hasParking`
+- `hasPool`
+- `hasTerrace`
+- `orientation`
+- `distanceBeach`
+- `distanceAirport`
+- `features`
 - `details`
 - `preferences`
+- `name`
 
 Backend initializes this shape in `controllers/audioController.js` (`getOrCreateSession`).
 Frontend keeps the same shape in `modules/understanding-manager.js`.
@@ -51,7 +62,7 @@ Current insight mutations come from multiple independent sources.
 
 - Trigger: every `/api/audio/upload` user message.
 - Type: deterministic pattern extraction.
-- Fields touched: all insight fields (`name`, `operation`, `budget`, `type`, `location`, `rooms`, `area`, `details`, `preferences`) + `progress` recalculation.
+- Fields touched: legacy subset; acts as fallback in `rules/hybrid` only.
 - Notes:
   - extraction logic is multilingual and keyword-based;
   - many fields are set only if currently empty (`if (!insights.<field>)`).
@@ -60,9 +71,10 @@ Current insight mutations come from multiple independent sources.
 
 - Trigger: same request path inside `runExtractionPipeline(...)`.
 - Type: probabilistic (LLM JSON extraction with strict key sanitization).
-- Fields touched: target insight fields, fill-empty only (no-overwrite policy).
+- Fields touched: full runtime insight shape.
 - Notes:
-- no-overwrite policy blocks rewrites of already filled fields.
+  - policy is deterministic `fill/rewrite` (field present in patch rewrites; field absent is untouched);
+  - array fields (`features`, `locationsRaw`, `rooms[]`) are `replace`, not merge.
 
 ### Source C: META / Stage / Role orchestration
 
@@ -91,30 +103,30 @@ Current insight mutations come from multiple independent sources.
   - `locationDetails` -> `details`
   - `additional` -> `preferences`
 - Notes:
-  - does not extract new facts, only maps keys and recalculates `progress`.
+  - does not extract new facts.
 
 ## What Actually Forms Candidate Selection (AS-IS)
 
-Important: current production selection is not fully driven by all 9 insights.
+Important: current production selection is driven by canonical query execution path.
 
-### Backend ranking (`findBestProperties` / `scoreProperty`)
+### Backend candidate execution (`findBestProperties` -> `executeCanonicalQueryV1`)
 
-Current scoring uses:
-- `insights.rooms`
-- `insights.location` (district normalization)
-- `insights.budget`
-- plus static bonus for city `Valencia`
-
-Not currently used in score:
-- `operation`, `type`, `area`, `details`, `preferences`, `name`.
+Current runtime selection uses canonical fields from `postValidationQuery`, including:
+1. `operation` (default `sale` if unresolved)
+2. `type`
+3. `cities[]` (primary) / `location` (fallback)
+4. `province` fallback
+5. `rooms` (`==` scalar or `IN` array)
+6. `minPrice`, `minArea`, `plotArea` (with `0.8` softening)
+7. relaxed chain for non-core constraints when strict result is empty.
 
 ### Canonical location/feature behavior (current)
 
-1. `insights.location` is currently a single input and may contain city/province/micro-location text.
+1. canonical location source priority is `locationsRaw -> location`.
 2. Canonical layer converts coast-like phrases (`возле моря`, `near sea`, `cerca del mar`, `coast`) into `features.near_sea`.
 3. Coast-like phrases are excluded from `location` filter token.
-4. This mapping is active in runtime query path and visible in debug (`location parsing` + `canonicalPatch.features`).
-5. Open issue (not fully closed): some beach-adjacent phrases (`возле пляжа`, `рядом с пляжем`) may still leak into `location` instead of `features.near_sea`; this is tracked for the next extraction hardening step.
+4. Explicit unknown multi-location token sets are dropped from query (`droppedFields.reason=unknown_location_tokens`) instead of leaking as free-text location.
+5. This mapping is active in runtime query path and visible in debug (`location extraction` + `location parsing` + `canonicalPatch.features`).
 
 ### Feed reality constraint (current estyle dataset)
 
@@ -164,6 +176,15 @@ Disabled in active main-call path:
 - No single canonical “mode” currently controls card-query execution.
 - In old/other products mode/relaxed/manual pipelines existed; in current Estyle runtime they are not the source of truth.
 - What exists now in debug is metadata (`source`, `requestType`, payload `stage`) and history events, not a deterministic query mode engine.
+
+## Current Canonical Business Guards (AS-IS)
+
+1. `operation` defaults to `sale` when unresolved.
+2. If extracted `operation=rent` conflicts with sale-range budget (`>=10000`), operation is reset and default `sale` is used.
+3. Budget guard:
+   - `sale` accepts only `minPrice >= 10000`;
+   - `rent` accepts only `minPrice < 10000`;
+   - invalid budget is dropped with explicit reason.
 
 ## Why System Is Not Deterministic Yet
 

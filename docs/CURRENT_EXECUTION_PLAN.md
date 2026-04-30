@@ -54,13 +54,16 @@ Primary runtime path:
 
 Scope now:
 1. `EXTRACTION_MODE` switch (`rules | llm | hybrid`) in backend runtime.
-2. strict no-overwrite insights policy (fill empty only).
+2. deterministic field-level patch policy (`fill/rewrite` for present fields, keep untouched for absent fields).
 3. canonical budget guard by operation:
    - sale accepts only `>= 10000`;
    - rent accepts `< 10000` (current product rule).
-4. location/type normalization fixes for RU/ES/EN variants.
-5. relaxed fallback chain (drop non-core constraints progressively when strict gives 0).
-6. softening of core numeric constraints for recall:
+4. operation default behavior:
+   - unresolved operation defaults to `sale`;
+   - if `rent` conflicts with sale-range budget (`>=10000`), operation is reset and default `sale` applies.
+5. location/type normalization fixes for RU/ES/EN variants.
+6. relaxed fallback chain (drop non-core constraints progressively when strict gives 0).
+7. softening of core numeric constraints for recall:
    - `minPrice = minPrice * 0.8`
    - `minArea = minArea * 0.8`
    - `plotArea = plotArea * 0.8`
@@ -111,3 +114,13 @@ Next coding slice (planned):
 2. multi-city support (`cities[]`) with city-first filtering;
 3. fine-tune relaxed order/weights from real zero-result transcripts;
 4. continue CRM outbound contract work (`docs/LEAD_CRM_CONTRACT.md`) after selection stabilization.
+11. Text `show` heuristic is soft-disabled in runtime:
+   - `покажи/show/muestra` no longer auto-opens card flow by text intent;
+   - cards open through UX action message/button path.
+12. Multi-location execution improvements:
+   - `locationsRaw` is carried through extraction and canonical as explicit array source;
+   - canonical location path now prioritizes `locationsRaw -> location`.
+13. Unknown multi-location token guard:
+   - if explicit multi-location tokens are unrecognized, free-text location filter is dropped with reason.
+14. Multi-room extraction guard:
+   - single-message patterns like `1 и 2 комнаты` are preserved as array (`rooms=[1,2]`).

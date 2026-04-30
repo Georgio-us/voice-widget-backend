@@ -28,6 +28,10 @@ Rules:
 1. Search MUST use only post-validation query.
 2. `stage/meta/role` MUST NOT participate in query building.
 3. Any dropped field MUST be logged with reason.
+4. Extraction patch policy is deterministic field-level `fill/rewrite`:
+   - field present in patch -> set/replace;
+   - field absent in patch -> keep previous value;
+   - list fields are `replace` (no merge).
 
 ## 1) Normalizer (Field Canonicalization)
 
@@ -145,6 +149,8 @@ Budget guard (current product rule):
 1. `operation=sale` -> accept budget only if `minPrice >= 10000`.
 2. `operation=rent` -> accept budget only if `minPrice < 10000`.
 3. invalid budget is dropped with explicit `droppedFields.reason`.
+4. if operation is unresolved, default operation is `sale`.
+5. if `operation=rent` conflicts with sale-range budget (`>=10000`), operation is reset and default `sale` applies.
 
 ## 6) Candidate Builder Contract (Target)
 
