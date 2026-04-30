@@ -18,6 +18,23 @@ const parseFirstInt = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
+const parseUniquePositiveInts = (v) => {
+  if (v === null || v === undefined) return [];
+  if (Array.isArray(v)) {
+    return Array.from(
+      new Set(
+        v
+          .map((x) => (typeof x === 'number' ? Math.round(x) : Number.parseInt(String(x), 10)))
+          .filter((n) => Number.isInteger(n) && n > 0)
+      )
+    );
+  }
+  const nums = (String(v).match(/\d+/g) || [])
+    .map((x) => Number.parseInt(x, 10))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  return Array.from(new Set(nums));
+};
+
 const parseFirstFloat = (v) => {
   if (v === null || v === undefined) return null;
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -167,7 +184,7 @@ const parseLocationSemantics = (rawValue) => {
   };
   if (!normalized) return out;
 
-  if (/(возле моря|у моря|рядом с морем|near sea|near the sea|cerca del mar|playa|побереж|coast|costa)/.test(normalized)) {
+  if (/(возле моря|у моря|рядом с морем|возле пляжа|рядом с пляжем|near sea|near the sea|near beach|near the beach|cerca del mar|cerca de la playa|playa|пляж|побереж|coast|costa)/.test(normalized)) {
     out.featureHints.push('near_sea');
   }
 
@@ -186,6 +203,11 @@ const parseLocationSemantics = (rawValue) => {
 
   if (MICRO_LOCATION_HINTS.some((x) => normalized.includes(x))) {
     out.location = normalized;
+    return out;
+  }
+
+  // Coastal phrases are feature-only hints, not a geographic location token.
+  if (out.featureHints.includes('near_sea')) {
     return out;
   }
 
@@ -339,23 +361,26 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
       const f = mergeFeatures(sourceInsights.features, 'near_sea', inferred.features);
       if (f.length) canonicalPatch.features = f;
     }
-    const chosenLocationToken =
-      locationSemantics?.city ||
-      locationSemantics?.location ||
-      locationSemantics?.province ||
-      null;
-    const loc = normalizeLocation(chosenLocationToken || sourceInsights.location);
-    if (loc?.normalized) {
-      canonicalPatch.location = loc;
-    } else if (!coastLike) {
-      droppedFields.push({ field: 'location', reason: 'invalid_location', value: sourceInsights.location });
+    if (!coastLike) {
+      const chosenLocationToken =
+        locationSemantics?.city ||
+        locationSemantics?.location ||
+        locationSemantics?.province ||
+        null;
+      const loc = normalizeLocation(chosenLocationToken || sourceInsights.location);
+      if (loc?.normalized) {
+        canonicalPatch.location = loc;
+      } else {
+        droppedFields.push({ field: 'location', reason: 'invalid_location', value: sourceInsights.location });
+      }
     }
   } else {
     missingFields.push('location');
   }
 
-  const rooms = parseFirstInt(sourceInsights.rooms);
-  if (Number.isInteger(rooms) && rooms > 0) canonicalPatch.rooms = rooms;
+  const roomsList = parseUniquePositiveInts(sourceInsights.rooms);
+  if (roomsList.length > 1) canonicalPatch.rooms = roomsList;
+  else if (roomsList.length === 1) canonicalPatch.rooms = roomsList[0];
   else missingFields.push('rooms');
 
   const bathrooms = parseFirstInt(sourceInsights.bathrooms ?? inferred.bathrooms);
@@ -482,7 +507,18 @@ export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit 
     if (query.operation) filtered = filtered.filter((p) => String(p.operation || '').toLowerCase() === query.operation);
     if (query.type) filtered = filtered.filter((p) => candidateTypeSlug(p) === query.type);
     if (query.location) filtered = filtered.filter((p) => matchLocation(p, query.location));
-    if (Number.isInteger(query.rooms)) filtered = filtered.filter((p) => Number(p.rooms) === query.rooms);
+    if (Number.isInteger(query.rooms)) {
+      filtered = filtered.filter((p) => Number(p.rooms) === query.rooms);
+    } else if (Array.isArray(query.rooms) && query.rooms.length) {
+      const roomSet = new Set(
+        query.rooms
+          .map((n) => Number.parseInt(String(n), 10))
+          .filter((n) => Number.isInteger(n) && n > 0)
+      );
+      if (roomSet.size > 0) {
+        filtered = filtered.filter((p) => roomSet.has(Number(p.rooms)));
+      }
+    }
     if (Number.isInteger(query.minPrice)) filtered = filtered.filter((p) => Number(p.priceEUR) >= query.minPrice);
     if (Number.isInteger(query.minArea)) filtered = filtered.filter((p) => Number(p.area_m2) >= query.minArea);
     if (Number.isInteger(query.plotArea)) filtered = filtered.filter((p) => Number(p.plot_m2) >= query.plotArea);

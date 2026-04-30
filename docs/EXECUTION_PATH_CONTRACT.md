@@ -1,6 +1,6 @@
 # Execution Path Contract (Locked)
 
-Last updated: 2026-04-28  
+Last updated: 2026-04-30  
 Branch: `Split`  
 Status: mandatory runtime contract.
 
@@ -43,6 +43,7 @@ These values may exist for UX/logging only, but MUST NOT participate in:
 2. Canonical layer normalizes values to search-safe internal format.
 3. Invalid fields are dropped with explicit reason in `droppedFields`.
 4. Search policy is applied here (budget guards, softening, relaxed chain).
+5. `rooms` may be scalar or array; filter semantics are `==` for scalar and `IN` for array.
 
 ## Debug Contract
 

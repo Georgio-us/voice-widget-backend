@@ -1,6 +1,6 @@
 # Insights Target Contract (TO-BE)
 
-Last updated: 2026-04-28  
+Last updated: 2026-04-30  
 Branch: `Split`  
 Status: design baseline for phased implementation.
 
@@ -38,7 +38,7 @@ All fields used in search must be canonicalized before query build.
 - `operation`: enum `sale | rent`
 - `type`: slug enum (`apartment`, `villa`, `townhouse`, `penthouse`, `commercial`, ...)
 - `location`: broad location object/string (city/province/district/coast zone)
-- `rooms`: integer
+- `rooms`: integer or integer array
 - `bathrooms`: integer
 - `minPrice`: integer (EUR)
 - `minArea`: integer (`m2`)
@@ -104,7 +104,7 @@ Frontend display target:
 
 | Business field | Feed/source | Front receives | Insight key | Query key | Candidate match rule |
 |---|---|---|---|---|---|
-| Rooms | `beds` / normalized `specs_rooms` | `rooms` | `rooms` | `rooms` | `candidate.rooms == query.rooms` |
+| Rooms | `beds` / normalized `specs_rooms` | `rooms` | `rooms` | `rooms` | single: `candidate.rooms == query.rooms`; multi: `candidate.rooms IN query.rooms[]` |
 | Bathrooms | `baths` / `specs_bathrooms` | `bathrooms` | `bathrooms` | `bathrooms` | `candidate.bathrooms >= query.bathrooms` |
 | Operation | `price_freq` -> `sale/rent` | `operation` | `operation` | `operation` | `candidate.operation == query.operation` |
 | Property type | `type/*` | `property_type` | `type` | `type` | mapped slug equality |

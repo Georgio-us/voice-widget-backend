@@ -1,6 +1,6 @@
 # Current Execution Plan (Estyle)
 
-Last updated: 2026-04-28
+Last updated: 2026-04-30
 Branch: `Split`
 Status: XML baseline is live; priority is deterministic AI extraction -> canonical query -> stable candidate pool.
 
@@ -90,10 +90,16 @@ Scope now:
 
 Baseline is working and testable on live deploy.
 
+Latest coding slice applied (2026-04-30):
+1. coastal phrase routing hardened in canonical:
+   - `возле пляжа` / `рядом с пляжем` / `near beach` now map to `features.near_sea`;
+   - coastal intent no longer falls back into `location` token.
+2. rooms canonical now supports multi-value:
+   - `rooms` can be scalar (`2`) or array (`[1,2]`);
+   - candidate filter supports `IN` match for array mode.
+
 Next coding slice (planned):
-1. fix open coastal-phrase extraction gap:
-   - phrases like `возле пляжа` / `рядом с пляжем` must always map to `features.near_sea`
-   - and must never be persisted as `location`.
-2. fine-tune relaxed order/weights from real zero-result transcripts;
-3. decide which fields remain strictly core vs always-relaxed;
-4. only after this, continue CRM outbound contract work (`docs/LEAD_CRM_CONTRACT.md`), currently deferred.
+1. city/province explicit semantics in debug + controlled fallback policy;
+2. multi-city support (`cities[]`) with city-first filtering;
+3. fine-tune relaxed order/weights from real zero-result transcripts;
+4. continue CRM outbound contract work (`docs/LEAD_CRM_CONTRACT.md`) after selection stabilization.
