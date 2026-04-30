@@ -101,8 +101,13 @@ const normalizePropertyType = (v) => {
 const LOCATION_ALIASES = new Map([
   ['торревьеха', 'torrevieja'],
   ['торревьехе', 'torrevieja'],
+  ['ревьеха', 'torrevieja'],
+  ['торревеха', 'torrevieja'],
   ['аликанте', 'alicante'],
   ['бенидорм', 'benidorm'],
+  ['бенедорм', 'benidorm'],
+  ['бенидорме', 'benidorm'],
+  ['бенедорме', 'benidorm'],
   ['кальпе', 'calpe'],
   ['кальпа', 'calpe'],
   ['мурсия', 'murcia'],
@@ -221,6 +226,10 @@ const parseLocationSemantics = (rawValue) => {
       if (provinces.size === 1) out.province = Array.from(provinces)[0];
       return out;
     }
+    // Multi-token location phrase with no recognized city/province should remain unresolved
+    // and must not degrade to a free-text city fallback.
+    out.unresolvedMulti = true;
+    return out;
   }
 
   if (CITY_TO_PROVINCE.has(normalized)) {
@@ -439,7 +448,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
           null;
         // If user provided explicit multi-location tokens but none were recognized,
         // do not fallback to a free-text location filter.
-        if (rawLocationsList.length > 0 && !chosenLocationToken) {
+        if ((rawLocationsList.length > 0 && !chosenLocationToken) || locationSemantics?.unresolvedMulti === true) {
           droppedFields.push({ field: 'location', reason: 'unknown_location_tokens', value: rawLocationsList });
         } else {
           const loc = normalizeLocation(chosenLocationToken || extractionLocationSource);

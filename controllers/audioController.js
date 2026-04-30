@@ -1351,8 +1351,13 @@ const COASTAL_FEATURE_RE = /(возле моря|у моря|рядом с мо�
 const EXTRACTION_LOCATION_ALIASES = new Map([
   ['торревьеха', 'Torrevieja'],
   ['торревьехе', 'Torrevieja'],
+  ['ревьеха', 'Torrevieja'],
+  ['торревеха', 'Torrevieja'],
   ['аликанте', 'Alicante'],
   ['бенидорм', 'Benidorm'],
+  ['бенедорм', 'Benidorm'],
+  ['бенидорме', 'Benidorm'],
+  ['бенедорме', 'Benidorm'],
   ['кальпе', 'Calpe'],
   ['кальпа', 'Calpe'],
   ['мурсия', 'Murcia'],
@@ -1572,6 +1577,23 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
       const features = Array.isArray(sanitized.features) ? sanitized.features.slice() : [];
       if (!features.includes('near_sea')) features.push('near_sea');
       sanitized.features = features;
+    }
+
+    // Guard 1.1: terrace-like feature tokens must map to hasTerrace boolean, not free-text feature slug.
+    if (Array.isArray(sanitized.features) && sanitized.features.length > 0) {
+      const keep = [];
+      let terraceHint = false;
+      for (const f of sanitized.features) {
+        const s = normalizeLookupText(String(f || ''));
+        if (/(террас|балкон|terrace|balcon|balcon|terraza)/i.test(s)) {
+          terraceHint = true;
+          continue;
+        }
+        keep.push(f);
+      }
+      if (terraceHint) sanitized.hasTerrace = true;
+      if (keep.length > 0) sanitized.features = keep;
+      else delete sanitized.features;
     }
 
     // Guard 2: preserve multi-city intent from raw message (no early collapse to one city).
