@@ -68,40 +68,51 @@ const normalizePropertyType = (v) => {
   return s;
 };
 
+const LOCATION_ALIASES = new Map([
+  ['торревьеха', 'torrevieja'],
+  ['торревьехе', 'torrevieja'],
+  ['аликанте', 'alicante'],
+  ['бенидорм', 'benidorm'],
+  ['кальпе', 'calpe'],
+  ['кальпа', 'calpe'],
+  ['мурсия', 'murcia'],
+  ['валенсия', 'valencia'],
+  ['валенсии', 'valencia'],
+  ['в валенсии', 'valencia'],
+  ['орихуэла', 'orihuela'],
+  ['ориуэла', 'orihuela'],
+  ['орихуэла коста', 'orihuela costa'],
+  ['ориуэла коста', 'orihuela costa'],
+  ['пунта прима', 'punta prima'],
+  ['вилламартин', 'villamartin'],
+  ['вильямартин', 'villamartin'],
+  ['ла зения', 'la zenia'],
+  ['лос алькасарес', 'los alcazares'],
+  ['коста бланка', 'costa blanca'],
+  ['коста брава', 'costa brava'],
+  ['коста дель соль', 'costa del sol']
+]);
+
+const normalizeLocationToken = (value) => {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  const withoutPrep = raw.replace(/^(в|на|en)\s+/, '').trim();
+  return LOCATION_ALIASES.get(raw) || LOCATION_ALIASES.get(withoutPrep) || withoutPrep;
+};
+
 const normalizeLocation = (v) => {
   const raw = toText(v);
   if (!raw) return null;
-  const n = normalizeText(raw);
+  const n = normalizeLocationToken(raw);
   const genericCoastTerms = new Set([
     'побережье', 'на побережье', 'у побережья',
     'coast', 'near coast', 'on the coast',
     'costa', 'costa blanca', 'costa brava', 'costa del sol'
   ]);
   if (genericCoastTerms.has(n)) return null;
-  const aliases = new Map([
-    ['торревьеха', 'torrevieja'],
-    ['аликанте', 'alicante'],
-    ['бенидорм', 'benidorm'],
-    ['кальпе', 'calpe'],
-    ['кальпа', 'calpe'],
-    ['мурсия', 'murcia'],
-    ['орихуэла', 'orihuela'],
-    ['ориуэла', 'orihuela'],
-    ['орихуэла коста', 'orihuela costa'],
-    ['ориуэла коста', 'orihuela costa'],
-    ['пунта прима', 'punta prima'],
-    ['вилламартин', 'villamartin'],
-    ['вильямартин', 'villamartin'],
-    ['ла зения', 'la zenia'],
-    ['лос алькасарес', 'los alcazares'],
-    ['коста бланка', 'costa blanca'],
-    ['коста брава', 'costa brava'],
-    ['коста дель соль', 'costa del sol']
-  ]);
-  const alias = aliases.get(n);
   return {
     raw,
-    normalized: alias || n
+    normalized: n
   };
 };
 
@@ -145,7 +156,7 @@ const MICRO_LOCATION_HINTS = [
 
 const parseLocationSemantics = (rawValue) => {
   const raw = toText(rawValue);
-  const normalized = normalizeText(raw);
+  const normalized = normalizeLocationToken(raw);
   const out = {
     raw: raw || null,
     normalized: normalized || null,
