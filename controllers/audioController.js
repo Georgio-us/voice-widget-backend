@@ -3292,7 +3292,7 @@ const transcribeAndRespond = async (req, res) => {
       openai.chat.completions.create({
         messages,
         model: 'gpt-4o-mini',
-        temperature: 0.4,
+        temperature: 0.3,
         stream: false
       }), 2, 'GPT'
     );
