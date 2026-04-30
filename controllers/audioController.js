@@ -1482,15 +1482,13 @@ const applyInsightsPatchDeterministic = (targetInsights, patch = {}, sourceTag =
 const extractInsightsWithLLM = async (session, newMessage, locationLexicon = []) => {
   if (!session || !newMessage) return {};
   const current = session.insights || {};
-  const emptyFields = INSIGHT_FIELDS_V1.filter((k) => isEmptyInsightValue(current[k]));
-  if (!emptyFields.length) return {};
 
   const locationsSample = Array.isArray(locationLexicon) ? locationLexicon.slice(0, 180) : [];
   const system = [
     'You are a strict extraction engine for real estate search.',
     'Return ONLY valid JSON object (no markdown, no explanation).',
-    'Extract ONLY missing fields from user text.',
-    'Do NOT overwrite already filled fields.',
+    'Extract fields explicitly present in the current user message.',
+    'Do NOT copy unchanged fields from previous state.',
     '',
     'Output keys allowed:',
     INSIGHT_FIELDS_V1.join(', '),
@@ -1512,7 +1510,6 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
   const userPayload = {
     message: String(newMessage),
     existingInsights: current,
-    emptyFields,
     knownLocationsSample: locationsSample
   };
 
@@ -1579,7 +1576,7 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
 
     // Guard 2: preserve multi-city intent from raw message (no early collapse to one city).
     const citiesDetected = detectCitiesFromText(newMessage, locationLexicon);
-    if (citiesDetected.length >= 2) {
+    if (citiesDetected.length >= 1) {
       sanitized.locationsRaw = citiesDetected;
     }
 
