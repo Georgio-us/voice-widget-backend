@@ -1428,6 +1428,25 @@ const detectExplicitOperationIntent = (text = '') => {
   return null;
 };
 
+const detectRoomsFromText = (text = '') => {
+  const s = normalizeLookupText(String(text || ''));
+  if (!s) return [];
+  const out = new Set();
+
+  if (/\b1\s*к\b|\b1\s*ком|\bоднуш|однокомнат/i.test(s)) out.add(1);
+  if (/\b2\s*к\b|\b2\s*ком|\bдвуш|двухкомнат/i.test(s)) out.add(2);
+  if (/\b3\s*к\b|\b3\s*ком|трехкомнат/i.test(s)) out.add(3);
+  if (/\b4\s*к\b|\b4\s*ком|четырехкомнат/i.test(s)) out.add(4);
+
+  // Generic numeric fallback: "N комнат(а/ы)".
+  for (const m of s.matchAll(/(\d+)\s*(?:комнат|комн|ком\b)/gi)) {
+    const n = Number.parseInt(m[1], 10);
+    if (Number.isInteger(n) && n > 0 && n <= 9) out.add(n);
+  }
+
+  return Array.from(out).sort((a, b) => a - b);
+};
+
 const applyInsightsPatchNoOverwrite = (targetInsights, patch = {}, sourceTag = 'unknown') => {
   if (!targetInsights || !patch || typeof patch !== 'object') return [];
   const applied = [];
@@ -1557,6 +1576,12 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
       } else {
         sanitized.operation = explicitIntent;
       }
+    }
+
+    // Guard 4: preserve multi-room intent from a single message (e.g. "1 и 2 комнаты").
+    const roomsDetected = detectRoomsFromText(newMessage);
+    if (roomsDetected.length >= 2) {
+      sanitized.rooms = roomsDetected;
     }
 
     return sanitized;

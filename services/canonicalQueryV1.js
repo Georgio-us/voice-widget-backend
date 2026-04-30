@@ -393,7 +393,10 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
       }
     } else droppedFields.push({ field: 'operation', reason: 'invalid_operation', value: sourceInsights.operation });
   } else {
-    missingFields.push('operation');
+    canonicalPatch.operation = 'sale';
+  }
+  if (!canonicalPatch.operation) {
+    canonicalPatch.operation = 'sale';
   }
 
   if (sourceInsights.type) {
