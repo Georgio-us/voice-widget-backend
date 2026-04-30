@@ -141,9 +141,9 @@ const transitionRole = (session, event) => {
 };
 
 const cleanupOldSessions = () => {
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
   for (const [sessionId, session] of sessions.entries()) {
-    if (session.lastActivity < oneHourAgo) {
+    if (session.lastActivity < thirtyMinutesAgo) {
       // RMv3: best-effort Telegram final update on session expiry (TTL-based finalization)
       try {
         const messageId = session?.telegram?.activityMessageId || null;
@@ -172,7 +172,7 @@ const cleanupOldSessions = () => {
     }
   }
 };
-setInterval(cleanupOldSessions, 60 * 60 * 1000);
+setInterval(cleanupOldSessions, 30 * 60 * 1000);
 
 const generateSessionId = () => `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
