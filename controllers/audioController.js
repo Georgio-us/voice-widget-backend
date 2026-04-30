@@ -1449,14 +1449,27 @@ const detectRoomsFromText = (text = '') => {
   return Array.from(out).sort((a, b) => a - b);
 };
 
-const applyInsightsPatchNoOverwrite = (targetInsights, patch = {}, sourceTag = 'unknown') => {
+const isSameInsightValue = (a, b) => {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const aa = Array.isArray(a) ? a : [];
+    const bb = Array.isArray(b) ? b : [];
+    if (aa.length !== bb.length) return false;
+    return aa.every((v, i) => String(v) === String(bb[i]));
+  }
+  return String(a ?? '') === String(b ?? '');
+};
+
+const applyInsightsPatchDeterministic = (targetInsights, patch = {}, sourceTag = 'unknown') => {
   if (!targetInsights || !patch || typeof patch !== 'object') return [];
   const applied = [];
   for (const key of INSIGHT_FIELDS_V1) {
     if (!(key in patch)) continue;
-    if (!isEmptyInsightValue(targetInsights[key])) continue;
     const next = patch[key];
     if (isEmptyInsightValue(next)) continue;
+    // Deterministic fill/rewrite:
+    // - field present in current patch -> set/replace value
+    // - field absent in patch -> keep previous value untouched
+    if (isSameInsightValue(targetInsights[key], next)) continue;
     targetInsights[key] = next;
     applied.push(key);
   }
@@ -1601,14 +1614,14 @@ const runExtractionPipeline = async (sessionId, newMessage, locationLexicon = []
 
   if (mode === 'llm' || mode === 'hybrid') {
     const llmPatch = await extractInsightsWithLLM(session, newMessage, locationLexicon);
-    applied.push(...applyInsightsPatchNoOverwrite(session.insights, llmPatch, 'llm'));
+    applied.push(...applyInsightsPatchDeterministic(session.insights, llmPatch, 'llm'));
   }
 
   if (mode === 'rules' || mode === 'hybrid') {
     const before = { ...session.insights };
     await updateInsights(sessionId, newMessage, locationLexicon);
     for (const key of INSIGHT_FIELDS_V1) {
-      if (isEmptyInsightValue(before[key]) && !isEmptyInsightValue(session.insights[key])) {
+      if (!isSameInsightValue(before[key], session.insights[key])) {
         if (!applied.includes(key)) applied.push(key);
       }
     }
