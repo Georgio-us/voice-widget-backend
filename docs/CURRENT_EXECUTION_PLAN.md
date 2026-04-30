@@ -124,3 +124,6 @@ Next coding slice (planned):
    - if explicit multi-location tokens are unrecognized, free-text location filter is dropped with reason.
 14. Multi-room extraction guard:
    - single-message patterns like `1 и 2 комнаты` are preserved as array (`rooms=[1,2]`).
+15. Prompt UX escalation rule added:
+   - for legal/mortgage/installment/process questions assistant keeps answer very short;
+   - assistant explicitly points user to `Связаться с менеджером` button below for precise guidance.

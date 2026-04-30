@@ -80,6 +80,14 @@ Disabled from active main-call prompt path:
 Reason:
 These layers are legacy orchestration/diagnostic context and can introduce behavioral noise unrelated to deterministic extraction/query contract.
 
+## UX Manager Escalation Contract
+
+When user message is outside direct selection update scope (legal flow, mortgage/installments, process details):
+1. Assistant gives a short, non-committal informational answer.
+2. Assistant explicitly mentions the UX path: user can press `Связаться с менеджером` button below.
+3. This mention is conversational only; search query construction still stays strictly `insights -> canonical -> post_validation_query`.
+4. Manager escalation UX MUST NOT mutate `insights` by itself.
+
 ## Acceptance Criteria
 
 Contract is considered enforced when:
