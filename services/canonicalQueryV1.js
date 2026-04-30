@@ -152,6 +152,15 @@ const normalizeLocation = (v) => {
 };
 
 const LOCATION_PROVINCES = new Set(['alicante', 'murcia', 'valencia']);
+const GENERIC_LOCATION_TOKENS = new Set([
+  'урбанизация',
+  'urbanizacion',
+  'urbanization',
+  'residencial',
+  'residential complex',
+  'комплекс',
+  'жилой комплекс'
+]);
 
 const CITY_TO_PROVINCE = new Map([
   ['alicante', 'alicante'],
@@ -202,6 +211,11 @@ const parseLocationSemantics = (rawValue) => {
     featureHints: []
   };
   if (!normalized) return out;
+
+  if (GENERIC_LOCATION_TOKENS.has(normalized)) {
+    out.unresolvedGeneric = true;
+    return out;
+  }
 
   if (/(возле моря|у моря|рядом с морем|возле пляжа|рядом с пляжем|near sea|near the sea|near beach|near the beach|cerca del mar|cerca de la playa|playa|пляж|побереж|coast|costa)/.test(normalized)) {
     out.featureHints.push('near_sea');
@@ -288,6 +302,18 @@ const normalizeFeatureSlug = (v) => {
   return s.replace(/\s+/g, '_');
 };
 
+const KNOWN_FEATURE_SLUGS = new Set([
+  'sea_view',
+  'near_sea',
+  'pool_view',
+  'mountain_view',
+  'golf',
+  'first_line',
+  'open_view',
+  'village_view',
+  'new_listing'
+]);
+
 const toDistanceKm = (value, unit) => {
   const num = parseFirstFloat(value);
   if (!Number.isFinite(num)) return null;
@@ -344,11 +370,11 @@ const mergeFeatures = (...parts) => {
     if (Array.isArray(src)) {
       src.forEach((x) => {
         const slug = normalizeFeatureSlug(x);
-        if (slug) set.add(slug);
+        if (slug && KNOWN_FEATURE_SLUGS.has(slug)) set.add(slug);
       });
     } else {
       const slug = normalizeFeatureSlug(src);
-      if (slug) set.add(slug);
+      if (slug && KNOWN_FEATURE_SLUGS.has(slug)) set.add(slug);
     }
   }
   return Array.from(set);
@@ -450,6 +476,8 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
         // do not fallback to a free-text location filter.
         if ((rawLocationsList.length > 0 && !chosenLocationToken) || locationSemantics?.unresolvedMulti === true) {
           droppedFields.push({ field: 'location', reason: 'unknown_location_tokens', value: rawLocationsList });
+        } else if (locationSemantics?.unresolvedGeneric === true) {
+          droppedFields.push({ field: 'location', reason: 'generic_location_token', value: extractionLocationSource });
         } else {
           const loc = normalizeLocation(chosenLocationToken || extractionLocationSource);
           if (loc?.normalized) {
