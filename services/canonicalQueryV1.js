@@ -353,6 +353,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
     operation: insights?.operation ?? null,
     type: insights?.type ?? null,
     location: insights?.location ?? null,
+    locationsRaw: Array.isArray(insights?.locationsRaw) ? insights.locationsRaw : (insights?.locationsRaw ? [insights.locationsRaw] : null),
     rooms: insights?.rooms ?? null,
     bathrooms: insights?.bathrooms ?? null,
     budget: insights?.budget ?? null,
@@ -374,6 +375,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   const droppedFields = [];
   const missingFields = [];
   let locationSemantics = null;
+  let locationExtraction = null;
 
   if (sourceInsights.operation) {
     const op = normalizeOperation(sourceInsights.operation);
@@ -391,8 +393,20 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
     missingFields.push('type');
   }
 
-  if (sourceInsights.location) {
-    locationSemantics = parseLocationSemantics(sourceInsights.location);
+  const rawLocationsList = Array.isArray(sourceInsights.locationsRaw)
+    ? sourceInsights.locationsRaw.map((x) => toText(x)).filter(Boolean)
+    : [];
+  const extractionLocationSource = rawLocationsList.length > 0
+    ? rawLocationsList.join(' и ')
+    : sourceInsights.location;
+  locationExtraction = {
+    source: rawLocationsList.length > 0 ? 'locationsRaw' : 'location',
+    raw: extractionLocationSource || null,
+    locationsRaw: rawLocationsList.length > 0 ? rawLocationsList : null
+  };
+
+  if (extractionLocationSource) {
+    locationSemantics = parseLocationSemantics(extractionLocationSource);
     const coastLike = Array.isArray(locationSemantics?.featureHints) && locationSemantics.featureHints.includes('near_sea');
     if (coastLike) {
       const f = mergeFeatures(sourceInsights.features, 'near_sea', inferred.features);
@@ -409,11 +423,11 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
           locationSemantics?.location ||
           locationSemantics?.province ||
           null;
-        const loc = normalizeLocation(chosenLocationToken || sourceInsights.location);
+        const loc = normalizeLocation(chosenLocationToken || extractionLocationSource);
         if (loc?.normalized) {
           canonicalPatch.location = loc;
         } else {
-          droppedFields.push({ field: 'location', reason: 'invalid_location', value: sourceInsights.location });
+          droppedFields.push({ field: 'location', reason: 'invalid_location', value: extractionLocationSource });
         }
       }
     }
@@ -487,6 +501,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
 
   return {
     sourceInsights,
+    locationExtraction,
     locationSemantics,
     canonicalPatch,
     preValidationQuery,

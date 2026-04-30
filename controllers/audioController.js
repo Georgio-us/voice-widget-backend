@@ -1339,7 +1339,7 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
 };
 
 const INSIGHT_FIELDS_V1 = [
-  'operation', 'type', 'location', 'rooms', 'bathrooms', 'budget', 'area', 'plotArea', 'floor',
+  'operation', 'type', 'location', 'locationsRaw', 'rooms', 'bathrooms', 'budget', 'area', 'plotArea', 'floor',
   'hasParking', 'hasPool', 'hasTerrace', 'orientation', 'distanceBeach', 'distanceAirport',
   'features', 'details', 'preferences', 'name'
 ];
@@ -1365,30 +1365,43 @@ const EXTRACTION_LOCATION_ALIASES = new Map([
   ['лос алькасарес', 'Los Alcazares']
 ]);
 
+const escapeRegex = (s = '') => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const detectCitiesFromText = (text = '', locationLexicon = []) => {
   const raw = String(text || '').trim();
   if (!raw) return [];
+  const normalizedText = normalizeLookupText(raw);
   const lexiconMap = new Map();
   for (const item of Array.isArray(locationLexicon) ? locationLexicon : []) {
     const key = normalizeLookupText(item);
     if (key && !lexiconMap.has(key)) lexiconMap.set(key, String(item).trim());
   }
+  const out = new Set();
+
+  // 1) Exact chunk split by conjunctions
   const parts = raw.split(/,|;|\/|\s+(?:и|или|or|y)\s+/gi).map((x) => x.trim()).filter(Boolean);
-  const cities = [];
   for (const part of parts) {
     const n = normalizeLookupText(part);
     if (!n || COASTAL_FEATURE_RE.test(n)) continue;
     const alias = EXTRACTION_LOCATION_ALIASES.get(n);
-    if (alias) {
-      cities.push(alias);
-      continue;
-    }
+    if (alias) out.add(alias);
     const fromLexicon = lexiconMap.get(n);
-    if (fromLexicon && !/(costa|coast|пляж|побереж|near sea|near beach)/i.test(normalizeLookupText(fromLexicon))) {
-      cities.push(fromLexicon);
-    }
+    if (fromLexicon && !/(costa|coast|пляж|побереж|near sea|near beach)/i.test(normalizeLookupText(fromLexicon))) out.add(fromLexicon);
   }
-  return Array.from(new Set(cities));
+
+  // 2) Fuzzy-in-text token scan (captures prepositions and word forms around city names)
+  for (const [aliasKey, aliasValue] of EXTRACTION_LOCATION_ALIASES.entries()) {
+    const rx = new RegExp(`(^|\\s)${escapeRegex(aliasKey)}($|\\s)`, 'i');
+    if (rx.test(normalizedText)) out.add(aliasValue);
+  }
+  for (const [lexKey, lexValue] of lexiconMap.entries()) {
+    if (!lexKey || lexKey.length < 4) continue;
+    if (/(costa|coast|пляж|побереж|near sea|near beach)/i.test(lexKey)) continue;
+    const rx = new RegExp(`(^|\\s)${escapeRegex(lexKey)}($|\\s)`, 'i');
+    if (rx.test(normalizedText)) out.add(lexValue);
+  }
+
+  return Array.from(out);
 };
 
 const isEmptyInsightValue = (v) => v === undefined || v === null || v === '';
@@ -1446,6 +1459,7 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
     '- bathrooms/floor/plotArea: numeric-like strings allowed',
     '- hasParking/hasPool/hasTerrace: boolean true only when explicit',
     '- location: short location text from message; prefer values close to known feed locations when possible',
+    '- locationsRaw: array of city/location tokens when user mentions multiple places',
     '- features: array of slugs if explicit',
     '',
     'If a field is unclear, omit it from JSON.'
@@ -1486,6 +1500,14 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
         if (Array.isArray(value)) sanitized[key] = value.filter((x) => typeof x === 'string' && x.trim()).slice(0, 8);
         continue;
       }
+      if (key === 'locationsRaw') {
+        if (Array.isArray(value)) {
+          sanitized[key] = value.filter((x) => typeof x === 'string' && x.trim()).slice(0, 8);
+        } else if (typeof value === 'string' && value.trim()) {
+          sanitized[key] = [value.trim()];
+        }
+        continue;
+      }
       if (key === 'hasParking' || key === 'hasPool' || key === 'hasTerrace') {
         if (value === true) sanitized[key] = true;
         continue;
@@ -1514,7 +1536,10 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
     // Guard 2: preserve multi-city intent from raw message (no early collapse to one city).
     const citiesDetected = detectCitiesFromText(newMessage, locationLexicon);
     if (citiesDetected.length >= 2) {
-      sanitized.location = citiesDetected.join(' и ');
+      sanitized.locationsRaw = citiesDetected;
+      if (isEmptyInsightValue(sanitized.location)) {
+        sanitized.location = citiesDetected.join(' и ');
+      }
     }
 
     return sanitized;
@@ -3229,6 +3254,7 @@ const transcribeAndRespond = async (req, res) => {
     const baseExecution = await findBestProperties(session.insights, 100);
     session.queryTraceV1 = {
       sourceInsights: baseExecution.sourceInsights,
+      locationExtraction: baseExecution.locationExtraction || null,
       locationSemantics: baseExecution.locationSemantics || null,
       canonicalPatch: baseExecution.canonicalPatch,
       preValidationQuery: baseExecution.preValidationQuery,
@@ -3774,6 +3800,7 @@ async function handleInteraction(req, res) {
       const execution = await findBestProperties(session.insights, 10);
       session.queryTraceV1 = {
         sourceInsights: execution.sourceInsights,
+        locationExtraction: execution.locationExtraction || null,
         locationSemantics: execution.locationSemantics || null,
         canonicalPatch: execution.canonicalPatch,
         preValidationQuery: execution.preValidationQuery,
