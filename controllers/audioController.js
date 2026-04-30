@@ -824,6 +824,7 @@ const buildLocationLexicon = (rows = []) => {
   const aliases = [
     ['торревьеха', 'Torrevieja'], ['торревьех', 'Torrevieja'],
     ['аликанте', 'Alicante'], ['аликанты', 'Alicante'],
+    ['валиканте', 'Alicante'], ['валиканты', 'Alicante'], ['ликанта', 'Alicante'],
     ['бенидорм', 'Benidorm'],
     ['кальпе', 'Calpe'], ['кальпа', 'Calpe'], ['кальпы', 'Calpe'],
     ['мурсия', 'Murcia'],
@@ -1354,6 +1355,10 @@ const EXTRACTION_LOCATION_ALIASES = new Map([
   ['ревьеха', 'Torrevieja'],
   ['торревеха', 'Torrevieja'],
   ['аликанте', 'Alicante'],
+  ['аликанты', 'Alicante'],
+  ['валиканте', 'Alicante'],
+  ['валиканты', 'Alicante'],
+  ['ликанта', 'Alicante'],
   ['бенидорм', 'Benidorm'],
   ['бенедорм', 'Benidorm'],
   ['бенидорме', 'Benidorm'],
@@ -1410,6 +1415,16 @@ const detectCitiesFromText = (text = '', locationLexicon = []) => {
 
   return Array.from(out);
 };
+
+const GENERIC_LOCATION_TOKENS = new Set([
+  'урбанизация',
+  'urbanizacion',
+  'urbanization',
+  'комплекс',
+  'жилой комплекс',
+  'residencial',
+  'residential complex'
+]);
 
 const isEmptyInsightValue = (v) => v === undefined || v === null || v === '';
 
@@ -1568,6 +1583,8 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
         const features = Array.isArray(sanitized.features) ? sanitized.features.slice() : [];
         if (!features.includes('near_sea')) features.push('near_sea');
         sanitized.features = features;
+        delete sanitized.location;
+      } else if (GENERIC_LOCATION_TOKENS.has(locNorm)) {
         delete sanitized.location;
       }
     }
