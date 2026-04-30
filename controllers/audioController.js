@@ -1418,6 +1418,16 @@ const inferTypeFromText = (text = '') => {
   return null;
 };
 
+const detectExplicitOperationIntent = (text = '') => {
+  const s = normalizeLookupText(String(text || ''));
+  if (!s) return null;
+  const rentStrong = /(снять|сниму|ищу в аренду|нужна аренда|арендовать|alquiler|rent\b|for rent)/i.test(s);
+  const saleStrong = /(купить|покупка|ищу для покупки|compra|buy\b|for sale|sale\b)/i.test(s);
+  if (rentStrong && !saleStrong) return 'аренда';
+  if (saleStrong && !rentStrong) return 'покупка';
+  return null;
+};
+
 const applyInsightsPatchNoOverwrite = (targetInsights, patch = {}, sourceTag = 'unknown') => {
   if (!targetInsights || !patch || typeof patch !== 'object') return [];
   const applied = [];
@@ -1537,8 +1547,15 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
     const citiesDetected = detectCitiesFromText(newMessage, locationLexicon);
     if (citiesDetected.length >= 2) {
       sanitized.locationsRaw = citiesDetected;
-      if (isEmptyInsightValue(sanitized.location)) {
-        sanitized.location = citiesDetected.join(' и ');
+    }
+
+    // Guard 3: operation is committed only from explicit user intent.
+    if (!isEmptyInsightValue(sanitized.operation)) {
+      const explicitIntent = detectExplicitOperationIntent(newMessage);
+      if (explicitIntent === null) {
+        delete sanitized.operation;
+      } else {
+        sanitized.operation = explicitIntent;
       }
     }
 

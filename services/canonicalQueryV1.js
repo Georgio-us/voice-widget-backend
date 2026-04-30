@@ -81,7 +81,7 @@ const normalizeOperation = (v) => {
   const s = normalizeText(v);
   if (!s) return null;
   if (/(rent|lease|alquil|аренд|снять|найм)/.test(s)) return 'rent';
-  if (/(sale|buy|purchase|compra|покуп|купить|приобр|инвест)/.test(s)) return 'sale';
+  if (/(sale|buy|purchase|compra|покуп|купить|приобр)/.test(s)) return 'sale';
   return null;
 };
 
@@ -423,11 +423,17 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
           locationSemantics?.location ||
           locationSemantics?.province ||
           null;
-        const loc = normalizeLocation(chosenLocationToken || extractionLocationSource);
-        if (loc?.normalized) {
-          canonicalPatch.location = loc;
+        // If user provided explicit multi-location tokens but none were recognized,
+        // do not fallback to a free-text location filter.
+        if (rawLocationsList.length > 0 && !chosenLocationToken) {
+          droppedFields.push({ field: 'location', reason: 'unknown_location_tokens', value: rawLocationsList });
         } else {
-          droppedFields.push({ field: 'location', reason: 'invalid_location', value: extractionLocationSource });
+          const loc = normalizeLocation(chosenLocationToken || extractionLocationSource);
+          if (loc?.normalized) {
+            canonicalPatch.location = loc;
+          } else {
+            droppedFields.push({ field: 'location', reason: 'invalid_location', value: extractionLocationSource });
+          }
         }
       }
     }
