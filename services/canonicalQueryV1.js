@@ -376,11 +376,22 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   const missingFields = [];
   let locationSemantics = null;
   let locationExtraction = null;
+  const parsedBudgetMin = parseMinInt(sourceInsights.budget);
 
   if (sourceInsights.operation) {
     const op = normalizeOperation(sourceInsights.operation);
-    if (op) canonicalPatch.operation = op;
-    else droppedFields.push({ field: 'operation', reason: 'invalid_operation', value: sourceInsights.operation });
+    if (op) {
+      // If user explicitly says rent but budget is in sale range, drop operation to let default sale flow.
+      if (op === 'rent' && Number.isInteger(parsedBudgetMin) && parsedBudgetMin >= 10000) {
+        droppedFields.push({
+          field: 'operation',
+          reason: 'rent_budget_conflict_operation_reset',
+          value: sourceInsights.operation
+        });
+      } else {
+        canonicalPatch.operation = op;
+      }
+    } else droppedFields.push({ field: 'operation', reason: 'invalid_operation', value: sourceInsights.operation });
   } else {
     missingFields.push('operation');
   }
@@ -450,7 +461,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   if (Number.isInteger(bathrooms) && bathrooms > 0) canonicalPatch.bathrooms = bathrooms;
   else missingFields.push('bathrooms');
 
-  const minPrice = parseMinInt(sourceInsights.budget);
+  const minPrice = parsedBudgetMin;
   if (Number.isInteger(minPrice) && minPrice > 0) {
     const op = canonicalPatch.operation || null;
     if (op === 'sale') {
