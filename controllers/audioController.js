@@ -372,10 +372,12 @@ const SHOW_INTENT_PATTERNS = [
   // ES: muestra, muéstrame, mostrar, enséñame, ver (la) ficha/opciones/propiedades
   /\b(muestra|muéstrame|mostrar|enséñame|ver\s+(la\s+)?(ficha|opciones|propiedades))\b/i
 ];
+// Soft-disabled: keep legacy show heuristics in code, but do not trigger by text.
+const ENABLE_TEXT_SHOW_INTENT = false;
 
 const detectCardIntent = (text = '') => {
   const t = String(text).toLowerCase();
-  const isShow = SHOW_INTENT_PATTERNS.some(re => re.test(t));
+  const isShow = ENABLE_TEXT_SHOW_INTENT && SHOW_INTENT_PATTERNS.some(re => re.test(t));
   const isVariants = /(какие|что)\s+(есть|можно)\s+(вариант|квартир)/i.test(t)
     || /подбери(те)?|подобрать|вариант(ы)?|есть\s+вариант/i.test(t)
     || /квартир(а|ы|у)\s+(есть|бывают)/i.test(t);
