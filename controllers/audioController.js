@@ -1471,6 +1471,18 @@ const detectRoomsFromText = (text = '') => {
     const n = Number.parseInt(m[1], 10);
     if (Number.isInteger(n) && n > 0 && n <= 9) out.add(n);
   }
+  // EN/ES fallback: "N bedroom(s)" / "N habitacion(es)" / "N dormitorio(s)".
+  for (const m of s.matchAll(/(\d+)\s*(?:bedrooms?|habitaciones?|habitacion|dormitorios?)/gi)) {
+    const n = Number.parseInt(m[1], 10);
+    if (Number.isInteger(n) && n > 0 && n <= 9) out.add(n);
+  }
+  // EN/ES shorthand: "1 and 2 bedrooms", "1 y 2 habitaciones".
+  for (const m of s.matchAll(/(\d+)\s*(?:and|y|or)\s*(\d+)\s*(?:bedrooms?|habitaciones?|habitacion|dormitorios?)/gi)) {
+    const a = Number.parseInt(m[1], 10);
+    const b = Number.parseInt(m[2], 10);
+    if (Number.isInteger(a) && a > 0 && a <= 9) out.add(a);
+    if (Number.isInteger(b) && b > 0 && b <= 9) out.add(b);
+  }
 
   return Array.from(out).sort((a, b) => a - b);
 };
@@ -1690,6 +1702,13 @@ const runExtractionPipeline = async (sessionId, newMessage, locationLexicon = []
         if (!applied.includes(key)) applied.push(key);
       }
     }
+  }
+
+  // Global guard: preserve multi-room intent from current user turn in all extraction modes.
+  const roomsDetectedGlobal = detectRoomsFromText(newMessage);
+  if (roomsDetectedGlobal.length >= 2 && !isSameInsightValue(session.insights?.rooms, roomsDetectedGlobal)) {
+    session.insights.rooms = roomsDetectedGlobal;
+    if (!applied.includes('rooms')) applied.push('rooms');
   }
 
   // Fallback: if type is still empty but clearly present in text, fill once.
