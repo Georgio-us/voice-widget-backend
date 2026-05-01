@@ -1460,10 +1460,11 @@ const detectRoomsFromText = (text = '') => {
   if (!s) return [];
   const out = new Set();
 
-  if (/\b1\s*к\b|\b1\s*ком|\bоднуш|однокомнат/i.test(s)) out.add(1);
-  if (/\b2\s*к\b|\b2\s*ком|\bдвуш|двухкомнат/i.test(s)) out.add(2);
-  if (/\b3\s*к\b|\b3\s*ком|трехкомнат/i.test(s)) out.add(3);
-  if (/\b4\s*к\b|\b4\s*ком|четырехкомнат/i.test(s)) out.add(4);
+  // NOTE: avoid \b for Cyrillic stems ("однушки/двушки"), JS word boundaries are unreliable there.
+  if (/(?:^|\s)1\s*[кk](?:\s|$)|(?:^|\s)1\s*ком|однуш|однокомнат/i.test(s)) out.add(1);
+  if (/(?:^|\s)2\s*[кk](?:\s|$)|(?:^|\s)2\s*ком|двуш|двухкомнат/i.test(s)) out.add(2);
+  if (/(?:^|\s)3\s*[кk](?:\s|$)|(?:^|\s)3\s*ком|треш|трехкомнат/i.test(s)) out.add(3);
+  if (/(?:^|\s)4\s*[кk](?:\s|$)|(?:^|\s)4\s*ком|четырехкомнат/i.test(s)) out.add(4);
 
   // Generic numeric fallback: "N комнат(а/ы)".
   for (const m of s.matchAll(/(\d+)\s*(?:комнат|комн|ком\b)/gi)) {
@@ -1472,6 +1473,23 @@ const detectRoomsFromText = (text = '') => {
   }
 
   return Array.from(out).sort((a, b) => a - b);
+};
+
+const normalizeRoomsValue = (value) => {
+  if (Array.isArray(value)) {
+    const nums = value
+      .map((v) => Number.parseInt(String(v), 10))
+      .filter((n) => Number.isInteger(n) && n > 0 && n <= 9);
+    return Array.from(new Set(nums)).sort((a, b) => a - b);
+  }
+  if (value === null || value === undefined) return [];
+  const detected = detectRoomsFromText(String(value));
+  if (detected.length > 0) return detected;
+  const fallback = String(value).match(/\d+/);
+  if (!fallback) return [];
+  const n = Number.parseInt(fallback[0], 10);
+  if (!Number.isInteger(n) || n <= 0 || n > 9) return [];
+  return [n];
 };
 
 const isSameInsightValue = (a, b) => {
@@ -1562,6 +1580,12 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
       if (!(key in parsed)) continue;
       const value = parsed[key];
       if (isEmptyInsightValue(value)) continue;
+      if (key === 'rooms') {
+        const roomsList = normalizeRoomsValue(value);
+        if (roomsList.length >= 2) sanitized[key] = roomsList;
+        else if (roomsList.length === 1) sanitized[key] = `${roomsList[0]} ${roomsList[0] === 1 ? 'комната' : 'комнаты'}`;
+        continue;
+      }
       if (key === 'features') {
         if (Array.isArray(value)) sanitized[key] = value.filter((x) => typeof x === 'string' && x.trim()).slice(0, 8);
         continue;
