@@ -3571,6 +3571,21 @@ const transcribeAndRespond = async (req, res) => {
       extraction: {
         mode: session.lastExtractionMode || getExtractionMode(),
         appliedFields: Array.isArray(session.lastExtractedFields) ? session.lastExtractedFields : []
+      },
+      // Non-breaking machine contract for frontend consumption.
+      machinePayload: {
+        assistantText: botResponse,
+        sessionId,
+        messageCount: session.messages.length,
+        inputType,
+        insights: session.insights || null,
+        cards: DISABLE_SERVER_UI ? [] : cards,
+        ui: DISABLE_SERVER_UI ? null : (ui || null),
+        queryTraceV1: session.queryTraceV1 || null,
+        extraction: {
+          mode: session.lastExtractionMode || getExtractionMode(),
+          appliedFields: Array.isArray(session.lastExtractedFields) ? session.lastExtractedFields : []
+        }
       }
     };
 
