@@ -450,9 +450,17 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
     missingFields.push('type');
   }
 
-  const rawLocationsList = Array.isArray(sourceInsights.locationsRaw)
+  const rawLocationsInput = Array.isArray(sourceInsights.locationsRaw)
     ? sourceInsights.locationsRaw.map((x) => toText(x)).filter(Boolean)
     : [];
+  // Canonicalize + dedupe locationsRaw to prevent alias-noise from becoming a fake multi-city string.
+  const rawLocationsList = Array.from(
+    new Set(
+      rawLocationsInput
+        .map((x) => normalizeLocationToken(x))
+        .filter(Boolean)
+    )
+  );
   const extractionLocationSource = rawLocationsList.length > 0
     ? rawLocationsList.join(' и ')
     : sourceInsights.location;
