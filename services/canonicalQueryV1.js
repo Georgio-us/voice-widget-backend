@@ -77,6 +77,66 @@ const parseMinInt = (v) => {
   return Math.min(...nums);
 };
 
+const parseBudgetTokenToInt = (rawNum, rawSuffix = '') => {
+  let token = String(rawNum || '').trim();
+  if (!token) return null;
+  token = token.replace(/\s+/g, '');
+  let value;
+  if (/^\d{1,3}(?:[.,]\d{3})+$/.test(token)) value = Number(token.replace(/[.,]/g, ''));
+  else value = Number(token.replace(',', '.'));
+  if (!Number.isFinite(value)) return null;
+  value = Math.round(value);
+  const suffix = String(rawSuffix || '').toLowerCase();
+  if (/(k|к|тыс|тысяч|thousand|mil)/i.test(suffix) && value < 10000) value *= 1000;
+  return Number.isFinite(value) ? value : null;
+};
+
+const detectBudgetSemantics = (sourceInsights = {}) => {
+  const explicitMin = parseMinInt(sourceInsights.budgetMin);
+  const explicitMax = parseMaxInt(sourceInsights.budgetMax);
+  if (Number.isInteger(explicitMin) && Number.isInteger(explicitMax)) {
+    return { mode: 'range', min: Math.min(explicitMin, explicitMax), max: Math.max(explicitMin, explicitMax) };
+  }
+  if (Number.isInteger(explicitMin)) return { mode: 'lower', min: explicitMin };
+  if (Number.isInteger(explicitMax)) return { mode: 'upper', max: explicitMax };
+
+  const budgetText = toText(sourceInsights.budget).toLowerCase();
+  if (!budgetText) return null;
+
+  const rangeDash = budgetText.match(/(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?\s*[-–—]\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?/i);
+  if (rangeDash) {
+    const a = parseBudgetTokenToInt(rangeDash[1], rangeDash[2] || rangeDash[4] || '');
+    const b = parseBudgetTokenToInt(rangeDash[3], rangeDash[4] || '');
+    if (Number.isInteger(a) && Number.isInteger(b)) return { mode: 'range', min: Math.min(a, b), max: Math.max(a, b) };
+  }
+
+  const rangeFromTo = budgetText.match(/(?:от|from|desde)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?\s*(?:до|to|a|hasta)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?/i);
+  if (rangeFromTo) {
+    const a = parseBudgetTokenToInt(rangeFromTo[1], rangeFromTo[2] || rangeFromTo[4] || '');
+    const b = parseBudgetTokenToInt(rangeFromTo[3], rangeFromTo[4] || '');
+    if (Number.isInteger(a) && Number.isInteger(b)) return { mode: 'range', min: Math.min(a, b), max: Math.max(a, b) };
+  }
+
+  const upper = budgetText.match(/(?:до|up\s*to|hasta|max(?:imum)?|не\s*более)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)/i);
+  if (upper) {
+    const v = parseBudgetTokenToInt(upper[1], upper[2] || '');
+    if (Number.isInteger(v)) return { mode: 'upper', max: v };
+  }
+
+  const lower = budgetText.match(/(?:от|from|desde|min(?:imum)?|не\s*менее)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)/i);
+  if (lower) {
+    const v = parseBudgetTokenToInt(lower[1], lower[2] || '');
+    if (Number.isInteger(v)) return { mode: 'lower', min: v };
+  }
+
+  const singleMatch = budgetText.match(/(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?/i);
+  if (singleMatch) {
+    const single = parseBudgetTokenToInt(singleMatch[1], singleMatch[2] || '');
+    if (Number.isInteger(single)) return { mode: 'single', min: single };
+  }
+  return null;
+};
+
 const normalizeOperation = (v) => {
   const s = normalizeText(v);
   if (!s) return null;
@@ -400,6 +460,8 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
     rooms: insights?.rooms ?? null,
     bathrooms: insights?.bathrooms ?? null,
     budget: insights?.budget ?? null,
+    budgetMin: insights?.budgetMin ?? null,
+    budgetMax: insights?.budgetMax ?? null,
     area: insights?.area ?? null,
     plotArea: insights?.plotArea ?? null,
     floor: insights?.floor ?? null,
@@ -419,13 +481,13 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   const missingFields = [];
   let locationSemantics = null;
   let locationExtraction = null;
-  const parsedBudgetMin = parseMinInt(sourceInsights.budget);
+  const budgetSemantics = detectBudgetSemantics(sourceInsights);
 
   if (sourceInsights.operation) {
     const op = normalizeOperation(sourceInsights.operation);
     if (op) {
       // If user explicitly says rent but budget is in sale range, drop operation to let default sale flow.
-      if (op === 'rent' && Number.isInteger(parsedBudgetMin) && parsedBudgetMin >= 10000) {
+      if (op === 'rent' && Number.isInteger(budgetSemantics?.min) && budgetSemantics.min >= 10000) {
         droppedFields.push({
           field: 'operation',
           reason: 'rent_budget_conflict_operation_reset',
@@ -517,21 +579,38 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   if (Number.isInteger(bathrooms) && bathrooms > 0) canonicalPatch.bathrooms = bathrooms;
   else missingFields.push('bathrooms');
 
-  const minPrice = parsedBudgetMin;
+  const minPrice = Number.isInteger(budgetSemantics?.min) ? budgetSemantics.min : null;
+  const maxPrice = Number.isInteger(budgetSemantics?.max) ? budgetSemantics.max : null;
+
   if (Number.isInteger(minPrice) && minPrice > 0) {
     const op = canonicalPatch.operation || null;
     if (op === 'sale') {
       if (minPrice >= 10000) canonicalPatch.minPrice = minPrice;
-      else droppedFields.push({ field: 'minPrice', reason: 'sale_budget_too_low', value: sourceInsights.budget });
+      else droppedFields.push({ field: 'minPrice', reason: 'sale_budget_too_low', value: sourceInsights.budgetMin || sourceInsights.budget });
     } else if (op === 'rent') {
       if (minPrice < 10000) canonicalPatch.minPrice = minPrice;
-      else droppedFields.push({ field: 'minPrice', reason: 'rent_budget_too_high', value: sourceInsights.budget });
+      else droppedFields.push({ field: 'minPrice', reason: 'rent_budget_too_high', value: sourceInsights.budgetMin || sourceInsights.budget });
     } else {
       // If operation is unknown, keep previous permissive behavior.
       canonicalPatch.minPrice = minPrice;
     }
   } else {
     missingFields.push('minPrice');
+  }
+
+  if (Number.isInteger(maxPrice) && maxPrice > 0) {
+    const op = canonicalPatch.operation || null;
+    if (op === 'sale') {
+      if (maxPrice >= 10000) canonicalPatch.maxPrice = maxPrice;
+      else droppedFields.push({ field: 'maxPrice', reason: 'sale_budget_too_low', value: sourceInsights.budgetMax || sourceInsights.budget });
+    } else if (op === 'rent') {
+      if (maxPrice < 10000) canonicalPatch.maxPrice = maxPrice;
+      else droppedFields.push({ field: 'maxPrice', reason: 'rent_budget_too_high', value: sourceInsights.budgetMax || sourceInsights.budget });
+    } else {
+      canonicalPatch.maxPrice = maxPrice;
+    }
+  } else if (budgetSemantics?.mode === 'range' || budgetSemantics?.mode === 'upper') {
+    missingFields.push('maxPrice');
   }
 
   const minArea = parseMinInt(sourceInsights.area);
@@ -671,6 +750,7 @@ export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit 
       }
     }
     if (Number.isInteger(query.minPrice)) filtered = filtered.filter((p) => Number(p.priceEUR) >= query.minPrice);
+    if (Number.isInteger(query.maxPrice)) filtered = filtered.filter((p) => Number(p.priceEUR) <= query.maxPrice);
     if (Number.isInteger(query.minArea)) filtered = filtered.filter((p) => Number(p.area_m2) >= query.minArea);
     if (Number.isInteger(query.plotArea)) filtered = filtered.filter((p) => Number(p.plot_m2) >= query.plotArea);
 

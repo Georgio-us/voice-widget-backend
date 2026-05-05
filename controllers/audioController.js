@@ -204,6 +204,8 @@ const getOrCreateSession = (sessionId) => {
         name: null,           // 10%
         operation: null,      // 12%  
         budget: null,         // 11%
+        budgetMin: null,
+        budgetMax: null,
         
         // Блок 2: Параметры недвижимости (33.3%)
         type: null,           // 11%
@@ -1343,7 +1345,7 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
 };
 
 const INSIGHT_FIELDS_V1 = [
-  'operation', 'type', 'location', 'locationsRaw', 'rooms', 'bathrooms', 'budget', 'area', 'plotArea', 'floor',
+  'operation', 'type', 'location', 'locationsRaw', 'rooms', 'bathrooms', 'budget', 'budgetMin', 'budgetMax', 'area', 'plotArea', 'floor',
   'hasParking', 'hasPool', 'hasTerrace', 'orientation', 'distanceBeach', 'distanceAirport',
   'features', 'details', 'preferences', 'name'
 ];
@@ -1504,6 +1506,63 @@ const normalizeRoomsValue = (value) => {
   return [n];
 };
 
+const parseBudgetTokenToInt = (rawNum, rawSuffix = '') => {
+  let token = String(rawNum || '').trim();
+  if (!token) return null;
+  token = token.replace(/\s+/g, '');
+  let value;
+  if (/^\d{1,3}(?:[.,]\d{3})+$/.test(token)) value = Number(token.replace(/[.,]/g, ''));
+  else value = Number(token.replace(',', '.'));
+  if (!Number.isFinite(value)) return null;
+  value = Math.round(value);
+  const suffix = String(rawSuffix || '').toLowerCase();
+  if (/(k|к|тыс|тысяч|thousand|mil)/i.test(suffix) && value < 10000) value *= 1000;
+  return Number.isFinite(value) ? value : null;
+};
+
+const detectBudgetBoundsFromText = (text = '') => {
+  const s = String(text || '').toLowerCase();
+  if (!s) return null;
+
+  const rangeDash = s.match(/(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?\s*[-–—]\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?/i);
+  if (rangeDash) {
+    const a = parseBudgetTokenToInt(rangeDash[1], rangeDash[2] || rangeDash[4] || '');
+    const b = parseBudgetTokenToInt(rangeDash[3], rangeDash[4] || '');
+    if (Number.isInteger(a) && Number.isInteger(b)) {
+      return { mode: 'range', min: Math.min(a, b), max: Math.max(a, b) };
+    }
+  }
+
+  const rangeFromTo = s.match(/(?:от|from|desde)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?\s*(?:до|to|a|hasta)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?/i);
+  if (rangeFromTo) {
+    const a = parseBudgetTokenToInt(rangeFromTo[1], rangeFromTo[2] || rangeFromTo[4] || '');
+    const b = parseBudgetTokenToInt(rangeFromTo[3], rangeFromTo[4] || '');
+    if (Number.isInteger(a) && Number.isInteger(b)) {
+      return { mode: 'range', min: Math.min(a, b), max: Math.max(a, b) };
+    }
+  }
+
+  const upper = s.match(/(?:до|up\s*to|hasta|max(?:imum)?|не\s*более)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)/i);
+  if (upper) {
+    const v = parseBudgetTokenToInt(upper[1], upper[2] || '');
+    if (Number.isInteger(v)) return { mode: 'upper', max: v };
+  }
+
+  const lower = s.match(/(?:от|from|desde|min(?:imum)?|не\s*менее)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)/i);
+  if (lower) {
+    const v = parseBudgetTokenToInt(lower[1], lower[2] || '');
+    if (Number.isInteger(v)) return { mode: 'lower', min: v };
+  }
+
+  const singleMatch = s.match(/(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?)?/i);
+  if (singleMatch) {
+    const single = parseBudgetTokenToInt(singleMatch[1], singleMatch[2] || '');
+    if (Number.isInteger(single)) return { mode: 'single', min: single };
+  }
+
+  return null;
+};
+
 const isSameInsightValue = (a, b) => {
   if (Array.isArray(a) || Array.isArray(b)) {
     const aa = Array.isArray(a) ? a : [];
@@ -1551,6 +1610,7 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
     'Value rules:',
     '- operation: "покупка" or "аренда"',
     '- budget: like "100000 €"',
+    '- budgetMin / budgetMax: use for explicit ranges ("от...до...", "X-Y", "до X", "от X")',
     '- rooms: like "2 комнаты"',
     '- area: like "50 м²"',
     '- bathrooms/floor/plotArea: numeric-like strings allowed',
@@ -1596,6 +1656,11 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
         const roomsList = normalizeRoomsValue(value);
         if (roomsList.length >= 2) sanitized[key] = roomsList;
         else if (roomsList.length === 1) sanitized[key] = `${roomsList[0]} ${roomsList[0] === 1 ? 'комната' : 'комнаты'}`;
+        continue;
+      }
+      if (key === 'budgetMin' || key === 'budgetMax') {
+        const n = parseBudgetTokenToInt(String(value), String(value));
+        if (Number.isInteger(n) && n > 0) sanitized[key] = `${n} €`;
         continue;
       }
       if (key === 'features') {
@@ -1674,6 +1739,13 @@ const extractInsightsWithLLM = async (session, newMessage, locationLexicon = [])
     const roomsDetected = detectRoomsFromText(newMessage);
     if (roomsDetected.length >= 2) {
       sanitized.rooms = roomsDetected;
+    }
+
+    // Guard 5: preserve explicit budget range semantics from user text.
+    const budgetBounds = detectBudgetBoundsFromText(newMessage);
+    if (budgetBounds) {
+      if (Number.isInteger(budgetBounds.min) && budgetBounds.min > 0) sanitized.budgetMin = `${budgetBounds.min} €`;
+      if (Number.isInteger(budgetBounds.max) && budgetBounds.max > 0) sanitized.budgetMax = `${budgetBounds.max} €`;
     }
 
     return sanitized;
