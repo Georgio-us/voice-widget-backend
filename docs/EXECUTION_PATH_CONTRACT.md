@@ -1,6 +1,6 @@
 # Execution Path Contract (Locked)
 
-Last updated: 2026-04-30  
+Last updated: 2026-05-05  
 Branch: `Split`  
 Status: mandatory runtime contract.
 
@@ -50,6 +50,12 @@ These values may exist for UX/logging only, but MUST NOT participate in:
 6. `operation` default is `sale` when unresolved/empty.
 7. If `operation=rent` conflicts with sale-range budget (`>=10000`), operation is reset (dropped) and default `sale` applies.
 8. Unknown multi-location token sets from `locationsRaw` MUST NOT pass as free-text `location` filter.
+9. Budget semantics are interpreted before query build:
+   - `X-Y` / `от X до Y` => `minPrice + maxPrice`
+   - `до X` => `maxPrice`
+   - `от X` => `minPrice`
+   - single number `X` => `minPrice` (current product rule)
+10. `minPrice` softening (`*0.8`) remains enabled; `maxPrice` is strict (no softening).
 
 ## Debug Contract
 

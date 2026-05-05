@@ -1,6 +1,6 @@
 # Current Execution Plan (Estyle)
 
-Last updated: 2026-04-30
+Last updated: 2026-05-05
 Branch: `Split`
 Status: XML baseline is live; priority is deterministic AI extraction -> canonical query -> stable candidate pool.
 
@@ -127,3 +127,14 @@ Next coding slice (planned):
 15. Prompt UX escalation rule added:
    - for legal/mortgage/installment/process questions assistant keeps answer very short;
    - assistant explicitly points user to `Связаться с менеджером` button below for precise guidance.
+16. Budget range semantics implemented end-to-end:
+   - extraction accepts `budgetMin` / `budgetMax`;
+   - canonical supports `range/lower/upper/single` modes;
+   - `single` budget remains `minPrice` by product rule.
+17. Query filter now supports upper price bound:
+   - `maxPrice` is applied as `priceEUR <= maxPrice`.
+18. Current budget behavior (validated by live tests):
+   - `150-200к` -> `minPrice=150000`, `maxPrice=200000` (with runtime softening only on `minPrice`);
+   - `до 200к` -> `maxPrice=200000`;
+   - `от 150к` -> `minPrice=150000`;
+   - `170к` -> `minPrice=170000`.

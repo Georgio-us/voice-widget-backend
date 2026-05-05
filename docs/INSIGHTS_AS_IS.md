@@ -1,6 +1,6 @@
 # Insights AS-IS (Estyle)
 
-Last updated: 2026-04-30 (post deterministic rewrite + location contract hardening)  
+Last updated: 2026-05-05 (post budget range semantics)  
 Branch: `Split`  
 Scope: current runtime behavior without refactor.
 
@@ -24,6 +24,8 @@ This file captures:
 - `rooms`
 - `bathrooms`
 - `budget`
+- `budgetMin`
+- `budgetMax`
 - `area`
 - `plotArea`
 - `floor`
@@ -185,6 +187,14 @@ Disabled in active main-call path:
    - `sale` accepts only `minPrice >= 10000`;
    - `rent` accepts only `minPrice < 10000`;
    - invalid budget is dropped with explicit reason.
+4. Budget range semantics:
+   - `X-Y` / `от X до Y` -> `minPrice + maxPrice`
+   - `до X` -> `maxPrice`
+   - `от X` -> `minPrice`
+   - single `X` -> `minPrice` (current product rule)
+5. Softening policy:
+   - `minPrice` is softened by `*0.8`
+   - `maxPrice` is strict (no softening)
 
 ## Why System Is Not Deterministic Yet
 
