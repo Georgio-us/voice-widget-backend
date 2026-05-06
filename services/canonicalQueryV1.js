@@ -198,6 +198,14 @@ const LOCATION_ALIASES = new Map([
   ['мадрид', 'madrid'],
   ['madrid', 'madrid'],
   ['коста бланка', 'costa blanca'],
+  ['costa blanca', 'costa blanca'],
+  ['costa blanca south', 'costa blanca south'],
+  ['costa blanca north', 'costa blanca north'],
+  ['коста бланка саус', 'costa blanca south'],
+  ['коста бланка норт', 'costa blanca north'],
+  ['costa calida', 'costa calida'],
+  ['costa cálida', 'costa calida'],
+  ['коста калида', 'costa calida'],
   ['коста брава', 'costa brava'],
   ['коста дель соль', 'costa del sol']
 ]);
@@ -290,6 +298,35 @@ const MICRO_LOCATION_HINTS = [
   'los altos'
 ];
 
+const COAST_TO_CITIES = new Map([
+  ['costa blanca', [
+    // South
+    'torrevieja', 'orihuela costa', 'punta prima', 'ciudad quesada', 'pilar de la horadada',
+    'guardamar', 'la mata', 'la zenia', 'los balcones', 'san miguel de salinas', 'campoamor',
+    'playa flamenca', 'cabo roig', 'lomas de cabo roig', 'los dolses', 'villamartin',
+    'las colinas golf', 'las ramblas golf', 'los altos', 'los montesinos', 'daya vieja',
+    'pinar de campoverde', 'vistabella golf', 'almoradi',
+    // North
+    'alicante', 'benidorm', 'calpe', 'altea', 'denia', 'javea', 'villajoyosa', 'polop',
+    'la nucia', 'moraira', 'algorfa montemar'
+  ]],
+  ['costa blanca south', [
+    'torrevieja', 'orihuela costa', 'punta prima', 'ciudad quesada', 'pilar de la horadada',
+    'guardamar', 'la mata', 'la zenia', 'los balcones', 'san miguel de salinas', 'campoamor',
+    'playa flamenca', 'cabo roig', 'lomas de cabo roig', 'los dolses', 'villamartin',
+    'las colinas golf', 'las ramblas golf', 'los altos', 'los montesinos', 'daya vieja',
+    'pinar de campoverde', 'vistabella golf', 'almoradi'
+  ]],
+  ['costa blanca north', [
+    'alicante', 'benidorm', 'calpe', 'altea', 'denia', 'javea', 'villajoyosa', 'polop',
+    'la nucia', 'moraira', 'algorfa montemar'
+  ]],
+  ['costa calida', [
+    'los alcazares', 'san pedro del pinatar', 'san javier', 'torre pacheco',
+    'santiago de ribeira', 'mar menor', 'murcia'
+  ]]
+]);
+
 const parseLocationSemantics = (rawValue) => {
   const raw = toText(rawValue);
   const normalized = normalizeLocationToken(raw);
@@ -306,6 +343,12 @@ const parseLocationSemantics = (rawValue) => {
 
   if (GENERIC_LOCATION_TOKENS.has(normalized)) {
     out.unresolvedGeneric = true;
+    return out;
+  }
+
+  if (COAST_TO_CITIES.has(normalized)) {
+    out.coastCatalog = normalized;
+    out.cities = Array.from(new Set(COAST_TO_CITIES.get(normalized) || []));
     return out;
   }
 
@@ -370,6 +413,14 @@ const parseLocationSemantics = (rawValue) => {
 };
 
 const resolveGeoStatus = ({ locationExtraction, locationSemantics }) => {
+  if (typeof locationSemantics?.coastCatalog === 'string' && Array.isArray(locationSemantics?.cities) && locationSemantics.cities.length > 0) {
+    return {
+      status: 'supported',
+      reason: 'coast_catalog_expanded_to_cities',
+      tokens: [locationSemantics.coastCatalog]
+    };
+  }
+
   if (
     Array.isArray(locationSemantics?.featureHints) &&
     locationSemantics.featureHints.includes('near_sea') &&
@@ -870,7 +921,10 @@ export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit 
   const droppedRelaxed = [];
   let usedRelaxedFallback = false;
   let filtered = applyByQuery(all, q, new Set());
-  let locationScope = Array.isArray(q.cities) && q.cities.length ? 'city' : (q.province ? 'province' : null);
+  let locationScope =
+    trace?.locationSemantics?.coastCatalog && Array.isArray(q.cities) && q.cities.length
+      ? 'coast_catalog'
+      : (Array.isArray(q.cities) && q.cities.length ? 'city' : (q.province ? 'province' : null));
   let locationFallbackMessage = null;
 
   if (filtered.length === 0 && Array.isArray(q.cities) && q.cities.length && q.province) {
