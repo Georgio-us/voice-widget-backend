@@ -191,6 +191,12 @@ const LOCATION_ALIASES = new Map([
   ['вильямартин', 'villamartin'],
   ['ла зения', 'la zenia'],
   ['лос алькасарес', 'los alcazares'],
+  ['малага', 'malaga'],
+  ['malaga', 'malaga'],
+  ['барселона', 'barcelona'],
+  ['barcelona', 'barcelona'],
+  ['мадрид', 'madrid'],
+  ['madrid', 'madrid'],
   ['коста бланка', 'costa blanca'],
   ['коста брава', 'costa brava'],
   ['коста дель соль', 'costa del sol']
@@ -247,6 +253,24 @@ const CITY_TO_PROVINCE = new Map([
   ['paterna', 'valencia'],
   ['torrent', 'valencia']
 ]);
+
+const SUPPORTED_GEO_TOKENS = new Set([
+  // Costa Blanca South
+  'torrevieja', 'orihuela costa', 'punta prima', 'ciudad quesada', 'pilar de la horadada',
+  'guardamar', 'la mata', 'la zenia', 'los balcones', 'san miguel de salinas', 'campoamor',
+  'playa flamenca', 'cabo roig', 'lomas de cabo roig', 'los dolses', 'villamartin',
+  'las colinas golf', 'las ramblas golf', 'los altos', 'los montesinos', 'daya vieja',
+  'pinar de campoverde', 'vistabella golf', 'almoradi',
+  // Costa Blanca North
+  'alicante', 'benidorm', 'calpe', 'altea', 'denia', 'javea', 'villajoyosa', 'polop',
+  'la nucia', 'moraira', 'algorfa montemar',
+  // Costa Calida
+  'los alcazares', 'san pedro del pinatar', 'san javier', 'torre pacheco',
+  'santiago de ribeira', 'mar menor', 'murcia'
+]);
+
+const LIMITED_GEO_TOKENS = new Set(['valencia']);
+const UNSUPPORTED_GEO_TOKENS = new Set(['malaga', 'barcelona', 'madrid', 'costa del sol']);
 
 const MICRO_LOCATION_HINTS = [
   'punta prima',
@@ -343,6 +367,48 @@ const parseLocationSemantics = (rawValue) => {
   out.city = normalized;
   out.province = CITY_TO_PROVINCE.get(normalized) || null;
   return out;
+};
+
+const resolveGeoStatus = ({ locationExtraction, locationSemantics }) => {
+  if (
+    Array.isArray(locationSemantics?.featureHints) &&
+    locationSemantics.featureHints.includes('near_sea') &&
+    !locationSemantics?.city &&
+    !locationSemantics?.province &&
+    !locationSemantics?.location &&
+    (!Array.isArray(locationSemantics?.cities) || locationSemantics.cities.length === 0)
+  ) {
+    return { status: null, reason: 'feature_only_geo_hint', tokens: [] };
+  }
+
+  const raw = String(locationExtraction?.raw || '').trim();
+  if (!raw) return { status: null, reason: null, tokens: [] };
+
+  const tokens = parseLocationTokens(raw);
+  const directToken = normalizeLocationToken(raw);
+  const allTokens = Array.from(new Set([...(tokens || []), directToken].filter(Boolean)));
+  if (allTokens.length === 0) return { status: null, reason: null, tokens: [] };
+
+  const hasSupported = allTokens.some((t) => SUPPORTED_GEO_TOKENS.has(t));
+  const hasLimited = allTokens.some((t) => LIMITED_GEO_TOKENS.has(t));
+  const hasUnsupported = allTokens.some((t) => UNSUPPORTED_GEO_TOKENS.has(t));
+
+  if (hasUnsupported && !hasSupported && !hasLimited) {
+    return { status: 'unsupported', reason: 'off_catalog_geo', tokens: allTokens };
+  }
+  if (hasLimited && !hasSupported) {
+    return { status: 'limited', reason: 'limited_geo', tokens: allTokens };
+  }
+  if (hasSupported && hasUnsupported) {
+    return { status: 'supported', reason: 'mixed_geo_with_off_catalog', tokens: allTokens };
+  }
+  if (hasSupported) {
+    return { status: 'supported', reason: 'in_feed_catalog', tokens: allTokens };
+  }
+  if ((locationSemantics?.unresolvedMulti === true) || (locationSemantics?.unresolvedGeneric === true)) {
+    return { status: 'unsupported', reason: 'unresolved_geo_tokens', tokens: allTokens };
+  }
+  return { status: 'unsupported', reason: 'unknown_geo_tokens', tokens: allTokens };
 };
 
 const normalizeOrientation = (v) => {
@@ -481,6 +547,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   const missingFields = [];
   let locationSemantics = null;
   let locationExtraction = null;
+  let geo = { status: null, reason: null, tokens: [] };
   const budgetSemantics = detectBudgetSemantics(sourceInsights);
 
   if (sourceInsights.operation) {
@@ -534,6 +601,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
 
   if (extractionLocationSource) {
     locationSemantics = parseLocationSemantics(extractionLocationSource);
+    geo = resolveGeoStatus({ locationExtraction, locationSemantics });
     const coastLike = Array.isArray(locationSemantics?.featureHints) && locationSemantics.featureHints.includes('near_sea');
     if (coastLike) {
       const f = mergeFeatures(sourceInsights.features, 'near_sea', inferred.features);
@@ -655,6 +723,7 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
     sourceInsights,
     locationExtraction,
     locationSemantics,
+    geo,
     canonicalPatch,
     preValidationQuery,
     postValidationQuery,
