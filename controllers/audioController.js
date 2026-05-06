@@ -2363,6 +2363,54 @@ const buildRmv3GuardrailsSystemMessage = () => ({
   ].join('\n')
 });
 
+const buildGeoFactsSystemMessage = (execution = null) => {
+  const geo = execution?.geo || {};
+  const matchedCount = Number.isInteger(execution?.matchedCount) ? execution.matchedCount : null;
+  const geoStatus = geo?.status || null;
+  const geoReason = geo?.reason || null;
+  const geoTokens = Array.isArray(geo?.tokens) ? geo.tokens.slice(0, 8) : [];
+  return {
+    role: 'system',
+    content: [
+      'GEO_FACTS_V1',
+      `matchedCount=${matchedCount === null ? 'null' : matchedCount}`,
+      `geoStatus=${geoStatus || 'null'}`,
+      `geoReason=${geoReason || 'null'}`,
+      `geoTokens=${geoTokens.length ? geoTokens.join(',') : 'none'}`,
+      'Rules:',
+      '- If matchedCount > 0: NEVER say "нет объектов", "нет доступных объектов", "не могу предложить варианты".',
+      '- If geoStatus=supported and matchedCount>0: confirm availability and continue qualification.',
+      '- If geoStatus=limited and matchedCount=0: say there are currently no available objects in this direction and offer manager/contact button.',
+      '- If geoStatus=unsupported: do not promise availability, explain active coverage (Costa Blanca / Costa Calida), offer manager/contact button.'
+    ].join('\n')
+  };
+};
+
+const sanitizeNoInventoryClaim = (text = '', execution = null) => {
+  const raw = String(text || '');
+  if (!raw) return raw;
+  const matchedCount = Number.isInteger(execution?.matchedCount) ? execution.matchedCount : null;
+  const geoStatus = execution?.geo?.status || null;
+  if (!(matchedCount > 0)) return raw;
+  if (!(geoStatus === 'supported' || geoStatus === null)) return raw;
+
+  const noInventoryPatterns = [
+    /в этом направлении сейчас нет доступных объектов в каталоге/i,
+    /нет доступных объектов/i,
+    /нет объектов/i,
+    /не могу предложить варианты/i
+  ];
+  if (!noInventoryPatterns.some((re) => re.test(raw))) return raw;
+
+  return raw.replace(
+    /в этом направлении сейчас нет доступных объектов в каталоге\.?\s*/i,
+    'В этом направлении есть доступные объекты в текущем каталоге. '
+  ).replace(
+    /нет доступных объектов/i,
+    'доступные объекты есть'
+  );
+};
+
 // ====== Вспомогательные функции профиля/стадий/META ======
 const determineStage = (clientProfile, currentStage, messageHistory) => {
   try {
@@ -3408,6 +3456,26 @@ const transcribeAndRespond = async (req, res) => {
       (msg) => msg && (msg.role === 'user' || msg.role === 'assistant')
     );
     
+    // Build deterministic execution facts BEFORE assistant generation,
+    // so LLM gets grounded geo/runtime signals for the current turn.
+    const baseExecution = await findBestProperties(session.insights, 100);
+    session.queryTraceV1 = {
+      sourceInsights: baseExecution.sourceInsights,
+      locationExtraction: baseExecution.locationExtraction || null,
+      locationSemantics: baseExecution.locationSemantics || null,
+      geo: baseExecution.geo || null,
+      canonicalPatch: baseExecution.canonicalPatch,
+      preValidationQuery: baseExecution.preValidationQuery,
+      postValidationQuery: baseExecution.postValidationQuery,
+      droppedFields: baseExecution.droppedFields,
+      missingFields: baseExecution.missingFields,
+      relaxed: baseExecution.relaxed || null,
+      matchedCount: baseExecution.matchedCount,
+      candidateIds: Array.isArray(baseExecution.candidates) ? baseExecution.candidates.map((p) => p.id) : []
+    };
+    session.lastCandidates = Array.from(new Set((baseExecution.candidates || []).map((p) => p.id)));
+    if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
+
     const messages = [
       {
         role: 'system',
@@ -3417,6 +3485,7 @@ const transcribeAndRespond = async (req, res) => {
         role: 'system',
         content: executionInstruction
       },
+      buildGeoFactsSystemMessage(baseExecution),
       ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
       ...dialogMessages
     ];
@@ -3439,6 +3508,7 @@ const transcribeAndRespond = async (req, res) => {
     const fullModelText = completion.choices[0].message.content.trim();
     const { assistantText } = extractAssistantAndMeta(fullModelText);
     let botResponse = assistantText || fullModelText;
+    botResponse = sanitizeNoInventoryClaim(botResponse, baseExecution);
     // Bonus: после ответа GPT подтверждаем язык сессии по распознанному языку пользовательского текста.
     if (detectedLangFromText) {
       session.clientProfile.language = detectedLangFromText;
@@ -3463,24 +3533,7 @@ const transcribeAndRespond = async (req, res) => {
     // UI extras and cards container
     let cards = [];
     let ui = undefined;
-    // Always build candidate pool (independent from "show" command).
-    const baseExecution = await findBestProperties(session.insights, 100);
-    session.queryTraceV1 = {
-      sourceInsights: baseExecution.sourceInsights,
-      locationExtraction: baseExecution.locationExtraction || null,
-      locationSemantics: baseExecution.locationSemantics || null,
-      geo: baseExecution.geo || null,
-      canonicalPatch: baseExecution.canonicalPatch,
-      preValidationQuery: baseExecution.preValidationQuery,
-      postValidationQuery: baseExecution.postValidationQuery,
-      droppedFields: baseExecution.droppedFields,
-      missingFields: baseExecution.missingFields,
-      relaxed: baseExecution.relaxed || null,
-      matchedCount: baseExecution.matchedCount,
-      candidateIds: Array.isArray(baseExecution.candidates) ? baseExecution.candidates.map((p) => p.id) : []
-    };
-    session.lastCandidates = Array.from(new Set((baseExecution.candidates || []).map((p) => p.id)));
-    if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
+    // Candidate pool was pre-built before LLM call to ground assistant response.
     // (удалено) парсинг inline lead из текста и сигналы формы
    /*
     * УДАЛЁН БЛОК «текстового списка вариантов» (preview-список).
