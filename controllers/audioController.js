@@ -2432,6 +2432,35 @@ const sanitizeNoInventoryClaim = (text = '', execution = null) => {
   );
 };
 
+const sanitizeUnsupportedCoverageClaim = (text = '', execution = null) => {
+  const raw = String(text || '');
+  if (!raw) return raw;
+  const source = execution?.sourceInsights || {};
+  const locRaw = []
+    .concat(Array.isArray(source?.locationsRaw) ? source.locationsRaw : [])
+    .concat(source?.location ? [source.location] : [])
+    .map((x) => String(x || '').toLowerCase())
+    .join(' ');
+
+  const hasOffCatalogMention =
+    /(madrid|мадрид|barcelona|барселон|malaga|малаг|costa del sol|коста дель соль|costa brava|коста брава|costa dorada|коста дорад)/i
+      .test(locRaw);
+  if (!hasOffCatalogMention) return raw;
+
+  const hasWrongAvailabilityClaim =
+    /(в\s+[^.]{0,80}(мадрид|barcelona|барселон|malaga|малаг|costa del sol|коста дель соль|costa brava|коста брава|costa dorada|коста дорад)[^.]{0,80}(доступн|есть\s+объект|объекты\s+есть))/i
+      .test(raw);
+  if (!hasWrongAvailabilityClaim) return raw;
+
+  return raw
+    .replace(
+      /(в\s+[^.]{0,80}(мадрид|barcelona|барселон|malaga|малаг|costa del sol|коста дель соль|costa brava|коста брава|costa dorada|коста дорад)[^.]{0,80}(доступн|есть\s+объект|объекты\s+есть)[^.]*\.)/ig,
+      'В этих направлениях сейчас нет доступных объектов в нашем каталоге.'
+    )
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
+
 // ====== Вспомогательные функции профиля/стадий/META ======
 const determineStage = (clientProfile, currentStage, messageHistory) => {
   try {
@@ -3530,6 +3559,7 @@ const transcribeAndRespond = async (req, res) => {
     const { assistantText } = extractAssistantAndMeta(fullModelText);
     let botResponse = assistantText || fullModelText;
     botResponse = sanitizeNoInventoryClaim(botResponse, baseExecution);
+    botResponse = sanitizeUnsupportedCoverageClaim(botResponse, baseExecution);
     // Bonus: после ответа GPT подтверждаем язык сессии по распознанному языку пользовательского текста.
     if (detectedLangFromText) {
       session.clientProfile.language = detectedLangFromText;
