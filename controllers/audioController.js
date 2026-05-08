@@ -3133,7 +3133,7 @@ const transcribeAndRespond = async (req, res) => {
       openai.chat.completions.create({
         messages,
         model: 'gpt-4o-mini',
-        temperature: 0.15,
+        temperature: 0.2,
         response_format: { type: 'json_schema', json_schema: INSIGHTS_RESPONSE_SCHEMA },
         stream: false
       }), 2, 'GPT'
