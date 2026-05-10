@@ -179,7 +179,18 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
       pool.query(`SELECT COUNT(*)::int AS c FROM session_logs`, []),
       pool.query(
         `
-        SELECT id, created_at, source, name, property_id
+        SELECT
+          id,
+          created_at,
+          source,
+          name,
+          property_id,
+          session_id,
+          phone_country_code,
+          phone_number,
+          email,
+          extra->>'telegramUsername' AS telegram_username,
+          extra->>'tgUserId' AS telegram_user_id
         FROM lead_requests
         WHERE client_id = $1
           AND COALESCE(source, '') !~* '^widget_'

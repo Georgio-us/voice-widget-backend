@@ -84,9 +84,7 @@ export async function createLead({
     ? String(phoneCountryCode).trim()
     : null;
   const normalizedPhoneNumber = phoneNumberTrimmed.length > 0 ? phoneNumberTrimmed : null;
-  const normalizedEmail = emailTrimmed.length > 0
-    ? emailTrimmed
-    : (telegramContactOk ? `${telegramUsernameTrimmed.replace(/^@/, '').toLowerCase()}@telegram.local` : null);
+  const normalizedEmail = emailTrimmed.length > 0 ? emailTrimmed : null;
   const normalizedComment = comment && String(comment).trim().length > 0
     ? String(comment).trim()
     : null;
