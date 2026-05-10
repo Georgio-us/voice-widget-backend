@@ -147,18 +147,43 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
       recentLeadsResp
     ] = await Promise.all([
       pool.query(`SELECT COUNT(*)::int AS c FROM properties WHERE client_id = $1 AND is_active = true`, [clientId]),
-      pool.query(`SELECT COUNT(*)::int AS c FROM lead_requests WHERE client_id = $1 AND created_at::date = NOW()::date`, [clientId]),
-      pool.query(`SELECT COUNT(*)::int AS c FROM session_logs WHERE payload->>'clientId' = $1 AND created_at::date = NOW()::date`, [clientId]),
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS c
+        FROM lead_requests
+        WHERE client_id = $1
+          AND created_at::date = NOW()::date
+          AND COALESCE(source, '') !~* '^widget_'
+        `,
+        [clientId]
+      ),
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS c
+        FROM session_logs
+        WHERE created_at::date = NOW()::date
+        `,
+        []
+      ),
       pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1`, [clientId]),
       pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1 AND first_seen_at::date = NOW()::date`, [clientId]),
-      pool.query(`SELECT COUNT(*)::int AS c FROM lead_requests WHERE client_id = $1`, [clientId]),
-      pool.query(`SELECT COUNT(*)::int AS c FROM session_logs WHERE payload->>'clientId' = $1`, [clientId]),
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS c
+        FROM lead_requests
+        WHERE client_id = $1
+          AND COALESCE(source, '') !~* '^widget_'
+        `,
+        [clientId]
+      ),
+      pool.query(`SELECT COUNT(*)::int AS c FROM session_logs`, []),
       pool.query(
         `
         SELECT id, created_at, source, name, property_id
         FROM lead_requests
         WHERE client_id = $1
-        ORDER BY created_at DESC
+          AND COALESCE(source, '') !~* '^widget_'
+        ORDER BY created_at DESC NULLS LAST, id DESC
         LIMIT 5
         `,
         [clientId]
