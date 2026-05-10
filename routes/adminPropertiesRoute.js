@@ -236,6 +236,67 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/stats/session/:sessionId', requireAdmin, async (req, res) => {
+  try {
+    const sessionId = String(req.params?.sessionId || '').trim();
+    if (!sessionId) return res.status(400).json({ ok: false, error: 'SESSION_ID_REQUIRED' });
+
+    const { rows } = await pool.query(
+      `
+      SELECT session_id, created_at, payload
+      FROM session_logs
+      WHERE session_id = $1
+      LIMIT 1
+      `,
+      [sessionId]
+    );
+
+    const row = rows?.[0];
+    if (!row) return res.json({ ok: true, digest: null });
+
+    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+    let lastUserText = null;
+    let lastInsights = null;
+    let lastAssistantText = null;
+
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i] || {};
+      const role = String(m?.role || '').toLowerCase();
+      if (!lastInsights && m?.meta?.insights && typeof m.meta.insights === 'object') {
+        lastInsights = m.meta.insights;
+      }
+      if (!lastUserText && role === 'user') {
+        const candidate = String(m?.transcription || m?.text || '').trim();
+        if (candidate) lastUserText = candidate;
+      }
+      if (!lastAssistantText && role === 'assistant') {
+        const candidate = String(m?.text || '').trim();
+        if (candidate) lastAssistantText = candidate;
+      }
+      if (lastUserText && lastInsights && lastAssistantText) break;
+    }
+
+    return res.json({
+      ok: true,
+      digest: {
+        sessionId: String(row.session_id || ''),
+        createdAt: row.created_at || null,
+        messagesCount: messages.length,
+        lastUserText: lastUserText || null,
+        lastAssistantText: lastAssistantText || null,
+        lastInsights: lastInsights || null
+      }
+    });
+  } catch (error) {
+    if (error?.code === '42P01' || error?.code === '42703') {
+      return res.json({ ok: true, digest: null });
+    }
+    console.error('❌ GET /api/admin/stats/session/:sessionId error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
+
 const buildS3Client = (cfg) => new S3Client({
   region: 'auto',
   endpoint: cfg.endpoint,
