@@ -15,6 +15,7 @@ import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramI
 const router = express.Router();
 
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
+const STATS_TIMEZONE = String(process.env.STATS_TIMEZONE || process.env.TZ || 'Europe/Kiev').trim() || 'Europe/Kiev';
 const MAX_IMAGES = 5;
 const IMAGE_WARN_SIZE_MB = (() => {
   const parsed = Number(String(process.env.ADMIN_WARN_IMAGE_MB || '').trim());
@@ -152,21 +153,29 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         SELECT COUNT(*)::int AS c
         FROM lead_requests
         WHERE client_id = $1
-          AND created_at::date = NOW()::date
+          AND (created_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date
           AND COALESCE(source, '') !~* '^widget_'
         `,
-        [clientId]
+        [clientId, STATS_TIMEZONE]
       ),
       pool.query(
         `
         SELECT COUNT(*)::int AS c
         FROM session_logs
-        WHERE created_at::date = NOW()::date
+        WHERE (created_at AT TIME ZONE $1)::date = (NOW() AT TIME ZONE $1)::date
         `,
-        []
+        [STATS_TIMEZONE]
       ),
       pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1`, [clientId]),
-      pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1 AND first_seen_at::date = NOW()::date`, [clientId]),
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS c
+        FROM users
+        WHERE client_id = $1
+          AND (first_seen_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date
+        `,
+        [clientId, STATS_TIMEZONE]
+      ),
       pool.query(
         `
         SELECT COUNT(*)::int AS c
