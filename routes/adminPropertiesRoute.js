@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { pool } from '../services/db.js';
 import {
   createManualProperty,
   deactivatePropertyByExternalId,
@@ -119,6 +120,85 @@ const requireR2Config = () => {
   if (missing.length) throw new Error(`R2_CONFIG_MISSING:${missing.join(',')}`);
   return cfg;
 };
+
+router.get('/stats/summary', requireAdmin, async (req, res) => {
+  try {
+    if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
+    const clientId = SERVICE_CLIENT_ID;
+    const fallback = {
+      activeProperties: null,
+      leadsToday: null,
+      sessionsToday: null,
+      totalUsers: null,
+      usersToday: null,
+      totalLeads: null,
+      totalSessions: null,
+      recentLeads: []
+    };
+
+    const [
+      activePropsResp,
+      leadsTodayResp,
+      sessionsTodayResp,
+      totalUsersResp,
+      usersTodayResp,
+      totalLeadsResp,
+      totalSessionsResp,
+      recentLeadsResp
+    ] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS c FROM properties WHERE client_id = $1 AND is_active = true`, [clientId]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM lead_requests WHERE client_id = $1 AND created_at::date = NOW()::date`, [clientId]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM session_logs WHERE payload->>'clientId' = $1 AND created_at::date = NOW()::date`, [clientId]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1`, [clientId]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1 AND first_seen_at::date = NOW()::date`, [clientId]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM lead_requests WHERE client_id = $1`, [clientId]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM session_logs WHERE payload->>'clientId' = $1`, [clientId]),
+      pool.query(
+        `
+        SELECT id, created_at, source, name, property_id
+        FROM lead_requests
+        WHERE client_id = $1
+        ORDER BY created_at DESC
+        LIMIT 5
+        `,
+        [clientId]
+      )
+    ]);
+
+    return res.json({
+      ok: true,
+      stats: {
+        ...fallback,
+        activeProperties: activePropsResp?.rows?.[0]?.c ?? 0,
+        leadsToday: leadsTodayResp?.rows?.[0]?.c ?? 0,
+        sessionsToday: sessionsTodayResp?.rows?.[0]?.c ?? 0,
+        totalUsers: totalUsersResp?.rows?.[0]?.c ?? 0,
+        usersToday: usersTodayResp?.rows?.[0]?.c ?? 0,
+        totalLeads: totalLeadsResp?.rows?.[0]?.c ?? 0,
+        totalSessions: totalSessionsResp?.rows?.[0]?.c ?? 0,
+        recentLeads: Array.isArray(recentLeadsResp?.rows) ? recentLeadsResp.rows : []
+      }
+    });
+  } catch (error) {
+    if (error?.code === '42P01' || error?.code === '42703') {
+      return res.json({
+        ok: true,
+        stats: {
+          activeProperties: null,
+          leadsToday: null,
+          sessionsToday: null,
+          totalUsers: null,
+          usersToday: null,
+          totalLeads: null,
+          totalSessions: null,
+          recentLeads: []
+        }
+      });
+    }
+    console.error('❌ GET /api/admin/stats/summary error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
 
 const buildS3Client = (cfg) => new S3Client({
   region: 'auto',
