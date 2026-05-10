@@ -183,6 +183,27 @@ export async function appendMessage({ sessionId, role, message, userAgent = null
   // Добавляем сообщение в массив
   currentPayload.messages.push(newMessage);
 
+  // Поддерживаем агрегат уникально показанных карточек на уровне sessionMeta
+  // для стабильной CRM-статистики даже при разнородной истории messages.
+  if (!currentPayload.sessionMeta || typeof currentPayload.sessionMeta !== 'object') {
+    currentPayload.sessionMeta = {};
+  }
+  if (!Array.isArray(currentPayload.sessionMeta.shownProperties)) {
+    currentPayload.sessionMeta.shownProperties = [];
+  }
+  if (Array.isArray(newMessage.cards) && newMessage.cards.length > 0) {
+    const set = new Set(
+      currentPayload.sessionMeta.shownProperties
+        .map((id) => String(id || '').trim())
+        .filter(Boolean)
+    );
+    for (const card of newMessage.cards) {
+      const id = String(card?.id || '').trim();
+      if (id) set.add(id);
+    }
+    currentPayload.sessionMeta.shownProperties = Array.from(set);
+  }
+
   // Обновляем счётчики
   currentPayload.sessionMeta.totalMessages = currentPayload.messages.length;
   currentPayload.sessionMeta.totalUserMessages = currentPayload.messages.filter(m => m.role === 'user').length;
@@ -302,4 +323,3 @@ function deepMerge(target, source) {
 
   return result;
 }
-

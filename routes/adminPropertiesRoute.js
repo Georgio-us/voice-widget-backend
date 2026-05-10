@@ -337,6 +337,7 @@ router.get('/stats/session/:sessionId', requireAdmin, async (req, res) => {
       SELECT session_id, created_at, payload
       FROM session_logs
       WHERE session_id = $1
+      ORDER BY created_at DESC NULLS LAST, id DESC
       LIMIT 1
       `,
       [sessionId]
@@ -346,8 +347,14 @@ router.get('/stats/session/:sessionId', requireAdmin, async (req, res) => {
     if (!row) return res.json({ ok: true, digest: null });
 
     const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const sessionMeta = payload?.sessionMeta && typeof payload.sessionMeta === 'object' ? payload.sessionMeta : {};
     const messages = Array.isArray(payload?.messages) ? payload.messages : [];
     const shownIds = new Set();
+    const shownFromMeta = Array.isArray(sessionMeta?.shownProperties) ? sessionMeta.shownProperties : [];
+    for (const idRaw of shownFromMeta) {
+      const id = String(idRaw || '').trim();
+      if (id) shownIds.add(id);
+    }
     let lastUserText = null;
     let lastInsights = null;
     let lastAssistantText = null;
