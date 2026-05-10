@@ -15,7 +15,7 @@ import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramI
 const router = express.Router();
 
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
-const STATS_TIMEZONE = String(process.env.STATS_TIMEZONE || process.env.TZ || 'Europe/Kiev').trim() || 'Europe/Kiev';
+const STATS_TIMEZONE = String(process.env.STATS_TIMEZONE || process.env.TZ || 'Europe/Kyiv').trim() || 'Europe/Kyiv';
 const MAX_IMAGES = 5;
 const IMAGE_WARN_SIZE_MB = (() => {
   const parsed = Number(String(process.env.ADMIN_WARN_IMAGE_MB || '').trim());
@@ -126,15 +126,39 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
   try {
     if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
     const clientId = SERVICE_CLIENT_ID;
-    const fallback = {
-      activeProperties: null,
-      leadsToday: null,
-      sessionsToday: null,
-      totalUsers: null,
-      usersToday: null,
-      totalLeads: null,
-      totalSessions: null,
-      recentLeads: []
+    const hasUsersFirstSeenResp = await pool.query(
+      `
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'users'
+          AND column_name = 'first_seen_at'
+      ) AS has_first_seen
+      `
+    );
+    const hasUsersFirstSeen = Boolean(hasUsersFirstSeenResp?.rows?.[0]?.has_first_seen);
+    const usersTodaySql = hasUsersFirstSeen
+      ? `
+        SELECT COUNT(*)::int AS c
+        FROM users
+        WHERE client_id = $1
+          AND (first_seen_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date
+      `
+      : `
+        SELECT 0::int AS c
+      `;
+
+    const safeQuery = async (label, sql, params = [], fallbackValue = null) => {
+      try {
+        return await pool.query(sql, params);
+      } catch (error) {
+        console.warn(`⚠️ stats/summary: ${label} failed`, {
+          code: error?.code || null,
+          message: error?.message || null
+        });
+        return fallbackValue;
+      }
     };
 
     const [
@@ -147,8 +171,14 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
       totalSessionsResp,
       recentLeadsResp
     ] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS c FROM properties WHERE client_id = $1 AND is_active = true`, [clientId]),
-      pool.query(
+      safeQuery(
+        'activeProperties',
+        `SELECT COUNT(*)::int AS c FROM properties WHERE client_id = $1 AND is_active = true`,
+        [clientId],
+        { rows: [{ c: 0 }] }
+      ),
+      safeQuery(
+        'leadsToday',
         `
         SELECT COUNT(*)::int AS c
         FROM lead_requests
@@ -156,37 +186,50 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
           AND (created_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date
           AND COALESCE(source, '') !~* '^widget_'
         `,
-        [clientId, STATS_TIMEZONE]
+        [clientId, STATS_TIMEZONE],
+        { rows: [{ c: 0 }] }
       ),
-      pool.query(
+      safeQuery(
+        'sessionsToday',
         `
         SELECT COUNT(*)::int AS c
         FROM session_logs
         WHERE (created_at AT TIME ZONE $1)::date = (NOW() AT TIME ZONE $1)::date
         `,
-        [STATS_TIMEZONE]
+        [STATS_TIMEZONE],
+        { rows: [{ c: 0 }] }
       ),
-      pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1`, [clientId]),
-      pool.query(
-        `
-        SELECT COUNT(*)::int AS c
-        FROM users
-        WHERE client_id = $1
-          AND (first_seen_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date
-        `,
-        [clientId, STATS_TIMEZONE]
+      safeQuery(
+        'totalUsers',
+        `SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1`,
+        [clientId],
+        { rows: [{ c: 0 }] }
       ),
-      pool.query(
+      safeQuery(
+        'usersToday',
+        usersTodaySql,
+        hasUsersFirstSeen ? [clientId, STATS_TIMEZONE] : [],
+        { rows: [{ c: 0 }] }
+      ),
+      safeQuery(
+        'totalLeads',
         `
         SELECT COUNT(*)::int AS c
         FROM lead_requests
         WHERE client_id = $1
           AND COALESCE(source, '') !~* '^widget_'
         `,
-        [clientId]
+        [clientId],
+        { rows: [{ c: 0 }] }
       ),
-      pool.query(`SELECT COUNT(*)::int AS c FROM session_logs`, []),
-      pool.query(
+      safeQuery(
+        'totalSessions',
+        `SELECT COUNT(*)::int AS c FROM session_logs`,
+        [],
+        { rows: [{ c: 0 }] }
+      ),
+      safeQuery(
+        'recentLeads',
         `
         SELECT
           id,
@@ -206,14 +249,14 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         ORDER BY created_at DESC NULLS LAST, id DESC
         LIMIT 5
         `,
-        [clientId]
+        [clientId],
+        { rows: [] }
       )
     ]);
 
     return res.json({
       ok: true,
       stats: {
-        ...fallback,
         activeProperties: activePropsResp?.rows?.[0]?.c ?? 0,
         leadsToday: leadsTodayResp?.rows?.[0]?.c ?? 0,
         sessionsToday: sessionsTodayResp?.rows?.[0]?.c ?? 0,
@@ -225,21 +268,6 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
       }
     });
   } catch (error) {
-    if (error?.code === '42P01' || error?.code === '42703') {
-      return res.json({
-        ok: true,
-        stats: {
-          activeProperties: null,
-          leadsToday: null,
-          sessionsToday: null,
-          totalUsers: null,
-          usersToday: null,
-          totalLeads: null,
-          totalSessions: null,
-          recentLeads: []
-        }
-      });
-    }
     console.error('❌ GET /api/admin/stats/summary error:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
