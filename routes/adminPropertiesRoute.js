@@ -293,6 +293,7 @@ router.get('/stats/session/:sessionId', requireAdmin, async (req, res) => {
 
     const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
     const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+    const shownIds = new Set();
     let lastUserText = null;
     let lastInsights = null;
     let lastAssistantText = null;
@@ -300,6 +301,11 @@ router.get('/stats/session/:sessionId', requireAdmin, async (req, res) => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const m = messages[i] || {};
       const role = String(m?.role || '').toLowerCase();
+      const cards = Array.isArray(m?.cards) ? m.cards : [];
+      for (const card of cards) {
+        const id = String(card?.id || '').trim();
+        if (id) shownIds.add(id);
+      }
       if (!lastInsights && m?.meta?.insights && typeof m.meta.insights === 'object') {
         lastInsights = m.meta.insights;
       }
@@ -320,6 +326,7 @@ router.get('/stats/session/:sessionId', requireAdmin, async (req, res) => {
         sessionId: String(row.session_id || ''),
         createdAt: row.created_at || null,
         messagesCount: messages.length,
+        shownObjectsCount: shownIds.size,
         lastUserText: lastUserText || null,
         lastAssistantText: lastAssistantText || null,
         lastInsights: lastInsights || null
