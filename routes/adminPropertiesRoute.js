@@ -169,7 +169,8 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
       usersTodayResp,
       totalLeadsResp,
       totalSessionsResp,
-      recentLeadsResp
+      recentLeadsResp,
+      recentActivityResp
     ] = await Promise.all([
       safeQuery(
         'activeProperties',
@@ -251,8 +252,60 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         `,
         [clientId],
         { rows: [] }
+      ),
+      safeQuery(
+        'recentActivity',
+        `
+        SELECT
+          s.session_id,
+          s.created_at,
+          s.payload,
+          CASE WHEN lr.id IS NULL THEN false ELSE true END AS has_lead,
+          lr.source AS lead_source,
+          lr.property_id AS lead_property_id,
+          lr.name AS lead_name,
+          lr.extra->>'telegramUsername' AS lead_telegram_username,
+          lr.extra->>'tgUserId' AS lead_telegram_user_id
+        FROM session_logs s
+        LEFT JOIN LATERAL (
+          SELECT id, source, property_id, name, extra
+          FROM lead_requests
+          WHERE client_id = $1
+            AND session_id = s.session_id
+            AND COALESCE(source, '') !~* '^widget_'
+          ORDER BY created_at DESC NULLS LAST, id DESC
+          LIMIT 1
+        ) lr ON true
+        ORDER BY s.created_at DESC NULLS LAST, s.id DESC
+        LIMIT 5
+        `,
+        [clientId],
+        { rows: [] }
       )
     ]);
+
+    const recentActivityRows = Array.isArray(recentActivityResp?.rows) ? recentActivityResp.rows : [];
+    const recentActivity = recentActivityRows.map((row) => {
+      const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+      const sessionMeta = payload?.sessionMeta && typeof payload.sessionMeta === 'object' ? payload.sessionMeta : {};
+      const tgUser = sessionMeta?.telegramUser && typeof sessionMeta.telegramUser === 'object' ? sessionMeta.telegramUser : {};
+      const tgUsernameRaw = String(tgUser?.username || row?.lead_telegram_username || '').trim();
+      const tgUsername = tgUsernameRaw ? (tgUsernameRaw.startsWith('@') ? tgUsernameRaw : `@${tgUsernameRaw}`) : null;
+      const tgUserId = String(tgUser?.userId || row?.lead_telegram_user_id || '').trim() || null;
+      const fullName = [tgUser?.firstName, tgUser?.lastName].map((v) => String(v || '').trim()).filter(Boolean).join(' ').trim();
+      const fallbackName = String(row?.lead_name || '').trim();
+      const name = fullName || fallbackName || '—';
+      return {
+        session_id: String(row?.session_id || '').trim() || null,
+        created_at: row?.created_at || null,
+        name,
+        telegram_username: tgUsername,
+        telegram_user_id: tgUserId,
+        left_lead: row?.has_lead === true,
+        lead_source: String(row?.lead_source || '').trim() || null,
+        lead_property_id: String(row?.lead_property_id || '').trim() || null
+      };
+    });
 
     return res.json({
       ok: true,
@@ -264,7 +317,8 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         usersToday: usersTodayResp?.rows?.[0]?.c ?? 0,
         totalLeads: totalLeadsResp?.rows?.[0]?.c ?? 0,
         totalSessions: totalSessionsResp?.rows?.[0]?.c ?? 0,
-        recentLeads: Array.isArray(recentLeadsResp?.rows) ? recentLeadsResp.rows : []
+        recentLeads: Array.isArray(recentLeadsResp?.rows) ? recentLeadsResp.rows : [],
+        recentActivity
       }
     });
   } catch (error) {
