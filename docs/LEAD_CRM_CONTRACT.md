@@ -1,8 +1,20 @@
 # Lead CRM Contract (Mediaelx)
 
-Last updated: 2026-04-23
+Last updated: 2026-05-12
 Branch: `Split`
-Status: target contract approved for implementation (outbound call not enabled yet).
+Status: outbound mirror to MediaElx MySQL enabled in best-effort mode (non-blocking for widget UX).
+
+## MediaElx Runtime Notes (current)
+
+- Target table: `properties_enquiries`
+- Insert mode: direct MySQL insert from backend lead route (`POST /api/leads`)
+- Availability mode: best-effort
+  - if MySQL is up -> insert
+  - if MySQL is temporarily unavailable -> append record to local queue file (`jsonl`) for manual replay
+- Dedupe rule:
+  - same `email_cons` + same `inmueble_cons` within 5 minutes -> duplicate ignored
+- `email_cons` fallback:
+  - when frontend email is empty, backend uses placeholder email to satisfy CRM `NOT NULL`
 
 ## Goal
 
@@ -161,4 +173,3 @@ Derived:
 2. Language of `ai_notes`: source dialog language vs forced CRM language.
 3. Minimal required keys for CRM acceptance (`propertyId` optional vs required).
 4. Retry/queue strategy for outbound webhook (later slice).
-

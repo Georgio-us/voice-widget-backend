@@ -4,6 +4,7 @@ import express from 'express';
 import { createLead } from '../services/leadsRepository.js';
 import { logEvent, EventTypes } from '../services/eventLogger.js';
 import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
+import { mirrorLeadToMediaelx } from '../services/mediaelxLeadSink.js';
 import { pool } from '../services/db.js';
 
 const router = express.Router();
@@ -174,6 +175,43 @@ router.post('/', async (req, res) => {
       console.warn('[telegram] lead notify failed', tgErr?.message || tgErr);
     }
 
+    let mediaelxStatus = null;
+    // Best-effort mirror to MediaElx CRM (не ломает создание лида)
+    try {
+      const mirrorResult = await mirrorLeadToMediaelx({
+        source,
+        name,
+        phoneCountryCode,
+        phoneNumber,
+        email,
+        preferredContactMethod: preferredContactMethod || null,
+        comment: comment || null,
+        language: language || 'ru',
+        propertyId: propertyId || null,
+        insights: insightsFromSessionLog,
+        sessionId: sessionId || null
+      });
+      if (mirrorResult?.deduped) {
+        console.log('[mediaelx] deduped lead skipped');
+        mediaelxStatus = { ok: true, status: 'deduped' };
+      } else if (mirrorResult?.inserted) {
+        console.log('[mediaelx] lead inserted');
+        mediaelxStatus = { ok: true, status: 'inserted' };
+      } else if (mirrorResult?.queued) {
+        console.warn('[mediaelx] lead queued due to db unavailability');
+        mediaelxStatus = { ok: false, status: 'queued', reason: mirrorResult?.reason || 'unavailable' };
+      } else if (mirrorResult?.skipped) {
+        console.log(`[mediaelx] skipped: ${mirrorResult.reason}`);
+        mediaelxStatus = { ok: false, status: 'skipped', reason: mirrorResult?.reason || 'disabled' };
+      } else if (mirrorResult?.ok === false) {
+        console.warn(`[mediaelx] mirror failed: ${mirrorResult.reason || 'unknown'}`);
+        mediaelxStatus = { ok: false, status: 'failed', reason: mirrorResult?.reason || 'unknown' };
+      }
+    } catch (mxErr) {
+      console.warn('[mediaelx] mirror exception', mxErr?.message || mxErr);
+      mediaelxStatus = { ok: false, status: 'exception', reason: mxErr?.message || 'unknown' };
+    }
+
     // Логируем событие в телеметрию (если есть EventTypes.LEAD_FORM_SUBMIT)
     try {
       const userIp = req.ip || 
@@ -208,7 +246,8 @@ router.post('/', async (req, res) => {
       ok: true,
       leadId: result.id,
       createdAt: result.created_at,
-      sessionId: sessionId || null
+      sessionId: sessionId || null,
+      mediaelx: mediaelxStatus
     });
 
   } catch (err) {
@@ -237,4 +276,3 @@ router.post('/', async (req, res) => {
 });
 
 export default router;
-
