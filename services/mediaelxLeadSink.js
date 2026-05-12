@@ -104,7 +104,8 @@ function formatCommentBlock({
     '---------------------------',
     `ТИП ФОРМЫ: ${formTypeLabel}`,
     `СПОСОБ СВЯЗИ: ${method}`,
-    `РЕЗЮМЕ ИИ: ${summary}`,
+    'РЕЗЮМЕ ИИ:',
+    summary,
     '---------------------------',
     `СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЯ: ${comment}`
   ].join('\n');
@@ -147,6 +148,7 @@ export async function mirrorLeadToMediaelx({
   language,
   propertyId,
   insights,
+  aiSummary,
   sessionId
 }) {
   const cfg = getConfig();
@@ -161,11 +163,11 @@ export async function mirrorLeadToMediaelx({
   const emailCons = normalizeEmail(email);
   const motivoCons = DEFAULT_MOTIVE;
   const formTypeLabel = mapFormType(source);
-  const aiSummary = stringifyInsights(insights);
+  const summaryText = String(aiSummary || '').trim() || stringifyInsights(insights);
   const comentarioConsas = formatCommentBlock({
     formTypeLabel,
     preferredContactMethod,
-    aiSummary,
+    aiSummary: summaryText,
     userComment: comment
   });
 
@@ -257,4 +259,3 @@ export async function mirrorLeadToMediaelx({
     };
   }
 }
-
