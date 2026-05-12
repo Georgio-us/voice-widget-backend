@@ -130,7 +130,7 @@ router.post('/', async (req, res) => {
           [sessionId]
         );
         const payload = r?.rows?.[0]?.payload || null;
-        const enriched = buildLeadRichSummaryFromSessionPayload(payload);
+        const enriched = buildLeadRichSummaryFromSessionPayload(payload, language || 'ru');
         insightsFromSessionLog = enriched?.insights || null;
         lastShownCardIdFromSessionLog = enriched?.lastShownCardId || null;
         richSummaryFromSessionLog = enriched?.summaryText || null;

@@ -6,6 +6,13 @@ function asText(value) {
   return '';
 }
 
+function normalizeLang(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v.startsWith('es')) return 'es';
+  if (v.startsWith('en')) return 'en';
+  return 'ru';
+}
+
 function compactObject(obj) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
   const out = {};
@@ -24,7 +31,6 @@ function pickMeaningfulInsights(rawInsights) {
     operation: src.operation,
     type: src.type,
     location: src.location,
-    locationsRaw: src.locationsRaw,
     budget: src.budget,
     budgetMin: src.budgetMin,
     budgetMax: src.budgetMax,
@@ -84,8 +90,109 @@ function countShownCards(messages = []) {
   return { total, unique: uniq.size };
 }
 
-export function buildLeadRichSummaryFromSessionPayload(payload) {
+function firstNonEmpty(...values) {
+  for (const v of values) {
+    const t = asText(v);
+    if (t) return t;
+  }
+  return '';
+}
+
+function prettyBudget(insights) {
+  if (!insights || typeof insights !== 'object') return '';
+  const min = asText(insights.budgetMin);
+  const max = asText(insights.budgetMax);
+  const single = asText(insights.budget);
+  if (min && max) return `${min} - ${max}`;
+  if (min) return min;
+  if (max) return max;
+  return single;
+}
+
+function joinList(value) {
+  if (Array.isArray(value)) return value.map((v) => asText(v)).filter(Boolean).join(', ');
+  return asText(value);
+}
+
+function buildReadableSummary({ lang, insights, lastUserIntent, lastShownCardId, metrics }) {
+  const t = {
+    ru: {
+      lastRequest: 'Последний запрос',
+      need: 'Что ищет клиент',
+      type: 'Тип',
+      operation: 'Операция',
+      location: 'Локация',
+      rooms: 'Комнаты',
+      budget: 'Бюджет',
+      features: 'Пожелания',
+      shown: 'Показанный объект',
+      dialog: 'Диалог'
+    },
+    es: {
+      lastRequest: 'Última solicitud',
+      need: 'Qué busca el cliente',
+      type: 'Tipo',
+      operation: 'Operación',
+      location: 'Ubicación',
+      rooms: 'Habitaciones',
+      budget: 'Presupuesto',
+      features: 'Preferencias',
+      shown: 'Último inmueble mostrado',
+      dialog: 'Diálogo'
+    },
+    en: {
+      lastRequest: 'Last request',
+      need: 'Client needs',
+      type: 'Type',
+      operation: 'Operation',
+      location: 'Location',
+      rooms: 'Rooms',
+      budget: 'Budget',
+      features: 'Preferences',
+      shown: 'Last shown property',
+      dialog: 'Dialog'
+    }
+  }[lang] || {
+    lastRequest: 'Последний запрос',
+    need: 'Что ищет клиент',
+    type: 'Тип',
+    operation: 'Операция',
+    location: 'Локация',
+    rooms: 'Комнаты',
+    budget: 'Бюджет',
+    features: 'Пожелания',
+    shown: 'Показанный объект',
+    dialog: 'Диалог'
+  };
+
+  const entries = [];
+  const type = asText(insights?.type);
+  const op = asText(insights?.operation);
+  const location = firstNonEmpty(insights?.location, insights?.locationsRaw);
+  const rooms = joinList(insights?.rooms);
+  const budget = prettyBudget(insights);
+  const features = joinList(insights?.features);
+
+  if (type) entries.push(`${t.type}: ${type}`);
+  if (op) entries.push(`${t.operation}: ${op}`);
+  if (location) entries.push(`${t.location}: ${location}`);
+  if (rooms) entries.push(`${t.rooms}: ${rooms}`);
+  if (budget) entries.push(`${t.budget}: ${budget}`);
+  if (features) entries.push(`${t.features}: ${features}`);
+
+  const lines = [];
+  if (lastUserIntent) lines.push(`${t.lastRequest}: ${lastUserIntent}`);
+  if (entries.length) lines.push(`${t.need}: ${entries.join(' · ')}`);
+  if (lastShownCardId) lines.push(`${t.shown}: ${lastShownCardId}`);
+  if (metrics?.userMessages || metrics?.assistantMessages) {
+    lines.push(`${t.dialog}: user=${metrics.userMessages || 0}, assistant=${metrics.assistantMessages || 0}`);
+  }
+  return lines.length ? lines.join('\n') : '-';
+}
+
+export function buildLeadRichSummaryFromSessionPayload(payload, preferredLanguage = null) {
   const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  const lang = normalizeLang(preferredLanguage || payload?.language || payload?.lang || payload?.locale);
   const insights = findLastInsights(messages);
   const lastUserIntent = findLastUserIntent(messages);
   const lastShownCardId = findLastShownCardId(messages);
@@ -94,23 +201,21 @@ export function buildLeadRichSummaryFromSessionPayload(payload) {
   const userCount = messages.filter((m) => String(m?.role || m?.type || '').toLowerCase() === 'user').length;
   const assistantCount = messages.filter((m) => String(m?.role || m?.type || '').toLowerCase() === 'assistant').length;
 
-  const insightPairs = [];
-  if (insights) {
-    Object.entries(insights).forEach(([k, v]) => {
-      const t = asText(v);
-      if (!t) return;
-      insightPairs.push(`${k}: ${t}`);
-    });
-  }
-
-  const lines = [];
-  if (lastUserIntent) lines.push(`ПОСЛЕДНИЙ ЗАПРОС: ${lastUserIntent}`);
-  if (insightPairs.length) lines.push(`ИНСАЙТЫ: ${insightPairs.join(' | ')}`);
-  if (lastShownCardId) lines.push(`ПОСЛЕДНИЙ ПОКАЗАННЫЙ ОБЪЕКТ: ${lastShownCardId}`);
-  lines.push(`МЕТРИКИ: user_msgs=${userCount}, assistant_msgs=${assistantCount}, shown_cards_total=${cardsStats.total}, shown_cards_unique=${cardsStats.unique}`);
+  const summaryText = buildReadableSummary({
+    lang,
+    insights,
+    lastUserIntent,
+    lastShownCardId,
+    metrics: {
+      userMessages: userCount,
+      assistantMessages: assistantCount,
+      shownCardsTotal: cardsStats.total,
+      shownCardsUnique: cardsStats.unique
+    }
+  });
 
   return {
-    summaryText: lines.join('\n'),
+    summaryText,
     insights,
     lastShownCardId: lastShownCardId || null,
     metrics: {
@@ -121,4 +226,3 @@ export function buildLeadRichSummaryFromSessionPayload(payload) {
     }
   };
 }
-
