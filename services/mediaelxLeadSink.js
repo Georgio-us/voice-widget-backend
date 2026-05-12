@@ -92,10 +92,12 @@ function stringifyInsights(insights) {
 function formatCommentBlock({
   formTypeLabel,
   preferredContactMethod,
+  referenceId,
   aiSummary,
   userComment
 }) {
   const method = String(preferredContactMethod || 'not_specified');
+  const ref = String(referenceId || '-');
   const summary = String(aiSummary || '-');
   const comment = String(userComment || '-');
 
@@ -104,6 +106,7 @@ function formatCommentBlock({
     '---------------------------',
     `ТИП ФОРМЫ: ${formTypeLabel}`,
     `СПОСОБ СВЯЗИ: ${method}`,
+    `REF ОБЪЕКТА: ${ref}`,
     'РЕЗЮМЕ ИИ:',
     summary,
     '---------------------------',
@@ -167,6 +170,7 @@ export async function mirrorLeadToMediaelx({
   const comentarioConsas = formatCommentBlock({
     formTypeLabel,
     preferredContactMethod,
+    referenceId: propertyId,
     aiSummary: summaryText,
     userComment: comment
   });

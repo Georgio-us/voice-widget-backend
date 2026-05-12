@@ -137,6 +137,16 @@ router.post('/', async (req, res) => {
       }
     } catch {}
 
+    const resolvedPropertyIdForMirror = (() => {
+      const explicit = propertyId == null ? '' : String(propertyId).trim();
+      if (explicit) return explicit;
+      if (source === 'widget_in_dialog') {
+        const fromSession = lastShownCardIdFromSessionLog == null ? '' : String(lastShownCardIdFromSessionLog).trim();
+        if (fromSession) return fromSession;
+      }
+      return null;
+    })();
+
     // Best-effort Telegram notify (не ломает создание лида)
     try {
       await notifyLeadToTelegram({
@@ -173,7 +183,7 @@ router.post('/', async (req, res) => {
         preferredContactMethod: preferredContactMethod || null,
         comment: comment || null,
         language: language || 'ru',
-        propertyId: propertyId || null,
+        propertyId: resolvedPropertyIdForMirror,
         insights: insightsFromSessionLog,
         aiSummary: richSummaryFromSessionLog,
         sessionId: sessionId || null
