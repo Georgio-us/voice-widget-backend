@@ -1450,7 +1450,7 @@ const inferTypeFromText = (text = '') => {
 const detectExplicitOperationIntent = (text = '') => {
   const s = normalizeLookupText(String(text || ''));
   if (!s) return null;
-  const rentStrong = /(снять|сниму|ищу в аренду|нужна аренда|арендовать|alquiler|rent\b|for rent)/i.test(s);
+  const rentStrong = /(снять|сниму|ищу в аренду|нужна аренда|арендовать|в\s*аренду|для\s*аренды|под\s*аренду|alquiler|en\s*alquiler|de\s*alquiler|rent\b|for rent)/i.test(s);
   const saleStrong = /(купить|покупка|ищу для покупки|compra|buy\b|for sale|sale\b)/i.test(s);
   if (rentStrong && !saleStrong) return 'аренда';
   if (saleStrong && !rentStrong) return 'покупка';
