@@ -15,14 +15,19 @@ Status: outbound mirror to MediaElx MySQL enabled in best-effort mode (non-block
   - same `email_cons` + same `inmueble_cons` within 5 minutes -> duplicate ignored
 - `email_cons` fallback:
   - when frontend email is empty, backend uses placeholder email to satisfy CRM `NOT NULL`
+- Property linking:
+  - backend resolves incoming `propertyId` against `properties_properties` by
+    `referencia_prop` / `ref_xml_prop` / `id_xml_prop`
+  - writes resolved `id_prop` into `properties_enquiries.inmueble_cons`
+  - if unresolved -> writes `0`
 
 ## Goal
 
-Prepare one stable, extended lead JSON contract for external CRM (Mediaelx), including:
-1. contact fields
-2. property context
-3. AI-derived request summary (`ai_notes` / `summary`)
-4. structured insights for machine-side filtering/routing
+Keep lead delivery deterministic for CRM:
+1. contact fields are always valid for `properties_enquiries`
+2. property lead is linked to CRM property PK (`id_prop`) via incoming ref/id
+3. AI summary is readable for manager (no raw debug keys)
+4. failures in MediaElx transport do not break widget UX
 
 ## Current State (as-is)
 
@@ -39,137 +44,66 @@ Current payload sent by frontend forms:
 - `preferredContactMethod`
 - `comment`
 - `language`
-- `propertyId` (currently sent as `null` in all three forms)
+- `propertyId`
 - `consent`
 
 Current backend behavior:
 1. validates and stores base lead fields in `lead_requests`.
-2. enriches Telegram message with best-effort `insights` from `session_logs`.
-3. does not currently persist/send CRM-ready `summary`/`ai_notes`.
+2. enriches from `session_logs` (latest intent/insights/context).
+3. builds readable localized summary (`ru`/`en`/`es`) for CRM text block.
+4. mirrors to MediaElx (`properties_enquiries`) in best-effort mode with queue fallback.
 
-## Target Contract (to external CRM)
+Frontend status (important):
+- `widget_in_dialog` now sends `propertyId` from a strict hidden field bound at form render.
+- legacy heuristic extraction for this form submit was removed.
 
-Single normalized envelope:
+## Runtime Mirror Contract (implemented)
+
+Inbound lead payload (widget -> backend):
 
 ```json
 {
-  "schemaVersion": "lead.v1",
-  "clientId": "estyle",
   "source": "widget_in_dialog",
-  "createdAt": "2026-04-23T09:42:11.000Z",
-  "session": {
-    "sessionId": "user_abc123",
-    "language": "ru"
-  },
-  "contact": {
-    "name": "Ivan Petrov",
-    "phoneCountryCode": "+34",
-    "phoneNumber": "612345678",
-    "email": "ivan@example.com",
-    "preferredContactMethod": "whatsapp",
-    "consent": true
-  },
-  "propertyContext": {
-    "propertyId": "DD2959",
-    "lastShownCardId": "DD2959"
-  },
-  "request": {
-    "comment": "Looking for a property near the sea.",
-    "operation": "sale",
-    "propertyType": "apartment",
-    "location": {
-      "city": "Torrevieja",
-      "province": "Alicante",
-      "district": "Mar Azul",
-      "country": "Spain"
-    },
-    "budget": {
-      "currency": "EUR",
-      "min": 120000,
-      "max": 180000
-    },
-    "rooms": {
-      "bedroomsMin": 2,
-      "bathroomsMin": 1
-    },
-    "area": {
-      "m2Min": 60
-    },
-    "mustHave": {
-      "pool": true,
-      "parking": false
-    },
-    "urgency": "high",
-    "timeline": "within_1_month"
-  },
-  "ai_notes": "Client is searching for an apartment in Torrevieja (Alicante), budget 120-180k EUR, min 2 bedrooms, pool preferred, decision timeline within 1 month.",
-  "rawInsights": {
-    "operation": "sale",
-    "type": "apartment",
-    "location": "Torrevieja, Alicante",
-    "budget": "120000-180000 EUR",
-    "rooms": "2+",
-    "area": "60+ m2",
-    "preferences": "pool",
-    "details": "near sea"
-  }
+  "sessionId": "user_abc123",
+  "language": "ru",
+  "name": "Ivan Petrov",
+  "phoneCountryCode": "+34",
+  "phoneNumber": "612345678",
+  "email": "",
+  "preferredContactMethod": "phone",
+  "comment": null,
+  "propertyId": "A069",
+  "consent": true
 }
 ```
 
-## Field Mapping Plan
+MediaElx write mapping (backend -> `properties_enquiries`):
+- `inmueble_cons` <- resolved `id_prop` by incoming `propertyId` ref/id
+- `idioma_cons` <- normalized language (`ru`/`en`/`es`)
+- `motivo_cons` <- `VIA AI Widget`
+- `nombre_cons` <- lead name
+- `telefono_cons` <- `phoneCountryCode + phoneNumber`
+- `email_cons` <- lead email or `no_mail_received@mail.com`
+- `comentario_consas` <- formatted report block with:
+  - form type
+  - contact method
+  - incoming ref (`REF ОБЪЕКТА`)
+  - readable AI summary from session context
+  - user comment
+- `read_cons` <- `0`
 
-### 1) Source and session
+## Behavior Notes (current)
 
-- `source` <- frontend source marker (`widget_full_form`, `widget_short_form`, `widget_in_dialog`)
-- `session.sessionId` <- lead payload `sessionId`
-- `session.language` <- lead payload `language`
-
-### 2) Contact
-
-- `contact.name` <- `name`
-- `contact.phoneCountryCode` <- `phoneCountryCode`
-- `contact.phoneNumber` <- `phoneNumber`
-- `contact.email` <- `email`
-- `contact.preferredContactMethod` <- `preferredContactMethod`
-- `contact.consent` <- `consent`
-
-### 3) Property context
-
-- `propertyContext.propertyId` <- explicit property id from selected/current card context
-- `propertyContext.lastShownCardId` <- fallback from `session_logs` card history
-
-Rule:
-1. if frontend passed `propertyId`, use it.
-2. else if session has last shown card id, use it as fallback.
-3. else keep `null`.
-
-### 4) AI insights and summary
-
-Inputs:
-1. explicit payload fields (`comment`, optional `insights` in future)
-2. latest `meta.insights` from `session_logs`
-3. selected card context (if available)
-
-Derived:
-- `rawInsights`: normalized machine object
-- `ai_notes`: human-readable summary string for CRM manager
-
-## Implementation Checklist (next coding slice)
-
-1. Extend `POST /api/leads` accepted payload with optional:
-   - `summary`
-   - `aiNotes`
-   - `insights` (object)
-   - `propertyId` from UI context (non-null when available)
-2. Build server-side `ai_notes` fallback when frontend did not send one.
-3. Persist enriched object into `lead_requests.extra` for traceability.
-4. Add pure mapper for external CRM payload (`lead -> crmLeadPayload`).
-5. Keep outbound transport disabled in this slice; only contract and logging.
-6. After approval, enable outbound webhook sender and retries.
+1. `widget_in_dialog` should be used only from object card flow (back/form side).
+2. If `propertyId` is missing in incoming payload, CRM insert still succeeds but:
+   - `inmueble_cons = 0`
+   - UI property badge may be empty
+   - report text shows `REF ОБЪЕКТА: -`
+3. Dedupe applies on pair: `LOWER(email_cons)` + `inmueble_cons` in 5-minute window.
+4. Queue fallback writes jsonl records to `MEDIAELX_QUEUE_PATH` when MySQL is unavailable.
 
 ## Open Decisions
 
-1. Canonical field name: `ai_notes` only, or dual support (`summary` + `ai_notes`).
-2. Language of `ai_notes`: source dialog language vs forced CRM language.
-3. Minimal required keys for CRM acceptance (`propertyId` optional vs required).
-4. Retry/queue strategy for outbound webhook (later slice).
+1. Should backend reject `widget_in_dialog` submissions with empty `propertyId` (strict mode), or keep current permissive mode?
+2. Should CRM report text show only normalized ref format (e.g., uppercase trimmed)?
+3. Keep current queue replay manual, or add automated replay worker later.
