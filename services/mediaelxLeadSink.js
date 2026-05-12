@@ -58,6 +58,44 @@ function normalizePropertyId(propertyId) {
   return Math.trunc(n);
 }
 
+async function resolveMediaelxPropertyPk(poolRef, propertyId) {
+  const raw = String(propertyId ?? '').trim();
+  if (!raw) return 0;
+
+  // 1) Main mapping path: external/widget reference -> MediaElx PK (id_prop)
+  const byReferenceSql = `
+    SELECT id_prop
+    FROM properties_properties
+    WHERE referencia_prop = ?
+       OR ref_xml_prop = ?
+       OR id_xml_prop = ?
+    LIMIT 1
+  `;
+  const [refRows] = await poolRef.query(byReferenceSql, [raw, raw, raw]);
+  if (Array.isArray(refRows) && refRows.length > 0) {
+    const mapped = Number(refRows[0]?.id_prop);
+    if (Number.isFinite(mapped) && mapped > 0) return Math.trunc(mapped);
+  }
+
+  // 2) Fallback: if caller already passed internal PK
+  const numeric = normalizePropertyId(raw);
+  if (!numeric) return 0;
+  const [idRows] = await poolRef.query(
+    `
+      SELECT id_prop
+      FROM properties_properties
+      WHERE id_prop = ?
+      LIMIT 1
+    `,
+    [numeric]
+  );
+  if (Array.isArray(idRows) && idRows.length > 0) {
+    return numeric;
+  }
+
+  return 0;
+}
+
 function normalizeEmail(email) {
   const value = String(email || '').trim();
   return value.length > 0 ? value : DEFAULT_PLACEHOLDER_EMAIL;
@@ -159,7 +197,6 @@ export async function mirrorLeadToMediaelx({
     return { ok: false, skipped: true, reason: 'mediaelx_disabled' };
   }
 
-  const inmuebleCons = normalizePropertyId(propertyId);
   const idiomaCons = normalizeLanguage(language);
   const nombreCons = String(name || '').trim();
   const telefonoCons = `${String(phoneCountryCode || '').trim()} ${String(phoneNumber || '').trim()}`.trim() || null;
@@ -167,6 +204,7 @@ export async function mirrorLeadToMediaelx({
   const motivoCons = DEFAULT_MOTIVE;
   const formTypeLabel = mapFormType(source);
   const summaryText = String(aiSummary || '').trim() || stringifyInsights(insights);
+  let inmuebleCons = normalizePropertyId(propertyId);
   const comentarioConsas = formatCommentBlock({
     formTypeLabel,
     preferredContactMethod,
@@ -218,6 +256,8 @@ export async function mirrorLeadToMediaelx({
     if (!p) {
       return { ok: false, skipped: true, reason: 'mediaelx_pool_unavailable' };
     }
+
+    inmuebleCons = await resolveMediaelxPropertyPk(p, propertyId);
 
     const [dupRows] = await p.query(dedupeSql, [emailCons, inmuebleCons]);
     if (Array.isArray(dupRows) && dupRows.length > 0) {
