@@ -1452,8 +1452,9 @@ const inferTypeFromText = (text = '') => {
 const detectExplicitOperationIntent = (text = '') => {
   const s = normalizeLookupText(String(text || ''));
   if (!s) return null;
-  const rentStrong = /(снять|сниму|ищу в аренду|нужна аренда|арендовать|аренда\b|в\s*аренду|для\s*аренды|под\s*аренду|alquilar|alquiler|arrendar|arriendo|en\s*alquiler|de\s*alquiler|rent\b|for rent|rental\b|leasing\b|lease\b)/i.test(s);
-  const saleStrong = /(купить|покупка|ищу для покупки|compra|comprar|buy\b|buying|purchase|for sale|sale\b)/i.test(s);
+  // NOTE: avoid JS \\b for Cyrillic tokens; it is ASCII-biased and misses cases like "интересует аренда".
+  const rentStrong = /(снять|сниму|ищу в аренду|нужна аренда|арендовать|аренд[а-я]*|в\s*аренду|для\s*аренды|под\s*аренду|alquilar|alquiler|arrendar|arriendo|en\s*alquiler|de\s*alquiler|rent\b|for rent|rental\b|leasing\b|lease\b)/i.test(s);
+  const saleStrong = /(купить|покупк[а-я]*|ищу для покупки|compra|comprar|buy\b|buying|purchase|for sale|sale\b)/i.test(s);
   if (rentStrong && !saleStrong) return 'аренда';
   if (saleStrong && !rentStrong) return 'покупка';
   return null;
