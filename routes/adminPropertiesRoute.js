@@ -449,7 +449,21 @@ router.get('/clients/list', requireAdmin, async (req, res) => {
   try {
     if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
     const clientId = SERVICE_CLIENT_ID;
-    const { rows } = await pool.query(
+    const safeQuery = async (label, sql, params = [], fallbackRows = []) => {
+      try {
+        const result = await pool.query(sql, params);
+        return Array.isArray(result?.rows) ? result.rows : fallbackRows;
+      } catch (error) {
+        console.warn(`⚠️ clients/list: ${label} failed`, {
+          code: error?.code || null,
+          message: error?.message || null
+        });
+        return fallbackRows;
+      }
+    };
+
+    const userRows = await safeQuery(
+      'users',
       `
       SELECT
         u.id,
@@ -460,68 +474,110 @@ router.get('/clients/list', requireAdmin, async (req, res) => {
         u.last_name,
         u.language_code,
         u.first_seen_at,
-        u.last_seen_at,
-        COALESCE(l.leads_count, 0)::int AS leads_count,
-        l.last_lead_at,
-        COALESCE(s.sessions_count, 0)::int AS sessions_count,
-        s.last_session_id,
-        s.last_session_at,
-        s.last_session_payload
+        u.last_seen_at
       FROM users u
-      LEFT JOIN LATERAL (
-        SELECT
-          COUNT(*)::int AS leads_count,
-          MAX(lr.created_at) AS last_lead_at
-        FROM lead_requests lr
-        WHERE lr.client_id = $1
-          AND COALESCE(lr.source, '') !~* '^widget_'
-          AND (
-            lr.extra->>'tgUserId' = u.tg_user_id::text
-            OR (
-              NULLIF(TRIM(COALESCE(u.username, '')), '') IS NOT NULL
-              AND LOWER(REGEXP_REPLACE(COALESCE(lr.extra->>'telegramUsername', ''), '^@', '')) = LOWER(TRIM(u.username))
-            )
-          )
-      ) l ON true
-      LEFT JOIN LATERAL (
-        SELECT
-          COUNT(*)::int AS sessions_count,
-          (ARRAY_AGG(sl.session_id ORDER BY sl.created_at DESC NULLS LAST, sl.id DESC))[1] AS last_session_id,
-          (ARRAY_AGG(sl.created_at ORDER BY sl.created_at DESC NULLS LAST, sl.id DESC))[1] AS last_session_at,
-          (ARRAY_AGG(sl.payload ORDER BY sl.created_at DESC NULLS LAST, sl.id DESC))[1] AS last_session_payload
-        FROM session_logs sl
-        WHERE sl.payload#>>'{sessionMeta,telegramUser,userId}' = u.tg_user_id::text
-      ) s ON true
       WHERE u.client_id = $1
-      ORDER BY GREATEST(
-        COALESCE(u.last_seen_at, '-infinity'::timestamptz),
-        COALESCE(l.last_lead_at, '-infinity'::timestamptz),
-        COALESCE(s.last_session_at, '-infinity'::timestamptz)
-      ) DESC NULLS LAST, u.id DESC
+      ORDER BY u.last_seen_at DESC NULLS LAST, u.id DESC
       LIMIT 100
       `,
-      [clientId]
+      [clientId],
+      []
     );
 
-    const clients = (Array.isArray(rows) ? rows : []).map((row) => {
-      const latestSession = pickLastSessionDetails(row?.last_session_payload);
+    const leadRows = await safeQuery(
+      'lead aggregates',
+      `
+      SELECT
+        lr.extra->>'tgUserId' AS tg_user_id,
+        LOWER(REGEXP_REPLACE(COALESCE(lr.extra->>'telegramUsername', ''), '^@', '')) AS username,
+        COUNT(*)::int AS leads_count,
+        MAX(lr.created_at) AS last_lead_at
+      FROM lead_requests lr
+      WHERE lr.client_id = $1
+        AND COALESCE(lr.source, '') !~* '^widget_'
+        AND (COALESCE(lr.extra->>'tgUserId', '') <> '' OR COALESCE(lr.extra->>'telegramUsername', '') <> '')
+      GROUP BY lr.extra->>'tgUserId', LOWER(REGEXP_REPLACE(COALESCE(lr.extra->>'telegramUsername', ''), '^@', ''))
+      `,
+      [clientId],
+      []
+    );
+
+    const sessionRows = await safeQuery(
+      'session aggregates',
+      `
+      WITH ranked AS (
+        SELECT
+          sl.session_id,
+          sl.created_at,
+          sl.payload,
+          sl.payload#>>'{sessionMeta,telegramUser,userId}' AS tg_user_id,
+          ROW_NUMBER() OVER (
+            PARTITION BY sl.payload#>>'{sessionMeta,telegramUser,userId}'
+            ORDER BY sl.created_at DESC NULLS LAST, sl.id DESC
+          ) AS rn,
+          COUNT(*) OVER (PARTITION BY sl.payload#>>'{sessionMeta,telegramUser,userId}')::int AS sessions_count
+        FROM session_logs sl
+        WHERE COALESCE(sl.payload#>>'{sessionMeta,telegramUser,userId}', '') <> ''
+      )
+      SELECT
+        tg_user_id,
+        sessions_count,
+        session_id AS last_session_id,
+        created_at AS last_session_at,
+        payload AS last_session_payload
+      FROM ranked
+      WHERE rn = 1
+      `,
+      [],
+      []
+    );
+
+    const leadByTgId = new Map();
+    const leadByUsername = new Map();
+    for (const row of leadRows) {
+      const data = {
+        leads_count: Number(row?.leads_count || 0),
+        last_lead_at: row?.last_lead_at || null
+      };
+      const tgId = String(row?.tg_user_id || '').trim();
+      const username = String(row?.username || '').trim().toLowerCase();
+      if (tgId) leadByTgId.set(tgId, data);
+      if (username) leadByUsername.set(username, data);
+    }
+    const sessionByTgId = new Map();
+    for (const row of sessionRows) {
+      const tgId = String(row?.tg_user_id || '').trim();
+      if (!tgId) continue;
+      sessionByTgId.set(tgId, row);
+    }
+
+    const clients = userRows.map((row) => {
+      const tgId = row?.tg_user_id != null ? String(row.tg_user_id) : '';
+      const usernameKey = String(row?.username || '').trim().replace(/^@/, '').toLowerCase();
+      const lead = leadByTgId.get(tgId) || leadByUsername.get(usernameKey) || {};
+      const session = sessionByTgId.get(tgId) || {};
+      const latestSession = pickLastSessionDetails(session?.last_session_payload);
       return {
         id: row?.id || null,
         client_id: row?.client_id || clientId,
-        telegram_user_id: row?.tg_user_id != null ? String(row.tg_user_id) : null,
+        telegram_user_id: tgId || null,
         telegram_username: row?.username ? `@${String(row.username).replace(/^@/, '')}` : null,
         first_name: row?.first_name || null,
         last_name: row?.last_name || null,
         language_code: row?.language_code || null,
         first_seen_at: row?.first_seen_at || null,
         last_seen_at: row?.last_seen_at || null,
-        leads_count: Number(row?.leads_count || 0),
-        last_lead_at: row?.last_lead_at || null,
-        sessions_count: Number(row?.sessions_count || 0),
-        last_session_id: row?.last_session_id || null,
-        last_session_at: row?.last_session_at || null,
+        leads_count: Number(lead?.leads_count || 0),
+        last_lead_at: lead?.last_lead_at || null,
+        sessions_count: Number(session?.sessions_count || 0),
+        last_session_id: session?.last_session_id || null,
+        last_session_at: session?.last_session_at || null,
         latest_session: latestSession
       };
+    }).sort((a, b) => {
+      const at = new Date(a.last_seen_at || a.last_session_at || a.last_lead_at || 0).getTime() || 0;
+      const bt = new Date(b.last_seen_at || b.last_session_at || b.last_lead_at || 0).getTime() || 0;
+      return bt - at;
     });
     const active7Days = clients.filter((c) => {
       const t = new Date(c.last_seen_at || c.last_session_at || c.last_lead_at || 0).getTime();
