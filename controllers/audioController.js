@@ -2532,6 +2532,23 @@ const sanitizeUnsupportedCoverageClaim = (text = '', execution = null) => {
     .trim();
 };
 
+const sanitizeShortTermRentReminder = (text = '', userText = '') => {
+  const raw = String(text || '');
+  if (!raw) return raw;
+  const user = String(userText || '').toLowerCase();
+  const userAlreadyShortTerm =
+    /(посуточ|в\s*сутк|на\s*недел|на\s*выходн|short[\s-]?term|vacation rental|per\s*day|por\s*dia|por\s*noche|alquiler\s*vacacional)/i
+      .test(user);
+  if (!userAlreadyShortTerm) return raw;
+
+  return raw
+    .replace(/мы\s+работаем\s+только\s+с\s+посуточной\s+арендой\.?\s*/i, '')
+    .replace(/trabajamos\s+solo\s+con\s+alquiler\s+vacacional\.?\s*/i, '')
+    .replace(/we\s+only\s+work\s+with\s+short[\s-]?term\s+rentals\.?\s*/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
+
 // ====== Вспомогательные функции профиля/стадий/META ======
 const determineStage = (clientProfile, currentStage, messageHistory) => {
   try {
@@ -3639,6 +3656,7 @@ const transcribeAndRespond = async (req, res) => {
     let botResponse = assistantText || fullModelText;
     botResponse = sanitizeNoInventoryClaim(botResponse, baseExecution);
     botResponse = sanitizeUnsupportedCoverageClaim(botResponse, baseExecution);
+    botResponse = sanitizeShortTermRentReminder(botResponse, transcription);
     // Bonus: после ответа GPT подтверждаем язык сессии по распознанному языку пользовательского текста.
     if (detectedLangFromText) {
       session.clientProfile.language = detectedLangFromText;
