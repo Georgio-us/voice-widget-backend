@@ -155,6 +155,7 @@ function formatCommentBlock({
 function mapFormType(source) {
   if (source === 'widget_full_form') return 'Header';
   if (source === 'widget_in_dialog') return 'Property';
+  if (source === 'widget_manager_cta') return 'Manager CTA';
   if (source === 'widget_short_form') return 'Header';
   return 'Header';
 }
