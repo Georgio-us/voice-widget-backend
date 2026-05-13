@@ -801,6 +801,7 @@ const normalizeLookupText = (value) =>
     .trim();
 
 let locationLexiconCache = { ts: 0, list: [] };
+let rentGeoFactsCache = { ts: 0, payload: null };
 
 const buildLocationLexicon = (rows = []) => {
   const out = new Map();
@@ -844,6 +845,41 @@ const buildLocationLexicon = (rows = []) => {
   return Array.from(out.entries())
     .map(([key, canonical]) => ({ key, canonical }))
     .sort((a, b) => b.key.length - a.key.length);
+};
+
+const buildRentGeoFacts = (rows = []) => {
+  const byCity = new Map();
+  const byProvince = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const op = String(row?.operation || '').toLowerCase();
+    if (op !== 'rent') continue;
+    const cityRaw = String(row?.city || row?.location_city || '').trim();
+    const provinceRaw = String(row?.district || row?.location_district || '').trim();
+    if (cityRaw) {
+      const cityKey = normalizeLookupText(cityRaw);
+      if (cityKey) byCity.set(cityKey, { key: cityKey, label: cityRaw, count: (byCity.get(cityKey)?.count || 0) + 1 });
+    }
+    if (provinceRaw) {
+      const pKey = normalizeLookupText(provinceRaw);
+      if (pKey) byProvince.set(pKey, { key: pKey, label: provinceRaw, count: (byProvince.get(pKey)?.count || 0) + 1 });
+    }
+  }
+  const cities = Array.from(byCity.values()).sort((a, b) => b.count - a.count).slice(0, 24);
+  const provinces = Array.from(byProvince.values()).sort((a, b) => b.count - a.count).slice(0, 8);
+  return {
+    rentCount: cities.reduce((acc, c) => acc + c.count, 0),
+    cities: cities.map((x) => x.label),
+    provinces: provinces.map((x) => x.label)
+  };
+};
+
+const getRentGeoFacts = async (ttlMs = 5 * 60 * 1000) => {
+  const now = Date.now();
+  if (rentGeoFactsCache.payload && now - rentGeoFactsCache.ts < ttlMs) return rentGeoFactsCache.payload;
+  const all = await getAllNormalizedProperties();
+  const payload = buildRentGeoFacts(all);
+  rentGeoFactsCache = { ts: now, payload };
+  return payload;
 };
 
 const getLocationLexicon = async () => {
@@ -2411,12 +2447,15 @@ const buildRmv3GuardrailsSystemMessage = () => ({
   ].join('\n')
 });
 
-const buildGeoFactsSystemMessage = (execution = null) => {
+const buildGeoFactsSystemMessage = (execution = null, rentGeoFacts = null) => {
   const geo = execution?.geo || {};
   const matchedCount = Number.isInteger(execution?.matchedCount) ? execution.matchedCount : null;
   const geoStatus = geo?.status || null;
   const geoReason = geo?.reason || null;
   const geoTokens = Array.isArray(geo?.tokens) ? geo.tokens.slice(0, 8) : [];
+  const rentCities = Array.isArray(rentGeoFacts?.cities) ? rentGeoFacts.cities.slice(0, 24) : [];
+  const rentProvinces = Array.isArray(rentGeoFacts?.provinces) ? rentGeoFacts.provinces.slice(0, 8) : [];
+  const rentCount = Number.isFinite(rentGeoFacts?.rentCount) ? Number(rentGeoFacts.rentCount) : 0;
   return {
     role: 'system',
     content: [
@@ -2425,11 +2464,16 @@ const buildGeoFactsSystemMessage = (execution = null) => {
       `geoStatus=${geoStatus || 'null'}`,
       `geoReason=${geoReason || 'null'}`,
       `geoTokens=${geoTokens.length ? geoTokens.join(',') : 'none'}`,
+      `rentCount=${rentCount}`,
+      `rentCities=${rentCities.length ? rentCities.join(',') : 'none'}`,
+      `rentProvinces=${rentProvinces.length ? rentProvinces.join(',') : 'none'}`,
       'Rules:',
       '- If matchedCount > 0: NEVER say "нет объектов", "нет доступных объектов", "не могу предложить варианты".',
       '- If geoStatus=supported and matchedCount>0: confirm availability and continue qualification.',
       '- If geoStatus=limited and matchedCount=0: say there are currently no available objects in this direction and offer manager/contact button.',
-      '- If geoStatus=unsupported: do not promise availability, explain active coverage (Costa Blanca / Costa Calida), offer manager/contact button.'
+      '- If geoStatus=unsupported: do not promise availability, explain active coverage (Costa Blanca / Costa Calida), offer manager/contact button.',
+      '- RENT COVERAGE: when user intent is rent/аренда/alquiler, promise availability ONLY inside rentCities/rentProvinces from this block.',
+      '- If user asks rent outside rentCities/rentProvinces: do not claim available listings there; explain current rent coverage and offer manager/contact button.'
     ].join('\n')
   };
 };
@@ -3559,6 +3603,8 @@ const transcribeAndRespond = async (req, res) => {
     session.lastCandidates = Array.from(new Set((baseExecution.candidates || []).map((p) => p.id)));
     if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
 
+    const rentGeoFacts = await getRentGeoFacts();
+
     const messages = [
       {
         role: 'system',
@@ -3568,7 +3614,7 @@ const transcribeAndRespond = async (req, res) => {
         role: 'system',
         content: executionInstruction
       },
-      buildGeoFactsSystemMessage(baseExecution),
+      buildGeoFactsSystemMessage(baseExecution, rentGeoFacts),
       ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
       ...dialogMessages
     ];
