@@ -1813,6 +1813,15 @@ const runExtractionPipeline = async (sessionId, newMessage, locationLexicon = []
     if (!applied.includes('rooms')) applied.push('rooms');
   }
 
+  // Global guard: commit explicit operation intent from current user turn in all extraction modes.
+  // Prevents LLM omission from silently defaulting query to sale.
+  const explicitOp = detectExplicitOperationIntent(newMessage);
+  if (explicitOp && !isSameInsightValue(session.insights?.operation, explicitOp)) {
+    session.insights.operation = explicitOp;
+    if (!applied.includes('operation')) applied.push('operation');
+    console.log(`✅ [rewrite] explicit operation override: ${explicitOp}`);
+  }
+
   // Fallback: if type is still empty but clearly present in text, fill once.
   if (isEmptyInsightValue(session.insights?.type)) {
     const inferredType = inferTypeFromText(newMessage);
