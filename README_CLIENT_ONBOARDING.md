@@ -147,6 +147,72 @@ Recommendation:
 - Always set `TELEGRAM_WEBHOOK_URL` explicitly per environment/client.
 - Keep `OLX_REDIRECT_URI` dedicated to OLX OAuth callback flow only.
 
+## 4.4) DB Clone / Transfer (existing client DB -> new client DB)
+
+Use full Postgres DSN (`postgresql://...`) for source and target databases.
+Do not use service public/web URL.
+
+Clone data and schema:
+
+```bash
+pg_dump --no-owner --no-privileges "<SOURCE_DATABASE_URL>" | psql "<TARGET_DATABASE_URL>"
+```
+
+Retarget tenant key to new client id (example: `yana`) for all `public.*` tables that actually have `client_id`:
+
+```sql
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT n.nspname, c.relname
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE a.attname = 'client_id'
+      AND a.attnum > 0
+      AND NOT a.attisdropped
+      AND c.relkind = 'r'
+      AND n.nspname = 'public'
+  LOOP
+    EXECUTE format('UPDATE %I.%I SET client_id = %L', r.nspname, r.relname, 'yana');
+  END LOOP;
+END $$;
+```
+
+Also normalize session log payload client id (payload type is `json` in current schema):
+
+```sql
+UPDATE public.session_logs
+SET payload = (
+  COALESCE(payload::jsonb, '{}'::jsonb) ||
+  jsonb_build_object('clientId', 'yana')
+)::json
+WHERE COALESCE(payload->>'clientId', '') = '';
+```
+
+Verification:
+
+```sql
+SELECT format(
+  'SELECT %L AS table_name, client_id::text AS client_id, COUNT(*)::int AS cnt FROM %I.%I GROUP BY client_id ORDER BY 1,2;',
+  c.table_name, c.table_schema, c.table_name
+)
+FROM information_schema.columns c
+WHERE c.table_schema = 'public'
+  AND c.column_name = 'client_id'
+ORDER BY c.table_name
+\gexec
+```
+
+```sql
+SELECT payload->>'clientId' AS client_id, COUNT(*)::int AS cnt
+FROM public.session_logs
+GROUP BY payload->>'clientId'
+ORDER BY 1;
+```
+
 ## 5) Import Properties
 
 Use one of scripts:
@@ -263,6 +329,24 @@ TRUNCATE TABLE license_redemptions RESTART IDENTITY;
 TRUNCATE TABLE license_keys RESTART IDENTITY;
 TRUNCATE TABLE owner_subscriptions RESTART IDENTITY;
 COMMIT;
+```
+
+Optional: full data wipe for a brand-new tenant start (keep structure, indexes, enums, functions):
+
+```sql
+DO $$
+DECLARE
+  t text;
+BEGIN
+  SELECT string_agg(format('%I.%I', schemaname, tablename), ', ')
+  INTO t
+  FROM pg_tables
+  WHERE schemaname = 'public';
+
+  IF t IS NOT NULL THEN
+    EXECUTE 'TRUNCATE TABLE ' || t || ' RESTART IDENTITY CASCADE';
+  END IF;
+END $$;
 ```
 
 ## 9) Common Issues

@@ -143,7 +143,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         SELECT COUNT(*)::int AS c
         FROM users
         WHERE client_id = $1
-          AND (first_seen_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date
+          AND (first_seen_at AT TIME ZONE $2::text)::date = (NOW() AT TIME ZONE $2::text)::date
       `
       : `
         SELECT 0::int AS c
@@ -184,7 +184,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         SELECT COUNT(*)::int AS c
         FROM lead_requests
         WHERE client_id = $1
-          AND (created_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date
+          AND (created_at AT TIME ZONE $2::text)::date = (NOW() AT TIME ZONE $2::text)::date
           AND COALESCE(source, '') !~* '^widget_'
         `,
         [clientId, STATS_TIMEZONE],
@@ -195,7 +195,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         `
         SELECT COUNT(*)::int AS c
         FROM session_logs
-        WHERE (created_at AT TIME ZONE $1)::date = (NOW() AT TIME ZONE $1)::date
+        WHERE (created_at AT TIME ZONE $1::text)::date = (NOW() AT TIME ZONE $1::text)::date
         `,
         [STATS_TIMEZONE],
         { rows: [{ c: 0 }] }
@@ -398,6 +398,149 @@ router.get('/stats/session/:sessionId', requireAdmin, async (req, res) => {
       return res.json({ ok: true, digest: null });
     }
     console.error('❌ GET /api/admin/stats/session/:sessionId error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
+
+const pickLastSessionDetails = (payloadRaw) => {
+  const payload = payloadRaw && typeof payloadRaw === 'object' ? payloadRaw : {};
+  const sessionMeta = payload?.sessionMeta && typeof payload.sessionMeta === 'object' ? payload.sessionMeta : {};
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  let lastUserText = null;
+  let lastAssistantText = null;
+  let lastInsights = null;
+  const shownIds = new Set();
+  const shownFromMeta = Array.isArray(sessionMeta?.shownProperties) ? sessionMeta.shownProperties : [];
+  for (const idRaw of shownFromMeta) {
+    const id = String(idRaw || '').trim();
+    if (id) shownIds.add(id);
+  }
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i] || {};
+    const role = String(m?.role || '').toLowerCase();
+    const cards = Array.isArray(m?.cards) ? m.cards : [];
+    for (const card of cards) {
+      const id = String(card?.id || '').trim();
+      if (id) shownIds.add(id);
+    }
+    if (!lastInsights && m?.meta?.insights && typeof m.meta.insights === 'object') {
+      lastInsights = m.meta.insights;
+    }
+    if (!lastUserText && role === 'user') {
+      const candidate = String(m?.transcription || m?.text || '').trim();
+      if (candidate) lastUserText = candidate;
+    }
+    if (!lastAssistantText && role === 'assistant') {
+      const candidate = String(m?.text || '').trim();
+      if (candidate) lastAssistantText = candidate;
+    }
+    if (lastUserText && lastAssistantText && lastInsights) break;
+  }
+  return {
+    messagesCount: messages.length,
+    shownObjectsCount: shownIds.size,
+    lastUserText,
+    lastAssistantText,
+    lastInsights
+  };
+};
+
+router.get('/clients/list', requireAdmin, async (req, res) => {
+  try {
+    if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
+    const clientId = SERVICE_CLIENT_ID;
+    const { rows } = await pool.query(
+      `
+      SELECT
+        u.id,
+        u.client_id,
+        u.tg_user_id,
+        u.username,
+        u.first_name,
+        u.last_name,
+        u.language_code,
+        u.first_seen_at,
+        u.last_seen_at,
+        COALESCE(l.leads_count, 0)::int AS leads_count,
+        l.last_lead_at,
+        COALESCE(s.sessions_count, 0)::int AS sessions_count,
+        s.last_session_id,
+        s.last_session_at,
+        s.last_session_payload
+      FROM users u
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS leads_count,
+          MAX(lr.created_at) AS last_lead_at
+        FROM lead_requests lr
+        WHERE lr.client_id = $1
+          AND COALESCE(lr.source, '') !~* '^widget_'
+          AND (
+            lr.extra->>'tgUserId' = u.tg_user_id::text
+            OR (
+              NULLIF(TRIM(COALESCE(u.username, '')), '') IS NOT NULL
+              AND LOWER(REGEXP_REPLACE(COALESCE(lr.extra->>'telegramUsername', ''), '^@', '')) = LOWER(TRIM(u.username))
+            )
+          )
+      ) l ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS sessions_count,
+          (ARRAY_AGG(sl.session_id ORDER BY sl.created_at DESC NULLS LAST, sl.id DESC))[1] AS last_session_id,
+          (ARRAY_AGG(sl.created_at ORDER BY sl.created_at DESC NULLS LAST, sl.id DESC))[1] AS last_session_at,
+          (ARRAY_AGG(sl.payload ORDER BY sl.created_at DESC NULLS LAST, sl.id DESC))[1] AS last_session_payload
+        FROM session_logs sl
+        WHERE sl.payload#>>'{sessionMeta,telegramUser,userId}' = u.tg_user_id::text
+      ) s ON true
+      WHERE u.client_id = $1
+      ORDER BY GREATEST(
+        COALESCE(u.last_seen_at, '-infinity'::timestamptz),
+        COALESCE(l.last_lead_at, '-infinity'::timestamptz),
+        COALESCE(s.last_session_at, '-infinity'::timestamptz)
+      ) DESC NULLS LAST, u.id DESC
+      LIMIT 100
+      `,
+      [clientId]
+    );
+
+    const clients = (Array.isArray(rows) ? rows : []).map((row) => {
+      const latestSession = pickLastSessionDetails(row?.last_session_payload);
+      return {
+        id: row?.id || null,
+        client_id: row?.client_id || clientId,
+        telegram_user_id: row?.tg_user_id != null ? String(row.tg_user_id) : null,
+        telegram_username: row?.username ? `@${String(row.username).replace(/^@/, '')}` : null,
+        first_name: row?.first_name || null,
+        last_name: row?.last_name || null,
+        language_code: row?.language_code || null,
+        first_seen_at: row?.first_seen_at || null,
+        last_seen_at: row?.last_seen_at || null,
+        leads_count: Number(row?.leads_count || 0),
+        last_lead_at: row?.last_lead_at || null,
+        sessions_count: Number(row?.sessions_count || 0),
+        last_session_id: row?.last_session_id || null,
+        last_session_at: row?.last_session_at || null,
+        latest_session: latestSession
+      };
+    });
+    const active7Days = clients.filter((c) => {
+      const t = new Date(c.last_seen_at || c.last_session_at || c.last_lead_at || 0).getTime();
+      return Number.isFinite(t) && t >= Date.now() - 7 * 24 * 60 * 60 * 1000;
+    }).length;
+    return res.json({
+      ok: true,
+      summary: {
+        totalClients: clients.length,
+        withLeads: clients.filter((c) => Number(c.leads_count) > 0).length,
+        active7Days
+      },
+      clients
+    });
+  } catch (error) {
+    if (error?.code === '42P01' || error?.code === '42703') {
+      return res.json({ ok: true, summary: { totalClients: 0, withLeads: 0, active7Days: 0 }, clients: [] });
+    }
+    console.error('❌ GET /api/admin/clients/list error:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
 });
