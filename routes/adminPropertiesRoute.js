@@ -143,7 +143,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         SELECT COUNT(*)::int AS c
         FROM users
         WHERE client_id = $1
-          AND (first_seen_at AT TIME ZONE $2::text)::date = (NOW() AT TIME ZONE $2::text)::date
+          AND (NULLIF(first_seen_at::text, '')::timestamptz AT TIME ZONE $2::text)::date = (NOW() AT TIME ZONE $2::text)::date
       `
       : `
         SELECT 0::int AS c
@@ -184,7 +184,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         SELECT COUNT(*)::int AS c
         FROM lead_requests
         WHERE client_id = $1
-          AND (created_at AT TIME ZONE $2::text)::date = (NOW() AT TIME ZONE $2::text)::date
+          AND (NULLIF(created_at::text, '')::timestamptz AT TIME ZONE $2::text)::date = (NOW() AT TIME ZONE $2::text)::date
           AND COALESCE(source, '') !~* '^widget_'
         `,
         [clientId, STATS_TIMEZONE],
@@ -195,7 +195,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         `
         SELECT COUNT(*)::int AS c
         FROM session_logs
-        WHERE (created_at AT TIME ZONE $1::text)::date = (NOW() AT TIME ZONE $1::text)::date
+        WHERE (NULLIF(created_at::text, '')::timestamptz AT TIME ZONE $1::text)::date = (NOW() AT TIME ZONE $1::text)::date
         `,
         [STATS_TIMEZONE],
         { rows: [{ c: 0 }] }
