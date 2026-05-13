@@ -1450,8 +1450,8 @@ const inferTypeFromText = (text = '') => {
 const detectExplicitOperationIntent = (text = '') => {
   const s = normalizeLookupText(String(text || ''));
   if (!s) return null;
-  const rentStrong = /(снять|сниму|ищу в аренду|нужна аренда|арендовать|в\s*аренду|для\s*аренды|под\s*аренду|alquiler|en\s*alquiler|de\s*alquiler|rent\b|for rent)/i.test(s);
-  const saleStrong = /(купить|покупка|ищу для покупки|compra|buy\b|for sale|sale\b)/i.test(s);
+  const rentStrong = /(снять|сниму|ищу в аренду|нужна аренда|арендовать|аренда\b|в\s*аренду|для\s*аренды|под\s*аренду|alquilar|alquiler|arrendar|arriendo|en\s*alquiler|de\s*alquiler|rent\b|for rent|rental\b|leasing\b|lease\b)/i.test(s);
+  const saleStrong = /(купить|покупка|ищу для покупки|compra|comprar|buy\b|buying|purchase|for sale|sale\b)/i.test(s);
   if (rentStrong && !saleStrong) return 'аренда';
   if (saleStrong && !rentStrong) return 'покупка';
   return null;
@@ -1480,6 +1480,13 @@ const detectRoomsFromText = (text = '') => {
   }
   // EN/ES shorthand: "1 and 2 bedrooms", "1 y 2 habitaciones".
   for (const m of s.matchAll(/(\d+)\s*(?:and|y|or)\s*(\d+)\s*(?:bedrooms?|habitaciones?|habitacion|dormitorios?)/gi)) {
+    const a = Number.parseInt(m[1], 10);
+    const b = Number.parseInt(m[2], 10);
+    if (Number.isInteger(a) && a > 0 && a <= 9) out.add(a);
+    if (Number.isInteger(b) && b > 0 && b <= 9) out.add(b);
+  }
+  // RU shorthand: "1 и 2 комнаты/комнатные", "1 или 2 спальни".
+  for (const m of s.matchAll(/(\d+)\s*(?:и|или)\s*(\d+)\s*(?:комнат\w*|комн\w*|спальн\w*)/gi)) {
     const a = Number.parseInt(m[1], 10);
     const b = Number.parseInt(m[2], 10);
     if (Number.isInteger(a) && a > 0 && a <= 9) out.add(a);
@@ -3457,8 +3464,13 @@ const transcribeAndRespond = async (req, res) => {
     // const totalProps = properties.length; // устарело – переезд на БД
     const detectedLangFromText = (() => {
       const sample = (transcription || req.body.text || '').toString();
-      if (/^[\s\S]*[А-Яа-яЁё]/.test(sample)) return 'ru';
-      if (/^[\s\S]*[a-zA-Z]/.test(sample)) return 'en';
+      const lower = sample.toLowerCase();
+      if (/[а-яё]/i.test(sample)) return 'ru';
+      // ES-first check before generic latin fallback.
+      if (/[¿¡ñáéíóúü]/i.test(sample) || /\b(el|la|los|las|un|una|quiero|busco|alquiler|comprar|hasta|dormitorios|pisos|costa)\b/i.test(lower)) {
+        return 'es';
+      }
+      if (/[a-z]/i.test(sample)) return 'en';
       return null;
     })();
     const targetLang = (() => {
@@ -3494,6 +3506,7 @@ const transcribeAndRespond = async (req, res) => {
     const languageInstruction = (() => {
       const lang = String(session.clientProfile.language || '').toLowerCase();
       if (lang === 'en') return 'Answer primarily in English.';
+      if (lang === 'es') return 'Responde principalmente en español.';
       if (lang === 'ru' || !lang) return 'Отвечай преимущественно на русском.';
       return ''; // неизвестный язык — без инструкции
     })();

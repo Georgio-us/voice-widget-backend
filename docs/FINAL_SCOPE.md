@@ -1,6 +1,6 @@
 # FINAL_SCOPE
 
-Last updated: 2026-05-12  
+Last updated: 2026-05-13  
 Branch: `Split`
 
 ## Product stance before production handoff
@@ -31,6 +31,7 @@ Known AI imperfections are accepted (speech recognition noise, ambiguous phrasin
   - explicit rent terms -> rent
   - explicit sale terms -> sale
   - fallback behavior remains allowed when explicit signal is absent.
+- Rental policy is explicit in assistant behavior: **only short-term/daily rental is supported**.
 
 ### 2) Unsupported coast behavior
 - Prevent unsupported coastal geo phrases (e.g., `Costa del Sol`) from silently becoming broad `near_sea` inventory search.
@@ -39,10 +40,15 @@ Known AI imperfections are accepted (speech recognition noise, ambiguous phrasin
   - route to manager CTA,
   - avoid misleading “selection updated” behavior.
 
+### 3) Language/output consistency
+- Response language must follow user language (`ru`/`en`/`es`) consistently, including Spanish turns.
+
+### 4) Multi-room stability
+- Phrases like `1 и 2 комнаты` / `1 or 2 bedrooms` / `1 y 2 habitaciones` must stay multi-select and not collapse to single room value.
+
 ## Explicitly out of scope (for this checkpoint)
 
 - Refactoring large legacy layers.
 - Aggressive NLP heuristics expansion.
 - Any lead-blocking policy.
 - Reworking current CRM reference mapping that already demonstrates stable delivery.
-
