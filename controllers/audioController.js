@@ -948,6 +948,7 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
       /\b(room|rooms|bedroom|bedrooms)\b/i,
       // ES
       /\b(piso|pisos|apartamento|apartamentos)\b/i,
+      /\b(villa|villas)\b/i,
       /\b(casa|casas)\b/i,
       /\b(estudio|estudios)\b/i,
       /\b(ático|áticos|atico|aticos)\b/i,
@@ -972,6 +973,7 @@ const updateInsights = async (sessionId, newMessage, locationLexicon = []) => {
         else if (/townhouse/.test(m)) insights.type = 'townhouse';
         else if (/room|bedroom/.test(m)) insights.type = 'room';
         else if (/piso|apartamento/.test(m)) insights.type = 'piso';
+        else if (/villa/.test(m)) insights.type = 'villa';
         else if (/casa/.test(m)) insights.type = 'casa';
         else if (/estudio/.test(m)) insights.type = 'estudio';
         else if (/ático|atico/.test(m)) insights.type = 'ático';
@@ -1819,6 +1821,14 @@ const runExtractionPipeline = async (sessionId, newMessage, locationLexicon = []
       if (!applied.includes('type')) applied.push('type');
       console.log(`✅ [fallback] inferred type: ${inferredType}`);
     }
+  }
+  // Deterministic rewrite guard for explicit type in current turn.
+  // If user explicitly names another type now, we rewrite previous type.
+  const inferredTypeNow = inferTypeFromText(newMessage);
+  if (inferredTypeNow && !isEmptyInsightValue(session.insights?.type) && String(session.insights.type) !== String(inferredTypeNow)) {
+    session.insights.type = inferredTypeNow;
+    if (!applied.includes('type')) applied.push('type');
+    console.log(`✅ [rewrite] explicit type override: ${inferredTypeNow}`);
   }
 
   return Array.from(new Set(applied));
