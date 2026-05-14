@@ -62,11 +62,13 @@ router.post('/', async (req, res) => {
       consent
     } = req.body || {};
 
-    // Валидация: name обязателен
-    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+    const sourceTrimmed = source && typeof source === 'string' ? source.trim() : '';
+
+    // Валидация: source обязателен
+    if (!sourceTrimmed) {
       return res.status(400).json({
         ok: false,
-        error: 'name is required',
+        error: 'source is required',
         code: 'VALIDATION_ERROR'
       });
     }
@@ -91,11 +93,47 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Валидация: source обязателен
-    if (!source || typeof source !== 'string' || source.trim().length === 0) {
+    // Спец-поток: заявка "Хочу такой же виджет" — только нотификатор, без БД/CRM
+    if (sourceTrimmed === 'widget_viral_form') {
+      try {
+        await notifyLeadToTelegram({
+          leadId: null,
+          createdAt: new Date().toISOString(),
+          sessionId: sessionId || null,
+          source: sourceTrimmed,
+          name: (name && String(name).trim()) || 'Viral lead',
+          phoneCountryCode,
+          phoneNumber,
+          email,
+          preferredContactMethod: preferredContactMethod || null,
+          language: language || 'ru',
+          propertyId: null,
+          consent: true,
+          comment: comment || null,
+          insights: null,
+          lastShownCardId: null
+        });
+      } catch (tgErr) {
+        console.warn('[telegram] viral lead notify failed', tgErr?.message || tgErr);
+        return res.status(500).json({
+          ok: false,
+          error: 'INTERNAL_ERROR',
+          code: 'INTERNAL_ERROR'
+        });
+      }
+
+      return res.json({
+        ok: true,
+        routed: 'notifier_only',
+        sessionId: sessionId || null
+      });
+    }
+
+    // Валидация: name обязателен для основного потока заявок
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({
         ok: false,
-        error: 'source is required',
+        error: 'name is required',
         code: 'VALIDATION_ERROR'
       });
     }
