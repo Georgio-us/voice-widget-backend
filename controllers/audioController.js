@@ -3,6 +3,7 @@ globalThis.File = File;
 import { OpenAI } from 'openai';
 // DB repository (Postgres)
 import { getAllProperties } from '../services/propertiesRepository.js';
+import { listResidentialComplexes } from '../services/residentialComplexesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
@@ -758,18 +759,14 @@ const applyResidentialComplexFallbackFromTranscript = (transcription = '', insig
       return text;
     };
     let complexName = null;
-    const quoted = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s*[«"']([^»"']{2,60})[»"']/i);
+    const quoted = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s*[«"']([^»"']{2,40})[»"']/i);
     if (quoted && quoted[1]) {
       complexName = String(quoted[1]).trim();
     } else {
-      const plain = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s+([a-zа-яё0-9][a-zа-яё0-9\-\s]{1,80})(?=$|[,.!?;:]|\s+(?:в|на|для|до|котор|где)\b)/i);
+      // SAFE FALLBACK: Only grab 1-3 words max, stop at ANY preposition or punctuation.
+      const plain = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s+([a-zа-яё0-9][a-zа-яё0-9\-]{1,20}(?:\s+[a-zа-яё0-9\-]{1,20}){0,2})(?=$|[,.!?;:]|\s+(?:в|на|для|до|котор|где|возле|рядом|около|у|из|по)\b)/i);
       if (plain && plain[1]) {
         complexName = String(plain[1]).trim();
-      } else {
-        const tail = source.match(/(?:^|[\s,;:()\-])(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s*[«"']?([^,;.!?()\-]{2,100})/i);
-        if (tail && tail[1]) {
-          complexName = String(tail[1]).trim();
-        }
       }
     }
     if (complexName) {
@@ -3098,7 +3095,22 @@ const transcribeAndRespond = async (req, res) => {
       session.clientProfile.language = targetLang;
     }
 
-    const baseSystemPrompt = BASE_SYSTEM_PROMPT;
+    // RMv3 / Fetch RC Catalog to restrict AI hallucination
+    let rcCatalogStr = '';
+    try {
+      const clientId = process.env.CLIENT_ID || 'georgio-us';
+      const rcs = await listResidentialComplexes(clientId, { limit: 200 });
+      if (rcs && rcs.length > 0) {
+        rcCatalogStr = rcs.map(r => r.name).join(', ');
+      }
+    } catch (e) {
+      console.warn('Failed to load RC catalog for prompt:', e);
+    }
+
+    const baseSystemPrompt = BASE_SYSTEM_PROMPT.replace(
+      '{{RC_CATALOG}}',
+      rcCatalogStr ? `\nAVAILABLE RESIDENTIAL COMPLEXES (CATALOG):\n${rcCatalogStr}\n` : ''
+    );
     const metaRepairHint = session?.metaContract?.needsRepairHint === true
       ? {
           role: 'system',
@@ -3262,6 +3274,26 @@ const transcribeAndRespond = async (req, res) => {
       };
     }
     const rcFallback = applyResidentialComplexFallbackFromTranscript(transcription, session.insights);
+
+    // --- NEW: STRICT SERVER-SIDE VALIDATION AGAINST CATALOG ---
+    try {
+      const clientId = process.env.CLIENT_ID || 'georgio-us';
+      const rcs = await listResidentialComplexes(clientId, { limit: 1000 });
+      if (rcs && rcs.length > 0) {
+        const knownRcNames = rcs.map(r => String(r.name).toLowerCase().trim());
+        const currentRc = String(session.insights.residentialComplex || '').toLowerCase().trim();
+        
+        if (currentRc && !knownRcNames.includes(currentRc)) {
+          console.warn(`[RC_VALIDATOR] Rejected unknown RC: "${session.insights.residentialComplex}". Forcing rcOnly=true.`);
+          session.insights.residentialComplex = null;
+          session.insights.residentialComplexOnly = true;
+          session.insights.rcOnly = true;
+        }
+      }
+    } catch (e) {
+      console.error('[RC_VALIDATOR] Failed to validate RC against catalog:', e);
+    }
+    // -----------------------------------------------------------
     if (rcFallback.applied) {
       extractionReport.fallbackUsed = true;
       extractionReport.updatesApplied = true;

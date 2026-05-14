@@ -132,18 +132,19 @@ RESPONSE STRUCTURE (MANDATORY):
     - single amount / "до X" / "бюджет X" => set ONLY "budgetMax" = X, keep "budget" = null
     - explicit range ("от X до Y", "X-Y") => set "budget" = lower bound, "budgetMax" = upper bound
     - lower-only ("от X", "начиная с X") => set "budget" = X, keep "budgetMax" = null
-- For residential complex extraction:
-  - If user explicitly names a residential complex (e.g., "ЖК Апельсин", "Акварель 2"), write it to "residentialComplex".
-  - Normalize specific complex names to remove hyphens if they are single words (e.g. "Аль-Таир" -> "Альтаир").
-  - If complex name is followed by district/preposition (e.g., "ЖК Апельсин в Приморском районе"), still extract only the complex name into "residentialComplex".
+- For residential complex extraction (CRITICAL RULE):
+  - You MUST ONLY extract a residential complex if its name closely matches one of the complexes listed in the AVAILABLE RESIDENTIAL COMPLEXES (CATALOG) below.
+  - If the user names a complex that is NOT in the catalog (even if it exists in the real world), DO NOT write it into "residentialComplex". Instead, set rcOnly = true to show similar alternatives.
+  - Normalize specific complex names to match the catalog exactly (e.g., "Аль-Таир" -> "Альтаир").
   - Do not infer residential complex from generic district or landmark mentions.
   - If user asks for "новострой", "новостройка", "новый дом" without naming a specific complex => set rcOnly = true.
 - For amenities and special locations extraction:
   - If user asks for "паркинг" or "гараж" => set parking = true.
   - If user asks for "балкон" or "лоджия" => set balconyLoggia = true.
-  - If user asks for "Аркадия" => set arcadia = true.
+  - If user asks for "Аркадия" => YOU MUST set arcadia = true. Do NOT just set district = "Приморский". The arcadia flag is mandatory!
   - If user asks for "Центр" => set center = true.
   - If user asks for "смарт-квартира" or "смарт" => set smart = true.
+{{RC_CATALOG}}
 - For floor exclusion extraction:
   - "не первый этаж" => floorNotFirst = true
   - "не последний этаж" => floorNotLast = true
