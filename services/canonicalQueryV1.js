@@ -123,27 +123,27 @@ const detectBudgetSemantics = (sourceInsights = {}) => {
     return { mode: 'single', min: 1000000 };
   }
 
-  const rangeDash = budgetText.match(/(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?\s*[-–—]\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?/i);
+  const rangeDash = budgetText.match(/(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|eur|euro|euros|евро|€|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?\s*[-–—]\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|eur|euro|euros|евро|€|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?/i);
   if (rangeDash) {
     const a = parseBudgetTokenToInt(rangeDash[1], rangeDash[2] || rangeDash[4] || '');
     const b = parseBudgetTokenToInt(rangeDash[3], rangeDash[4] || '');
     if (Number.isInteger(a) && Number.isInteger(b)) return { mode: 'range', min: Math.min(a, b), max: Math.max(a, b) };
   }
 
-  const rangeFromTo = budgetText.match(/(?:от|from|desde)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?\s*(?:до|to|a|hasta)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?/i);
+  const rangeFromTo = budgetText.match(/(?:от|from|desde)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|eur|euro|euros|евро|€|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?\s*(?:до|to|a|hasta)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|eur|euro|euros|евро|€|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?/i);
   if (rangeFromTo) {
     const a = parseBudgetTokenToInt(rangeFromTo[1], rangeFromTo[2] || rangeFromTo[4] || '');
     const b = parseBudgetTokenToInt(rangeFromTo[3], rangeFromTo[4] || '');
     if (Number.isInteger(a) && Number.isInteger(b)) return { mode: 'range', min: Math.min(a, b), max: Math.max(a, b) };
   }
 
-  const upper = budgetText.match(/(?:до|up\s*to|hasta|max(?:imum)?|не\s*более)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)/i);
+  const upper = budgetText.match(/(?:до|up\s*to|hasta|max(?:imum)?|не\s*более)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|eur|euro|euros|евро|€|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?/i);
   if (upper) {
     const v = parseBudgetTokenToInt(upper[1], upper[2] || '');
     if (Number.isInteger(v)) return { mode: 'upper', max: v };
   }
 
-  const lower = budgetText.match(/(?:от|from|desde|min(?:imum)?|не\s*менее)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)/i);
+  const lower = budgetText.match(/(?:от|from|desde|min(?:imum)?|не\s*менее)\s*(\d[\d\s.,]{0,10})\s*(k|к|тыс\.?|тысяч|thousand|mil(?:es)?|eur|euro|euros|евро|€|млн|миллион(?:а|ов)?|million|mio|лям(?:а|ов)?)?/i);
   if (lower) {
     const v = parseBudgetTokenToInt(lower[1], lower[2] || '');
     if (Number.isInteger(v)) return { mode: 'lower', min: v };
