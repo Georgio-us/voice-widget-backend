@@ -1,6 +1,6 @@
 # Insights AS-IS (Estyle)
 
-Last updated: 2026-05-05 (post budget range semantics)  
+Last updated: 2026-05-14  
 Branch: `Split`  
 Scope: current runtime behavior without refactor.
 
@@ -127,8 +127,21 @@ Current runtime selection uses canonical fields from `postValidationQuery`, incl
 1. canonical location source priority is `locationsRaw -> location`.
 2. Canonical layer converts coast-like phrases (`возле моря`, `near sea`, `cerca del mar`, `coast`) into `features.near_sea`.
 3. Coast-like phrases are excluded from `location` filter token.
-4. Explicit unknown multi-location token sets are dropped from query (`droppedFields.reason=unknown_location_tokens`) instead of leaking as free-text location.
-5. This mapping is active in runtime query path and visible in debug (`location extraction` + `location parsing` + `canonicalPatch.features`).
+4. Mixed supported + unsupported locations keep supported tokens and drop unsupported tokens (`unsupported_location_tokens_ignored`).
+5. Initial unsupported-only locations are dropped as filters and broad catalog fallback is used (`unsupported_location_catalog_fallback`).
+6. Broad country-level geo (`Spain/Испания/España`) is dropped as a filter and broad catalog fallback is used (`broad_location_catalog_fallback`).
+7. Unsupported geo after previous supported/limited matched search routes to manager CTA.
+8. This mapping is active in runtime query path and visible in debug (`location extraction` + `location parsing` + `canonicalPatch.features`).
+
+### UI event behavior (current)
+
+1. Backend can emit explicit `ui.systemEvent`.
+2. `open_manager` is emitted for:
+   - no new extracted fields;
+   - schedule/manager/legal/mortgage/process intent;
+   - unsupported geo after supported/limited context.
+3. Frontend gives explicit `ui.systemEvent` priority over inferred `matchedCount` selection events.
+4. If no explicit event exists and `queryTraceV1.matchedCount > 0`, frontend may emit `open_results`.
 
 ### Feed reality constraint (current estyle dataset)
 
@@ -164,8 +177,9 @@ Current runtime selection uses canonical fields from `postValidationQuery`, incl
 Current active assistant prompt stack is intentionally minimal:
 1. base personality prompt
 2. execution lock instruction
-3. language instruction
-4. user/assistant dialog history
+3. dynamic `GEO_FACTS_V1` from current canonical execution
+4. language instruction
+5. user/assistant dialog history
 
 Disabled in active main-call path:
 1. RMV3 server facts system message

@@ -1,6 +1,6 @@
 # Tech Debt Backlog (Estyle)
 
-Last updated: 2026-04-30
+Last updated: 2026-05-14
 Branch: `Split`
 Purpose: deferred tasks that are important but intentionally postponed.
 
@@ -51,14 +51,21 @@ XML import is currently manual. This risks stale listings and inconsistent clien
 
 ## P1 — Selection Runtime Stability Flags (active)
 
-1. Room extraction ambiguity in single-pass utterances:
+1. Live smoke for geo/UI state machine:
+- validate initial unsupported fallback, broad geo fallback, mixed geo, unsupported-after-supported manager CTA, no-new-insights manager CTA.
+
+2. Room extraction ambiguity in single-pass utterances:
 - some phrasings still collapse multi-room intent into scalar despite array support in canonical.
 
-2. Location recognition robustness for noisy ASR:
+3. Location recognition robustness for noisy ASR:
 - unknown tokens are now dropped safely, but false negatives can reduce recall until user уточняет город.
 
-3. Prompt/legacy residue in monolithic controller:
+4. Prompt/legacy residue in monolithic controller:
 - runtime path is locked, but `stage/role/meta` code still exists in controller and logs, increasing maintenance risk.
 
-4. Query trace consistency for mixed request types:
+5. Query trace consistency for mixed request types:
 - `interaction_show/next` can reflect previously built candidate pools; when debugging, always compare with latest `/upload` turn trace.
+
+6. Documentation consolidation:
+- active runtime contract now exists across `EXECUTION_PATH_CONTRACT`, `CURRENT_EXECUTION_PLAN`, `FINAL_SCOPE`, `INSIGHTS_TARGET_CONTRACT`, and `GEO_CATALOG_FROM_FEED`;
+- next cleanup should either keep these in sync or consolidate into fewer runtime docs.

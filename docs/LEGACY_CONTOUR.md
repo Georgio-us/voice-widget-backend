@@ -1,6 +1,6 @@
 # Legacy Contour (Search vs Orchestration)
 
-Last updated: 2026-04-28
+Last updated: 2026-05-14
 Branch: `Split`
 Status: boundary document for cleanup decisions.
 
@@ -124,8 +124,25 @@ Extraction/runtime contract updates:
 3. Added `locationsRaw` as explicit extraction source and canonical priority (`locationsRaw -> location`).
 4. Unknown multi-location token sets are dropped from query instead of leaking as free-text location filter.
 
+### Iteration 8 (2026-05-14)
+
+Runtime contract hardening:
+
+1. Backend-owned manager CTA introduced via explicit `ui.systemEvent=open_manager`.
+2. Frontend no longer lets stale/inferred `matchedCount` selection events block explicit manager CTA.
+3. Unsupported geo fallback is state-aware:
+   - initial unsupported/broad geo -> catalog fallback results;
+   - unsupported after previous supported/limited matched search -> manager CTA.
+4. Mixed supported + unsupported geo keeps supported tokens and drops unsupported tokens.
+5. Coastal phrases are canonicalized to `features.near_sea`, not `orientation` or `location`.
+
 ## Practical Decision For Next Iterations
 
 1. No full deletion required in one step.
 2. First objective: enforce zero impact of orchestration fields on candidate filtering.
 3. After that, prune legacy branches safely in small slices.
+
+Current legacy residue still present:
+1. monolithic `audioController.js` still contains old role/stage/handoff/reference scaffolding;
+2. deprecated GPT analysis code remains in file but is not active in main execution path;
+3. `/interaction` can reuse/extend session candidate queues, so latest `/upload` trace remains the source of truth for search debugging.

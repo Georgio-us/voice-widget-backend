@@ -1,8 +1,8 @@
 # Insights Target Contract (TO-BE)
 
-Last updated: 2026-04-30  
+Last updated: 2026-05-14  
 Branch: `Split`  
-Status: design baseline for phased implementation.
+Status: runtime target contract, mostly implemented through `canonicalQueryV1`.
 
 Companion docs:
 - `docs/INSIGHTS_AS_IS.md` (current behavior)
@@ -65,6 +65,8 @@ All fields used in search must be canonicalized before query build.
 3. Enums/slugs: map multilingual labels to one internal value.
 4. Text locations: keep source text but also compute normalized compare form.
 5. Coastal phrases (`near sea`, `возле моря`, `cerca del mar`) are NOT location; they must map to `features[]` (slug `near_sea`).
+6. Broad market locations (`Spain/Испания/España`) are scope hints, not search filters.
+7. Unsupported cities are never used as free-text location filters.
 
 ## 2) Insights We MUST Collect
 
@@ -132,6 +134,24 @@ Frontend display target:
 Location semantic note:
 1. `city/province/micro-location` must be parsed as separate meanings even if stored in one insight field today.
 2. `near_sea` is always feature semantics, never city/province/location.
+
+## 4.1) Geo Runtime Semantics
+
+Canonical geo status:
+
+| Status | Meaning | Query behavior | UI behavior |
+|---|---|---|---|
+| `supported` | Geo exists in active catalog scope | Apply supported city/province/location filter | `open_results` when matches exist |
+| `limited` | Known limited geo such as Valencia | Apply if meaningful; do not promote | no false promise; manager if no matches |
+| `unsupported` | Off-catalog/unknown geo | Initial: drop location and broad fallback. After supported context: manager CTA | state-aware |
+| `broad` | Country-level market scope (`Spain/Испания/España`) | Drop location and broad fallback | `open_results` when matches exist |
+
+State-aware rules:
+
+1. Initial unsupported-only search falls back to broad catalog selection.
+2. Unsupported geo after previous supported/limited matched search routes to manager CTA.
+3. Mixed supported + unsupported keeps supported tokens and drops unsupported tokens.
+4. Coastal intent survives unsupported city fallback as `features[]=near_sea`.
 
 ## 5) Query Builder Contract (Target)
 

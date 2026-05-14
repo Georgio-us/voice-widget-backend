@@ -217,6 +217,11 @@ const LOCATION_ALIASES = new Map([
   ['barcelona', 'barcelona'],
   ['мадрид', 'madrid'],
   ['madrid', 'madrid'],
+  ['испания', 'spain'],
+  ['испании', 'spain'],
+  ['spain', 'spain'],
+  ['espana', 'spain'],
+  ['españa', 'spain'],
   ['коста бланка', 'costa blanca'],
   ['costa blanca', 'costa blanca'],
   ['costa blanca south', 'costa blanca south'],
@@ -299,6 +304,7 @@ const SUPPORTED_GEO_TOKENS = new Set([
 
 const LIMITED_GEO_TOKENS = new Set(['valencia']);
 const UNSUPPORTED_GEO_TOKENS = new Set(['malaga', 'barcelona', 'madrid', 'costa del sol']);
+const BROAD_GEO_TOKENS = new Set(['spain']);
 
 const MICRO_LOCATION_HINTS = [
   'punta prima',
@@ -432,6 +438,43 @@ const parseLocationSemantics = (rawValue) => {
   return out;
 };
 
+const parseMixedSupportedLocationTokens = (tokens = []) => {
+  const cities = [];
+  const unsupported = [];
+  const limited = [];
+  const provinces = new Set();
+
+  for (const token of Array.isArray(tokens) ? tokens : []) {
+    const normalized = normalizeLocationToken(token);
+    if (!normalized) continue;
+
+    if (UNSUPPORTED_GEO_TOKENS.has(normalized)) {
+      unsupported.push(normalized);
+      continue;
+    }
+
+    const isSupported =
+      SUPPORTED_GEO_TOKENS.has(normalized) ||
+      LIMITED_GEO_TOKENS.has(normalized) ||
+      CITY_TO_PROVINCE.has(normalized) ||
+      LOCATION_PROVINCES.has(normalized);
+
+    if (!isSupported) continue;
+
+    cities.push(normalized);
+    if (LIMITED_GEO_TOKENS.has(normalized)) limited.push(normalized);
+    const province = CITY_TO_PROVINCE.get(normalized) || (LOCATION_PROVINCES.has(normalized) ? normalized : null);
+    if (province) provinces.add(province);
+  }
+
+  return {
+    cities: Array.from(new Set(cities)),
+    unsupported: Array.from(new Set(unsupported)),
+    limited: Array.from(new Set(limited)),
+    province: provinces.size === 1 ? Array.from(provinces)[0] : null
+  };
+};
+
 const resolveGeoStatus = ({ locationExtraction, locationSemantics }) => {
   if (typeof locationSemantics?.coastCatalog === 'string' && Array.isArray(locationSemantics?.cities) && locationSemantics.cities.length > 0) {
     return {
@@ -463,7 +506,11 @@ const resolveGeoStatus = ({ locationExtraction, locationSemantics }) => {
   const hasSupported = allTokens.some((t) => SUPPORTED_GEO_TOKENS.has(t));
   const hasLimited = allTokens.some((t) => LIMITED_GEO_TOKENS.has(t));
   const hasUnsupported = allTokens.some((t) => UNSUPPORTED_GEO_TOKENS.has(t));
+  const hasBroad = allTokens.some((t) => BROAD_GEO_TOKENS.has(t));
 
+  if (hasBroad && !hasSupported && !hasLimited) {
+    return { status: 'broad', reason: 'broad_catalog_geo', tokens: allTokens };
+  }
   if (hasUnsupported && !hasSupported && !hasLimited) {
     return { status: 'unsupported', reason: 'off_catalog_geo', tokens: allTokens };
   }
@@ -489,7 +536,7 @@ const normalizeOrientation = (v) => {
   if (/(south|sur|юг|\bs\b)/.test(s)) return 'south';
   if (/(east|este|восток|\be\b)/.test(s)) return 'east';
   if (/(west|oeste|запад|\bw\b|\bo\b)/.test(s)) return 'west';
-  return s;
+  return null;
 };
 
 const normalizeFeatureSlug = (v) => {
@@ -556,6 +603,9 @@ const extractFromText = (text = '') => {
   if (airport) out.distanceAirportKmMax = toDistanceKm(airport[1], airport[2]);
 
   const features = [];
+  if (/(возле моря|у моря|рядом с морем|на берегу|берег|побереж|возле пляжа|рядом с пляжем|near sea|near the sea|near beach|near the beach|coast|coastal|cerca del mar|cerca de la playa|playa)/.test(s)) {
+    features.push('near_sea');
+  }
   const featureChecks = [
     'sea view', 'near the sea', 'pool views', 'mountain views', 'golf', 'first line', 'open views', 'village views'
   ];
@@ -673,6 +723,27 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   if (extractionLocationSource) {
     locationSemantics = parseLocationSemantics(extractionLocationSource);
     geo = resolveGeoStatus({ locationExtraction, locationSemantics });
+    const mixedLocation = rawLocationsList.length > 1
+      ? parseMixedSupportedLocationTokens(rawLocationsList)
+      : null;
+    if (mixedLocation && mixedLocation.cities.length > 0) {
+      locationSemantics = {
+        ...locationSemantics,
+        cities: mixedLocation.cities,
+        city: mixedLocation.cities.length === 1 ? mixedLocation.cities[0] : null,
+        province: mixedLocation.province,
+        unsupported: mixedLocation.unsupported,
+        limited: mixedLocation.limited,
+        mixedSupported: true
+      };
+      if (mixedLocation.unsupported.length > 0) {
+        droppedFields.push({
+          field: 'location',
+          reason: 'unsupported_location_tokens_ignored',
+          value: mixedLocation.unsupported
+        });
+      }
+    }
     const coastLike = Array.isArray(locationSemantics?.featureHints) && locationSemantics.featureHints.includes('near_sea');
     if (coastLike) {
       const f = mergeFeatures(sourceInsights.features, 'near_sea', inferred.features);
@@ -693,6 +764,10 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
         // do not fallback to a free-text location filter.
         if ((rawLocationsList.length > 0 && !chosenLocationToken) || locationSemantics?.unresolvedMulti === true) {
           droppedFields.push({ field: 'location', reason: 'unknown_location_tokens', value: rawLocationsList });
+        } else if (geo?.status === 'unsupported') {
+          droppedFields.push({ field: 'location', reason: 'unsupported_location_catalog_fallback', value: extractionLocationSource });
+        } else if (geo?.status === 'broad') {
+          droppedFields.push({ field: 'location', reason: 'broad_location_catalog_fallback', value: extractionLocationSource });
         } else if (locationSemantics?.unresolvedGeneric === true) {
           droppedFields.push({ field: 'location', reason: 'generic_location_token', value: extractionLocationSource });
         } else {

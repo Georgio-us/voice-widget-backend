@@ -1,6 +1,6 @@
 # Execution Path Contract (Locked)
 
-Last updated: 2026-05-05  
+Last updated: 2026-05-14  
 Branch: `Split`  
 Status: mandatory runtime contract.
 
@@ -57,6 +57,27 @@ These values may exist for UX/logging only, but MUST NOT participate in:
    - single number `X` => `minPrice` (current product rule)
 10. `minPrice` softening (`*0.8`) remains enabled; `maxPrice` is strict (no softening).
 
+## Geo Selection Contract
+
+Geo is part of canonical search policy, not prompt-only behavior.
+
+Statuses:
+1. `supported`: requested geo is in active catalog scope.
+2. `limited`: known limited area; do not promote, but do not deny categorically.
+3. `unsupported`: requested geo is outside active catalog scope or unknown.
+4. `broad`: broad market geo such as `Spain/Испания/España`.
+
+Runtime rules:
+1. `supported_geo_rewrite` -> update effective query and emit selection results.
+2. `mixed_supported_unsupported` -> keep supported tokens, drop unsupported tokens with reason `unsupported_location_tokens_ignored`, emit selection results.
+3. `unsupported_initial_search` -> drop unsupported location with reason `unsupported_location_catalog_fallback`, use broad catalog fallback, emit selection results.
+4. `broad_initial_search` -> drop broad location with reason `broad_location_catalog_fallback`, use broad catalog fallback, emit selection results.
+5. `unsupported_after_supported_search` -> do not silently fallback to previous/broad catalog; emit manager CTA.
+6. Coastal intent (`near sea`, `возле моря`, `на берегу`, `побережье`, `cerca del mar`) maps to `features[]=near_sea`, never to `location` or `orientation`.
+
+The distinction between initial fallback and manager escalation is session-aware:
+`unsupported_after_supported_search` is true only when previous `queryTraceV1` had supported/limited geo, effective geo filter, and matched candidates.
+
 ## Debug Contract
 
 Debug must show runtime truth, not inferred UI state:
@@ -74,8 +95,9 @@ Debug may show `stage/role/meta` only in separate `metadata` section clearly mar
 Main assistant runtime call uses only:
 1. `BASE_SYSTEM_PROMPT`
 2. `EXECUTION_LOCKED` instruction
-3. language instruction
-4. chronological `user/assistant` dialog history
+3. `GEO_FACTS_V1` dynamic system message built from current `queryTraceV1`
+4. language instruction
+5. chronological `user/assistant` dialog history
 
 Disabled from active main-call prompt path:
 1. `RMV3_SERVER_FACTS_V1` system message
@@ -88,11 +110,23 @@ These layers are legacy orchestration/diagnostic context and can introduce behav
 
 ## UX Manager Escalation Contract
 
+Manager CTA is backend-owned. Frontend must render explicit `ui.systemEvent` above any inferred `matchedCount` selection action.
+
+Backend emits `ui.systemEvent={type:'action', action:'open_manager'}` when:
+1. current message produced no new extracted fields (`no_new_insights`);
+2. current message has manager/schedule/legal/mortgage/installment/process intent;
+3. current geo is unsupported after a previous supported/limited search context.
+
 When user message is outside direct selection update scope (legal flow, mortgage/installments, process details):
 1. Assistant gives a short, non-committal informational answer.
 2. Assistant explicitly mentions the UX path: user can press `Связаться с менеджером` button below.
-3. This mention is conversational only; search query construction still stays strictly `insights -> canonical -> post_validation_query`.
+3. Backend must guarantee the button via `ui.systemEvent`; this is not a frontend heuristic.
 4. Manager escalation UX MUST NOT mutate `insights` by itself.
+
+Selection CTA is also explicit/inferred from runtime trace:
+1. If backend provides `ui.systemEvent`, frontend renders it and does not infer another action from stale `matchedCount`.
+2. If no explicit event exists and `queryTraceV1.matchedCount > 0`, frontend may emit `open_results`.
+3. A previous valid candidate pool must not block `open_manager` for a no-new-insights turn.
 
 ## Acceptance Criteria
 

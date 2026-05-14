@@ -410,6 +410,18 @@ const detectScheduleIntent = (text = '') => {
   return /(записать|записаться|просмотр(ы)?|встретить|встреч(а|у)|перезвон|связать|связаться|передать\s+менеджеру|передай\s+менеджеру)/i.test(t);
 };
 
+const detectManagerCtaIntent = (text = '') => {
+  const t = String(text || '').toLowerCase();
+  if (!t) return false;
+  return (
+    detectScheduleIntent(t) ||
+    /(менеджер|консультац|связаться|контакт|перезвон|позвон)/i.test(t) ||
+    /(ипотек|рассроч|кредит|документ|налог|оформлен|сделк|юрист|юридическ)/i.test(t) ||
+    /\b(manager|contact|callback|mortgage|installment|loan|documents?|tax(?:es)?|legal|lawyer|viewing|appointment)\b/i.test(t) ||
+    /\b(gerente|contactar|hipoteca|cuotas?|credito|crédito|documentos?|impuestos?|legal|abogado|visita|cita)\b/i.test(t)
+  );
+};
+
 // 🆕 Sprint VI / Task #2: явная фиксация explicit choice по строгому whitelist (без LLM)
 // Разрешённые маркеры (строгий whitelist):
 // - «беру эту»
@@ -2470,8 +2482,10 @@ const buildGeoFactsSystemMessage = (execution = null, rentGeoFacts = null) => {
       'Rules:',
       '- If matchedCount > 0: NEVER say "нет объектов", "нет доступных объектов", "не могу предложить варианты".',
       '- If geoStatus=supported and matchedCount>0: confirm availability and continue qualification.',
+      '- If geoStatus=broad and matchedCount>0: explain that the active catalog is focused on Costa Blanca / Costa Calida and offer to show available catalog options.',
+      '- If geoStatus=unsupported and matchedCount>0: explain that the requested geo is not in the active catalog, then offer available catalog alternatives through the button below.',
       '- If geoStatus=limited and matchedCount=0: say there are currently no available objects in this direction and offer manager/contact button.',
-      '- If geoStatus=unsupported: do not promise availability, explain active coverage (Costa Blanca / Costa Calida), offer manager/contact button.',
+      '- If geoStatus=unsupported and matchedCount=0: do not promise availability, explain active coverage (Costa Blanca / Costa Calida), offer manager/contact button.',
       '- RENT COVERAGE: when user intent is rent/аренда/alquiler, promise availability ONLY inside rentCities/rentProvinces from this block.',
       '- If user asks rent outside rentCities/rentProvinces: do not claim available listings there; explain current rent coverage and offer manager/contact button.'
     ].join('\n')
@@ -2547,6 +2561,36 @@ const sanitizeShortTermRentReminder = (text = '', userText = '') => {
     .replace(/we\s+only\s+work\s+with\s+short[\s-]?term\s+rentals\.?\s*/i, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+};
+
+const hasSupportedSearchContext = (trace = null) => {
+  if (!trace || typeof trace !== 'object') return false;
+  const status = trace?.geo?.status || null;
+  const matchedCount = Number.isInteger(trace?.matchedCount) ? trace.matchedCount : 0;
+  const q = trace?.postValidationQuery || {};
+  const hasEffectiveGeo =
+    (Array.isArray(q.cities) && q.cities.length > 0) ||
+    !!q.province ||
+    !!q.location;
+  return (status === 'supported' || status === 'limited') && matchedCount > 0 && hasEffectiveGeo;
+};
+
+const buildManagerSystemEvent = (req, reason = 'no_new_insights') => {
+  const lang = normalizeUiLang(req?.body?.lang || req?.query?.lang || 'ru');
+  const textByLang = {
+    ru: 'Связаться с менеджером',
+    en: 'Contact manager',
+    es: 'Contactar con gerente'
+  };
+  return {
+    type: 'action',
+    text: textByLang[lang] || textByLang.ru,
+    action: 'open_manager',
+    payload: {
+      eventId: `mgr_${Date.now()}`,
+      reason
+    }
+  };
 };
 
 // ====== Вспомогательные функции профиля/стадий/META ======
@@ -3602,7 +3646,30 @@ const transcribeAndRespond = async (req, res) => {
     
     // Build deterministic execution facts BEFORE assistant generation,
     // so LLM gets grounded geo/runtime signals for the current turn.
+    const previousQueryTraceV1 = session.queryTraceV1 || null;
     const baseExecution = await findBestProperties(session.insights, 100);
+    const unsupportedAfterSupportedContext =
+      baseExecution?.geo?.status === 'unsupported' &&
+      hasSupportedSearchContext(previousQueryTraceV1);
+    if (unsupportedAfterSupportedContext) {
+      baseExecution.candidates = [];
+      baseExecution.matchedCount = 0;
+      baseExecution.postValidationQuery = { ...(baseExecution.postValidationQuery || {}) };
+      baseExecution.relaxed = {
+        ...(baseExecution.relaxed || {}),
+        used: false,
+        dropped: Array.from(new Set([...(baseExecution.relaxed?.dropped || []), 'unsupported_geo_after_supported_context'])),
+        message: null
+      };
+      baseExecution.droppedFields = [
+        ...(Array.isArray(baseExecution.droppedFields) ? baseExecution.droppedFields : []),
+        {
+          field: 'location',
+          reason: 'unsupported_geo_after_supported_context',
+          value: baseExecution?.locationExtraction?.raw || null
+        }
+      ];
+    }
     session.queryTraceV1 = {
       sourceInsights: baseExecution.sourceInsights,
       locationExtraction: baseExecution.locationExtraction || null,
@@ -3677,6 +3744,7 @@ const transcribeAndRespond = async (req, res) => {
     // 🔎 Детектор намерения/вариантов
     const { show, variants } = detectCardIntent(transcription);
     const schedule = detectScheduleIntent(transcription);
+    const managerCtaIntent = detectManagerCtaIntent(transcription);
 
     // UI extras and cards container
     let cards = [];
@@ -3746,6 +3814,19 @@ const transcribeAndRespond = async (req, res) => {
     // Если пользователь просит запись/встречу — (удалено) лид-форма не используется
 
     // (удалено) проактивные предложения лид-формы
+    if (!DISABLE_SERVER_UI && (unsupportedAfterSupportedContext || managerCtaIntent || !Array.isArray(extractedFields) || extractedFields.length === 0)) {
+      ui = {
+        ...(ui || {}),
+        systemEvent: buildManagerSystemEvent(
+          req,
+          unsupportedAfterSupportedContext
+            ? 'unsupported_geo_after_supported_context'
+            : managerCtaIntent
+            ? (schedule ? 'schedule_intent' : 'manager_cta_intent')
+            : 'no_new_insights'
+        )
+      };
+    }
 
     addMessageToSession(sessionId, 'assistant', botResponse);
 

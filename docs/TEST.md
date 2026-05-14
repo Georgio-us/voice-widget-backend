@@ -1,6 +1,6 @@
 # Тест
 
-Дата: 2026-05-13  
+Дата: 2026-05-14  
 Цель: безопасный smoke-набор перед клиентскими тестами (без провокации известных edge-case формулировок).
 
 ## Как запускать
@@ -45,8 +45,24 @@
 Запрос: `Покажите объекты в Барселоне.`  
 Ожидаемо:
 - ассистент не обещает подборку по Барселоне,
-- уводит в поддерживаемые направления/менеджера,
-- не должно быть ложной “подборки по Барселоне”.
+- объясняет доступные направления,
+- появляется кнопка `Смотреть подборку`,
+- карточки не должны быть представлены как “Барселона”.
+
+### RU-4b Unsupported after supported context
+Шаг 1: `Ищу квартиру в Мурсии в покупку.`
+Шаг 2: `А в Жироне есть?`
+Ожидаемо:
+- шаг 1 даёт подборку по supported geo,
+- шаг 2 не делает молчаливый fallback обратно в каталог,
+- появляется кнопка `Связаться с менеджером`.
+
+### RU-4c Broad geo
+Запрос: `Хочу купить квартиру в Испании.`
+Ожидаемо:
+- `geo.status=broad`,
+- локация Испания не используется как фильтр,
+- появляется кнопка `Смотреть подборку`.
 
 ### RU-5 Lead from card
 Шаг 1: `Ищу квартиру в Аликанте в покупку.`  
@@ -87,7 +103,16 @@ Expected:
 Prompt: `Show me properties in Madrid.`  
 Expected:
 - assistant does not claim active Madrid inventory,
-- offers supported areas / manager route.
+- explains supported areas,
+- shows `Open selection`,
+- cards are not presented as Madrid inventory.
+
+### EN-4b Unsupported after supported context
+Step 1: `I want to buy an apartment in Murcia.`
+Step 2: `What about Girona?`
+Expected:
+- step 1 returns supported selection,
+- step 2 renders `Contact manager`, not silent broad fallback.
 
 ### EN-5 Lead from card
 Step 1: `I want to buy an apartment in Alicante.`  
@@ -126,7 +151,16 @@ Expected:
 Prompt: `Muéstrame propiedades en Barcelona.`  
 Expected:
 - no prometer inventario activo en Barcelona,
-- desvío a zonas soportadas / manager.
+- explicar zonas soportadas,
+- mostrar `Ver selección`,
+- las tarjetas no deben presentarse como inventario de Barcelona.
+
+### ES-4b Zona no soportada después de zona soportada
+Paso 1: `Quiero comprar piso en Murcia.`
+Paso 2: `¿Y en Girona?`
+Expected:
+- paso 1 devuelve selección soportada,
+- paso 2 muestra `Contactar con gerente`, no fallback amplio silencioso.
 
 ### ES-5 Lead from card
 Paso 1: `Quiero comprar piso en Alicante.`  
@@ -142,5 +176,5 @@ Expected:
 - `PASS/FAIL`
 - краткий факт (1 строка)
 - debug ключи: `operation`, `type`, `location`, `matchedCount`
+- для geo-тестов: `geo.status`, `droppedFields.reason`, `ui.systemEvent.action`
 - для lead-тестов: `leadId`, `Property`, `Language`, `REF ОБЪЕКТА`.
-

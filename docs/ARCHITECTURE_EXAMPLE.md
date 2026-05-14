@@ -1,8 +1,8 @@
 # Architecture Example (Canonical Search Flow)
 
-Last updated: 2026-04-30
+Last updated: 2026-05-14
 Branch: `Split`
-Status: target execution model for deterministic AI-only selection.
+Status: current architecture summary for deterministic selection and UI events.
 
 ## Goal
 
@@ -17,8 +17,9 @@ Define one linear path from user request to candidate cards, without hidden side
 5. Canonical mapper normalizes `insights` into one search-safe query object.
 6. Filter engine applies this query to properties dataset.
 7. Candidate pool is produced and ordered.
-8. Frontend renders candidates as cards.
-9. New user constraints narrow or widen the same pool on next turns.
+8. Backend returns `queryTraceV1`, optional cards, and optional explicit `ui.systemEvent`.
+9. Frontend renders explicit UI event first; otherwise it can infer selection CTA from `matchedCount`.
+10. New user constraints narrow, widen, or redirect the same search state on next turns.
 
 ## Entities In Chain
 
@@ -28,7 +29,8 @@ Define one linear path from user request to candidate cards, without hidden side
 4. `canonical_patch`
 5. `post_validation_query`
 6. `candidate_pool`
-7. `rendered_cards`
+7. `ui.systemEvent`
+8. `rendered_cards`
 
 ## Required Rule
 
@@ -45,13 +47,23 @@ Search behavior must depend only on extracted/normalized business fields (rooms,
 
 Current deterministic rule:
 
-1. Budget from extraction is mapped to `minPrice` only.
+1. Budget range extraction supports `minPrice` and `maxPrice`.
 2. Area from extraction is mapped to `minArea` only.
 3. Candidate filter uses:
    - `price >= minPrice`
+   - `price <= maxPrice` when upper bound is explicit
    - `area >= minArea`
-4. `maxPrice/maxArea` are intentionally not used in this phase.
+4. `minPrice` is softened by `*0.8`; `maxPrice` is strict.
 5. `operation` defaults to `sale` when unresolved.
+
+## Geo/UI Rule (Current Runtime)
+
+1. Supported geo rewrite -> update query and selection CTA.
+2. Mixed supported + unsupported geo -> keep supported tokens, drop unsupported tokens.
+3. Initial unsupported-only geo -> broad catalog fallback selection CTA.
+4. Initial broad geo (`Spain/Испания/España`) -> broad catalog fallback selection CTA.
+5. Unsupported geo after prior supported/limited matched context -> manager CTA.
+6. No-new-insights turn -> manager CTA.
 
 ## Example (2-room)
 
@@ -64,16 +76,19 @@ Current deterministic rule:
 
 ## Current Fit To Code
 
-Partially implemented now:
+Implemented now:
 
 1. Canonical query module exists (`services/canonicalQueryV1.js`).
 2. Candidate execution via canonical query exists (`findBestProperties` -> `executeCanonicalQueryV1`).
 3. Debug already shows chain snapshots (`queryTraceV1`).
+4. Backend-owned explicit UI events exist for manager CTA.
+5. Frontend prioritizes explicit `ui.systemEvent` above inferred selection events.
 
-Not deterministic yet:
+Still not fully clean:
 
 1. Multiple insight writers still mutate state in one request lifecycle.
-2. Legacy orchestration fields still flow through response/log pipeline.
+2. Legacy orchestration code remains in `audioController.js`, but should not affect candidate filtering.
+3. `/interaction` can reuse session candidate queues; latest `/upload` trace remains search source of truth.
 
 ## Iteration Log
 

@@ -1,6 +1,6 @@
 # GEO Catalog From Feed (Estyle)
 
-Last updated: 2026-05-05  
+Last updated: 2026-05-14  
 Branch: `Split`  
 Source: live `GET /api/cards/search?limit=5000` (active feed objects)
 
@@ -139,10 +139,27 @@ Includes north Alicante cluster:
 ### Unsupported (do not promise inventory)
 
 - `Malaga`, `Barcelona`, `Madrid` (and any city absent in feed).
-  Assistant behavior:
-  1. do not build fake geo suggestions;
-  2. explain active coverage (the three coasts);
-  3. offer manager escalation (`Связаться с менеджером`) for off-catalog requests.
+
+Runtime behavior:
+1. Initial unsupported-only search does not produce an empty dead-end. Canonical drops the unsupported location and uses broad catalog fallback.
+2. If the unsupported request contains coastal intent (`near sea`, `возле моря`, `на берегу`, `побережье`), canonical keeps `features.near_sea` and drops only the unsupported city.
+3. Mixed supported + unsupported geo keeps supported tokens and drops unsupported tokens.
+4. Unsupported geo after an existing supported/limited search context routes to manager CTA instead of silently falling back.
+
+Assistant behavior:
+1. never claim active inventory inside unsupported city;
+2. explain active coverage (Costa Blanca / Costa Cálida);
+3. if fallback candidates exist, offer the available catalog selection via the button below;
+4. if backend emits manager CTA, point user to manager for точечная проверка.
+
+### Broad geo
+
+- `Spain`, `Испания`, `España`.
+
+Runtime behavior:
+1. Treat as broad catalog scope, not unsupported city.
+2. Drop broad location as a filter with reason `broad_location_catalog_fallback`.
+3. Show available catalog selection.
 
 ## Notes
 

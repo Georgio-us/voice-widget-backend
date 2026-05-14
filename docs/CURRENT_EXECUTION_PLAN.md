@@ -1,8 +1,8 @@
 # Current Execution Plan (Estyle)
 
-Last updated: 2026-05-05
+Last updated: 2026-05-14
 Branch: `Split`
-Status: XML baseline is live; priority is deterministic AI extraction -> canonical query -> stable candidate pool.
+Status: XML baseline is live; active priority is runtime contract stability for geo fallback, selection CTA, and manager CTA.
 
 Primary contract reference: `docs/EXECUTION_PATH_CONTRACT.md` (locked runtime path).
 
@@ -45,12 +45,12 @@ Primary contract reference: `docs/EXECUTION_PATH_CONTRACT.md` (locked runtime pa
   - `session_logs`
 - Production scope currently driven by XML baseline only.
 
-## Current Investigation Focus
+## Current Runtime Contract Focus
 
 Goal of current iteration: stabilize selection quality for real XML inventory under LLM extraction.
 
 Primary runtime path:
-1. `input -> extraction(mode) -> insights -> canonicalQueryV1 -> candidate pool`.
+1. `input -> extraction(mode) -> insights -> canonicalQueryV1 -> queryTraceV1 -> candidate pool -> ui.systemEvent`.
 
 Scope now:
 1. `EXTRACTION_MODE` switch (`rules | llm | hybrid`) in backend runtime.
@@ -67,6 +67,14 @@ Scope now:
    - `minPrice = minPrice * 0.8`
    - `minArea = minArea * 0.8`
    - `plotArea = plotArea * 0.8`
+8. state-aware geo fallback:
+   - initial unsupported/broad geo -> catalog fallback selection;
+   - mixed supported + unsupported -> supported selection;
+   - unsupported after supported/limited context -> manager CTA.
+9. backend-owned manager CTA:
+   - no-new-insights -> `open_manager`;
+   - manager/schedule/legal/mortgage/process intent -> `open_manager`;
+   - explicit `ui.systemEvent` has priority over inferred frontend selection events.
 
 ## Work Completed In This Track (2026-04-26 .. 2026-04-28)
 
@@ -89,11 +97,21 @@ Scope now:
    - removed `allowedFactsSnapshot` and `post-handoff` system injections from active main-call prompt;
    - main assistant temperature reduced from `0.5` to `0.4`.
 
-## Where We Stop In This Session
+## Latest Coding Slice
 
-Baseline is working and testable on live deploy.
+Latest coding slice applied (2026-05-14):
+1. Backend now emits explicit manager CTA (`ui.systemEvent=open_manager`) for:
+   - no new extracted fields;
+   - schedule/manager/legal/mortgage/process intent;
+   - unsupported geo after previous supported/limited search context.
+2. Frontend explicit `ui.systemEvent` now has priority over inferred `matchedCount` selection actions and renders action events after assistant text.
+3. Canonical geo fallback updated:
+   - `Barcelona/Madrid/Malaga/unknown initial` drops unsupported location and falls back to catalog selection;
+   - `Spain/Испания/España` is `geo.status=broad` and falls back to catalog selection;
+   - mixed `Malaga + Murcia` keeps `Murcia`, drops `Malaga`;
+   - coastal phrases map to `features.near_sea`, not `orientation`.
 
-Latest coding slice applied (2026-04-30):
+Previous completed slice (2026-04-30):
 1. coastal phrase routing hardened in canonical:
    - `возле пляжа` / `рядом с пляжем` / `near beach` now map to `features.near_sea`;
    - coastal intent no longer falls back into `location` token.
@@ -110,9 +128,9 @@ Latest coding slice applied (2026-04-30):
    - if user text has multiple cities, preserve multi-city location phrase (no early collapse to first city).
 
 Next coding slice (planned):
-1. city/province explicit semantics in debug + controlled fallback policy;
-2. multi-city support (`cities[]`) with city-first filtering;
-3. fine-tune relaxed order/weights from real zero-result transcripts;
+1. live API smoke for geo state machine and manager CTA contract;
+2. update test matrix results after smoke;
+3. prune/update stale documentation now that runtime contract is explicit;
 4. continue CRM outbound contract work (`docs/LEAD_CRM_CONTRACT.md`) after selection stabilization.
 11. Text `show` heuristic is soft-disabled in runtime:
    - `покажи/show/muestra` no longer auto-opens card flow by text intent;
