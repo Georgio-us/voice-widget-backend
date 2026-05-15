@@ -149,13 +149,13 @@ Recommendation:
 
 ## 4.4) DB Clone / Transfer (existing client DB -> new client DB)
 
-Use full Postgres DSN (`postgresql://...`) for source and target databases.
-Do not use service public/web URL.
+**Important:** You must use the **Public DSN (TCP Proxy URL)** for both source and target databases (e.g., `postgresql://...proxy.rlwy.net:12345/railway`), NOT the internal `.internal` URLs. 
+This is required when running the command from your local terminal.
 
-Clone data and schema:
+Clone data and schema (example command):
 
 ```bash
-pg_dump --no-owner --no-privileges "<SOURCE_DATABASE_URL>" | psql "<TARGET_DATABASE_URL>"
+pg_dump --clean --if-exists --no-owner --no-privileges "SOURCE_PUBLIC_URL" | psql "TARGET_PUBLIC_URL"
 ```
 
 Retarget tenant key to new client id (example: `yana`) for all `public.*` tables that actually have `client_id`:

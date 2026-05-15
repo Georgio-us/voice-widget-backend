@@ -16,7 +16,7 @@ const router = express.Router();
 
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
 const STATS_TIMEZONE = String(process.env.STATS_TIMEZONE || process.env.TZ || 'Europe/Kyiv').trim() || 'Europe/Kyiv';
-const MAX_IMAGES = 5;
+const MAX_IMAGES = 10;
 const IMAGE_WARN_SIZE_MB = (() => {
   const parsed = Number(String(process.env.ADMIN_WARN_IMAGE_MB || '').trim());
   if (!Number.isFinite(parsed) || parsed <= 0) return 5;
@@ -38,7 +38,7 @@ const uploadImages = (req, res, next) => {
   upload.array('images', MAX_IMAGES)(req, res, (err) => {
     if (!err) return next();
     if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_COUNT') return res.status(400).json({ ok: false, error: 'TOO_MANY_IMAGES_MAX_5' });
+      if (err.code === 'LIMIT_FILE_COUNT') return res.status(400).json({ ok: false, error: 'TOO_MANY_IMAGES_MAX_10' });
       return res.status(400).json({ ok: false, error: 'UPLOAD_VALIDATION_ERROR', code: err.code });
     }
     if (String(err?.message || '') === 'UNSUPPORTED_IMAGE_MIME') {

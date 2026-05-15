@@ -724,6 +724,39 @@ const applyHardGateByInsights = (properties = [], insights = {}) => {
   if (rcNeedle) {
     list = list.filter((p) => getPropertyComplex(p).toLowerCase().includes(rcNeedle));
   }
+
+  // --- Strict District Gates ---
+  if (insights?.arcadia === true) {
+    list = list.filter((p) => {
+      const d = String(p?.district || '').toLowerCase();
+      const n = String(p?.neighborhood || '').toLowerCase();
+      return d.includes('аркадия') || n.includes('аркадия') || d.includes('arcadia') || n.includes('arcadia');
+    });
+  }
+  if (insights?.center === true) {
+    list = list.filter((p) => {
+      const d = String(p?.district || '').toLowerCase();
+      const n = String(p?.neighborhood || '').toLowerCase();
+      return d.includes('центр') || n.includes('центр') || d.includes('center') || n.includes('center');
+    });
+  }
+
+  // --- Strict Feature Gates ---
+  if (insights?.parking === true) {
+    list = list.filter((p) => {
+      const f = p?.features || {};
+      return f.parking === true || f.parking === 'true' || f.parking === 1 || f.parking === '1';
+    });
+  }
+  if (insights?.balconyLoggia === true) {
+    list = list.filter((p) => {
+      const f = p?.features || {};
+      const hasBalcony = f.balcony === true || f.balcony === 'true' || f.balcony === 1 || f.balcony === '1';
+      const hasLoggia = f.loggia === true || f.loggia === 'true' || f.loggia === 1 || f.loggia === '1';
+      return hasBalcony || hasLoggia;
+    });
+  }
+
   return list;
 };
 

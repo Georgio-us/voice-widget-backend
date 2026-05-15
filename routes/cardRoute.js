@@ -371,15 +371,11 @@ router.get('/search', async (req, res) => {
       list = list.filter((p) => districtTokens.includes(normalizeDistrictValue(p.district)));
     }
 
-    if (type) {
-      const t = String(type).trim();
-      list = list.filter(p => p.property_type === t);
-    }
+    const effectiveType = type ? String(type).trim() : 'apartment';
+    list = list.filter(p => p.property_type === effectiveType);
 
-    if (operation) {
-      const want = normalizeOperationValue(operation);
-      list = list.filter((p) => normalizeOperationValue(p.operation) === want);
-    }
+    const effectiveOp = operation ? normalizeOperationValue(operation) : 'sale';
+    list = list.filter((p) => normalizeOperationValue(p.operation) === effectiveOp);
 
     if (roomsTokens.length > 0) {
       list = list.filter((p) => {
