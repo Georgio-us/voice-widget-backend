@@ -474,28 +474,7 @@ export async function startTelegramBot() {
 
   const bot = new Telegraf(token);
   const miniAppUrl = String(process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL).trim();
-  const webAppButtonText = 'Talk to AI / Catalog 🏗️';
-  if (!miniAppUrl) {
-    console.warn('⚠️ FRONTEND_URL не задан. WebApp-кнопки будут ограничены.');
-  }
-
-  const setMenuButton = async (chatId = null) => {
-    if (!miniAppUrl) return;
-    try {
-      await bot.telegram.callApi('setChatMenuButton', {
-        ...(chatId ? { chat_id: chatId } : {}),
-        menu_button: {
-          type: 'web_app',
-          text: webAppButtonText,
-          web_app: { url: miniAppUrl }
-        }
-      });
-    } catch (error) {
-      console.warn('⚠️ Не удалось установить Telegram Menu Button:', error?.message || error);
-    }
-  };
-
-  await setMenuButton();
+  // Removed setMenuButton to allow manual config in BotFather
 
   bot.start(async (ctx) => {
     let newUserJoinedPayload = null;
@@ -551,7 +530,7 @@ export async function startTelegramBot() {
       ? buildMiniAppSelectionUrl(miniAppUrl, selectionToken)
       : buildMiniAppUrl(miniAppUrl, propId);
 
-    await setMenuButton(ctx.chat?.id);
+    // await setMenuButton(ctx.chat?.id); // Disabled to prevent overwriting BotFather settings
 
     const adminAlerts = isAdmin ? await getAlertsConfig(BOT_CLIENT_ID, tgUserId) : null;
     const inlineKeyboardMarkup = isAdmin ? getAdminMenuKeyboard(launchUrl, adminAlerts) : getOpenCatalogKeyboard(launchUrl);
