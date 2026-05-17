@@ -5,7 +5,7 @@ import { OpenAI } from 'openai';
 import { getAllProperties } from '../services/propertiesRepository.js';
 import { listResidentialComplexes } from '../services/residentialComplexesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
-import { buildDemoCatalogContext } from '../services/demoCatalogContextService.js';
+import { buildDemoCatalogContext, buildDemoPromptFlavorContext } from '../services/demoCatalogContextService.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { readTelegramIdentityFromRequest } from '../services/telegramInitDataService.js';
@@ -3145,11 +3145,15 @@ const transcribeAndRespond = async (req, res) => {
     const demoCatalogContextBlock = demoCatalogContext?.content
       ? `\n${demoCatalogContext.content}\n`
       : '';
+    const demoPromptFlavorContext = buildDemoPromptFlavorContext(promptClientId);
+    const demoPromptFlavorContextBlock = demoPromptFlavorContext?.content
+      ? `\n${demoPromptFlavorContext.content}\n`
+      : '';
 
     const baseSystemPrompt = BASE_SYSTEM_PROMPT.replace(
       '{{RC_CATALOG}}',
       rcCatalogStr ? `\nAVAILABLE RESIDENTIAL COMPLEXES (CATALOG):\n${rcCatalogStr}\n` : ''
-    ) + demoCatalogContextBlock;
+    ) + demoCatalogContextBlock + demoPromptFlavorContextBlock;
     const metaRepairHint = session?.metaContract?.needsRepairHint === true
       ? {
           role: 'system',
@@ -3536,7 +3540,8 @@ const transcribeAndRespond = async (req, res) => {
         updatesApplied: extractionReport.updatesApplied === true,
         fallbackUsed: extractionReport.fallbackUsed === true,
         invalidFields: extractionInvalidFields,
-        demoCatalogContext: demoCatalogContext?.meta || null
+        demoCatalogContext: demoCatalogContext?.meta || null,
+        demoPromptFlavor: demoPromptFlavorContext?.meta || null
       },
       totalMatches,
       strictMatches,

@@ -13,6 +13,11 @@ let cache = {
 
 const isEnabled = () => TRUE_VALUES.has(String(process.env.DEMO_CATALOG_CONTEXT_ENABLED || '').trim().toLowerCase());
 
+const getPromptFlavor = () => String(
+  process.env.DEMO_PROMPT_FLAVOR ||
+  (TRUE_VALUES.has(String(process.env.DEMO_SHOWROOM_PROMPT_ENABLED || '').trim().toLowerCase()) ? 'showroom' : '')
+).trim().toLowerCase();
+
 const getTargetClientId = () => String(
   process.env.DEMO_CATALOG_CONTEXT_CLIENT_ID ||
   DEFAULT_CLIENT_ID
@@ -127,6 +132,40 @@ const buildPromptBlock = (items, meta) => {
     ...lines
   ].join('\n');
 };
+
+const buildShowroomPromptBlock = () => [
+  'DEMO SHOWROOM RESPONSE MODE (client_id=demo only):',
+  'Purpose: make the demo bot feel catalog-aware while preserving execution truth.',
+  'Rules:',
+  '- If the user asks broad catalog questions such as "что есть", "какие объекты", "что есть на Таирова", use DEMO CATALOG CONTEXT as orientation data.',
+  '- You may mention up to 3-5 relevant residential complexes, districts, or micro-areas from DEMO CATALOG CONTEXT as examples of directions available in the demo catalog.',
+  '- Phrase this as catalog orientation, not as final confirmed search results. Prefer wording like: "В демо-каталоге вижу направления..." or "Могу показать варианты..."',
+  '- Do not mention exact property IDs, exact counts, or exact prices before server cards/results are available.',
+  '- Do not ask for budget/type if the user request can already be executed with default sale/apartment browsing and location/context constraints.',
+  '- If enough intent exists, confirm the update and say you are opening/updating the selection.',
+  '- Keep the answer concise, but warmer and more concrete than the default safe fallback.'
+].join('\n');
+
+export function buildDemoPromptFlavorContext(clientId) {
+  const safeClientId = String(clientId || process.env.CLIENT_ID || '').trim();
+  const targetClientId = getTargetClientId();
+  const flavor = getPromptFlavor();
+  const enabled = flavor === 'showroom';
+  const applied = enabled && safeClientId && safeClientId === targetClientId;
+  return {
+    content: applied ? buildShowroomPromptBlock() : '',
+    meta: {
+      enabled,
+      applied,
+      clientId: safeClientId || null,
+      targetClientId,
+      flavor: flavor || null,
+      reason: !enabled
+        ? 'disabled'
+        : (!safeClientId || safeClientId !== targetClientId ? 'client_mismatch' : 'applied')
+    }
+  };
+}
 
 export async function buildDemoCatalogContext(clientId) {
   const safeClientId = String(clientId || process.env.CLIENT_ID || '').trim();
