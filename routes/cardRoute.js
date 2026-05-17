@@ -5,6 +5,7 @@ import {
 } from '../services/propertiesRepository.js';
 import { listResidentialComplexes } from '../services/residentialComplexesRepository.js';
 import { buildScoreContext as buildUnifiedScoreContext, annotatePropertyScoresByContext } from '../services/scoringEngine.js';
+import { normalizeResidentialComplexName, residentialComplexInputToArray } from '../services/residentialComplexMatcher.js';
 
 const router = express.Router();
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
@@ -351,7 +352,9 @@ router.get('/search', async (req, res) => {
     const onlySmart = toBool(smart);
     const onlyArcadia = toBool(arcadia);
     const onlyRc = toBool(rcOnly);
-    const rcNeedle = normalizeText(residentialComplex);
+    const rcNeedles = residentialComplexInputToArray(residentialComplex)
+      .map((value) => normalizeResidentialComplexName(value))
+      .filter(Boolean);
     const onlyExclusive = toBool(exclusive);
     const onlyCenter = toBool(center);
     const onlyParking = toBool(parking);
@@ -468,8 +471,11 @@ router.get('/search', async (req, res) => {
       list = list.filter((p) => normalizeText(getFeatureComplex(p)).length > 0);
     }
 
-    if (rcNeedle) {
-      list = list.filter((p) => hasToken(getFeatureComplex(p), rcNeedle));
+    if (rcNeedles.length > 0) {
+      list = list.filter((p) => {
+        const complex = normalizeResidentialComplexName(getFeatureComplex(p));
+        return !!complex && rcNeedles.some((needle) => complex === needle || complex.includes(needle));
+      });
     }
 
     // Strict mode if at least one manual filter is actually set.
@@ -491,7 +497,7 @@ router.get('/search', async (req, res) => {
       || onlySmart
       || onlyArcadia
       || onlyRc
-      || hasValue(rcNeedle)
+      || rcNeedles.length > 0
       || onlyExclusive
       || onlyCenter
       || onlyParking

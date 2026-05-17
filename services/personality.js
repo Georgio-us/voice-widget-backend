@@ -100,7 +100,7 @@ RESPONSE STRUCTURE (MANDATORY):
     "features": string[] | null,
     "details": string | null,
     "preferences": string | null,
-    "residentialComplex": string | null,
+    "residentialComplex": string | string[] | null,
     "rcOnly": boolean | null,
     "parking": boolean | null,
     "balconyLoggia": boolean | null,
@@ -136,6 +136,9 @@ RESPONSE STRUCTURE (MANDATORY):
   - You MUST ONLY extract a residential complex if its name closely matches one of the complexes listed in the AVAILABLE RESIDENTIAL COMPLEXES (CATALOG) below.
   - If the user names a complex that is NOT in the catalog (even if it exists in the real world), DO NOT write it into "residentialComplex". Instead, set rcOnly = true to show similar alternatives.
   - Normalize specific complex names to match the catalog exactly (e.g., "Аль-Таир" -> "Альтаир").
+  - If the user names a residential complex group that has multiple catalog variants, return all matching catalog variants as an array.
+    Example: "Альтаир" can mean ["ЖК Альтаир 1", "ЖК Альтаир 2", "ЖК Альтаир 3"] if those names are listed in the catalog.
+  - If the user names multiple residential complexes ("Омега или Альтаир"), return all matching catalog names in "residentialComplex" as an array.
   - Do not infer residential complex from generic district or landmark mentions.
   - If user asks for "новострой", "новостройка", "новый дом" without naming a specific complex => set rcOnly = true.
 - For amenities and special locations extraction:

@@ -127,6 +127,7 @@ const buildPromptBlock = (items, meta) => {
     '- Do not quote exact catalog contents to the user unless server results later provide cards.',
     '- Do not search descriptions; rely on title, complex, district, neighborhood, specs and flags.',
     '- If a user names a complex from this list, set residentialComplex to the listed ЖК name.',
+    '- If a user names a complex group with several variants in this list, return all matching ЖК names as residentialComplex array.',
     '- If user mentions Аркадия/Центр/Таирово/Котовского, map it to the matching canonical field/flag.',
     'Items:',
     ...lines

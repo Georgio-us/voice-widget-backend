@@ -6,6 +6,7 @@ import { getAllProperties } from '../services/propertiesRepository.js';
 import { listResidentialComplexes } from '../services/residentialComplexesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { buildDemoCatalogContext, buildDemoPromptFlavorContext } from '../services/demoCatalogContextService.js';
+import { expandResidentialComplexInput, residentialComplexInputToArray, normalizeResidentialComplexName } from '../services/residentialComplexMatcher.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { readTelegramIdentityFromRequest } from '../services/telegramInitDataService.js';
@@ -66,7 +67,10 @@ const INSIGHTS_RESPONSE_SCHEMA = {
           },
           details: { type: ['string', 'null'] },
           preferences: { type: ['string', 'null'] },
-          residentialComplex: { type: ['string', 'null'] },
+          residentialComplex: {
+            type: ['string', 'array', 'null'],
+            items: { type: 'string' }
+          },
           floorNotFirst: { type: ['boolean', 'null'] },
           floorNotLast: { type: ['boolean', 'null'] },
           rcOnly: { type: ['boolean', 'null'] },
@@ -676,7 +680,7 @@ const getPropertyComplex = (property = {}) =>
   String(property?.features?.complex || property?.features?.display_specs?.complex || '').trim();
 
 const hasRcOnlySignal = (insights = {}) => {
-  const rc = String(insights?.residentialComplex || '').trim();
+  const rc = residentialComplexInputToArray(insights?.residentialComplex).join(', ');
   if (rc) return true;
   const parts = [];
   if (Array.isArray(insights?.features)) parts.push(...insights.features);
@@ -721,9 +725,14 @@ const applyHardGateByInsights = (properties = [], insights = {}) => {
   if (insights?.rcOnly === true || insights?.residentialComplexOnly === true || hasRcOnlySignal(insights)) {
     list = list.filter((p) => getPropertyComplex(p).length > 0);
   }
-  const rcNeedle = String(insights?.residentialComplex || '').trim().toLowerCase();
-  if (rcNeedle) {
-    list = list.filter((p) => getPropertyComplex(p).toLowerCase().includes(rcNeedle));
+  const rcNeedles = residentialComplexInputToArray(insights?.residentialComplex)
+    .map((value) => normalizeResidentialComplexName(value))
+    .filter(Boolean);
+  if (rcNeedles.length) {
+    list = list.filter((p) => {
+      const complex = normalizeResidentialComplexName(getPropertyComplex(p));
+      return !!complex && rcNeedles.some((needle) => complex === needle || complex.includes(needle));
+    });
   }
 
   // --- Strict District Gates ---
@@ -778,7 +787,7 @@ const applyResidentialComplexFallbackFromTranscript = (transcription = '', insig
     rcOnlyApplied = true;
   }
 
-  if (!String(insights.residentialComplex || '').trim()) {
+  if (residentialComplexInputToArray(insights.residentialComplex).length === 0) {
     const cleanupComplexCandidate = (value) => {
       let text = String(value || '').trim();
       if (!text) return '';
@@ -3323,11 +3332,18 @@ const transcribeAndRespond = async (req, res) => {
       const clientId = process.env.CLIENT_ID || 'georgio-us';
       const rcs = await listResidentialComplexes(clientId, { limit: 1000 });
       if (rcs && rcs.length > 0) {
-        const knownRcNames = rcs.map(r => String(r.name).toLowerCase().trim());
-        const currentRc = String(session.insights.residentialComplex || '').toLowerCase().trim();
-        
-        if (currentRc && !knownRcNames.includes(currentRc)) {
-          console.warn(`[RC_VALIDATOR] Rejected unknown RC: "${session.insights.residentialComplex}". Forcing rcOnly=true.`);
+        const rcExpansion = expandResidentialComplexInput(session.insights.residentialComplex, rcs);
+        if (rcExpansion.matched.length > 0) {
+          session.insights.residentialComplex = rcExpansion.matched.length === 1
+            ? rcExpansion.matched[0]
+            : rcExpansion.matched;
+          session.insights.residentialComplexOnly = true;
+          session.insights.rcOnly = true;
+          if (rcExpansion.matched.length > 1) {
+            console.log(`[RC_VALIDATOR] Expanded RC "${rcExpansion.requested.join(', ')}" -> ${rcExpansion.matched.join(' | ')}`);
+          }
+        } else if (rcExpansion.requested.length > 0) {
+          console.warn(`[RC_VALIDATOR] Rejected unknown RC: "${rcExpansion.requested.join(', ')}". Forcing rcOnly=true.`);
           session.insights.residentialComplex = null;
           session.insights.residentialComplexOnly = true;
           session.insights.rcOnly = true;
