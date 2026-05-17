@@ -5,6 +5,7 @@ import { OpenAI } from 'openai';
 import { getAllProperties } from '../services/propertiesRepository.js';
 import { listResidentialComplexes } from '../services/residentialComplexesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
+import { buildDemoCatalogContext } from '../services/demoCatalogContextService.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { readTelegramIdentityFromRequest } from '../services/telegramInitDataService.js';
@@ -3129,10 +3130,10 @@ const transcribeAndRespond = async (req, res) => {
     }
 
     // RMv3 / Fetch RC Catalog to restrict AI hallucination
+    const promptClientId = String(process.env.CLIENT_ID || 'georgio-us').trim();
     let rcCatalogStr = '';
     try {
-      const clientId = process.env.CLIENT_ID || 'georgio-us';
-      const rcs = await listResidentialComplexes(clientId, { limit: 200 });
+      const rcs = await listResidentialComplexes(promptClientId, { limit: 200 });
       if (rcs && rcs.length > 0) {
         rcCatalogStr = rcs.map(r => r.name).join(', ');
       }
@@ -3140,10 +3141,15 @@ const transcribeAndRespond = async (req, res) => {
       console.warn('Failed to load RC catalog for prompt:', e);
     }
 
+    const demoCatalogContext = await buildDemoCatalogContext(promptClientId);
+    const demoCatalogContextBlock = demoCatalogContext?.content
+      ? `\n${demoCatalogContext.content}\n`
+      : '';
+
     const baseSystemPrompt = BASE_SYSTEM_PROMPT.replace(
       '{{RC_CATALOG}}',
       rcCatalogStr ? `\nAVAILABLE RESIDENTIAL COMPLEXES (CATALOG):\n${rcCatalogStr}\n` : ''
-    );
+    ) + demoCatalogContextBlock;
     const metaRepairHint = session?.metaContract?.needsRepairHint === true
       ? {
           role: 'system',
@@ -3529,7 +3535,8 @@ const transcribeAndRespond = async (req, res) => {
         validationError: extractionReport.validationError === true,
         updatesApplied: extractionReport.updatesApplied === true,
         fallbackUsed: extractionReport.fallbackUsed === true,
-        invalidFields: extractionInvalidFields
+        invalidFields: extractionInvalidFields,
+        demoCatalogContext: demoCatalogContext?.meta || null
       },
       totalMatches,
       strictMatches,
