@@ -2,7 +2,7 @@ import { getAllProperties } from './propertiesRepository.js';
 
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on']);
 const DEFAULT_CLIENT_ID = 'demo';
-const DEFAULT_MAX_ITEMS = 120;
+const DEFAULT_MAX_ITEMS = 200;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 let cache = {
@@ -11,23 +11,42 @@ let cache = {
   value: null
 };
 
-const isEnabled = () => TRUE_VALUES.has(String(process.env.DEMO_CATALOG_CONTEXT_ENABLED || '').trim().toLowerCase());
+const envValue = (...names) => {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value !== undefined && String(value).trim() !== '') return value;
+  }
+  return '';
+};
+
+const isEnabled = () => TRUE_VALUES.has(String(envValue(
+  'AI_CATALOG_CONTEXT_ENABLED',
+  'DEMO_CATALOG_CONTEXT_ENABLED'
+)).trim().toLowerCase());
 
 const getPromptFlavor = () => String(
-  process.env.DEMO_PROMPT_FLAVOR ||
+  envValue('AI_ASSISTANT_FLAVOR', 'DEMO_PROMPT_FLAVOR') ||
   (TRUE_VALUES.has(String(process.env.DEMO_SHOWROOM_PROMPT_ENABLED || '').trim().toLowerCase()) ? 'showroom' : '')
 ).trim().toLowerCase();
 
 const getTargetClientId = () => String(
-  process.env.DEMO_CATALOG_CONTEXT_CLIENT_ID ||
+  envValue('AI_CATALOG_CONTEXT_CLIENT_ID', 'DEMO_CATALOG_CONTEXT_CLIENT_ID') ||
   DEFAULT_CLIENT_ID
 ).trim();
 
 const getMaxItems = () => {
-  const parsed = Number.parseInt(String(process.env.DEMO_CATALOG_CONTEXT_MAX_ITEMS || '').trim(), 10);
+  const parsed = Number.parseInt(String(envValue(
+    'AI_CATALOG_CONTEXT_MAX_ITEMS',
+    'DEMO_CATALOG_CONTEXT_MAX_ITEMS'
+  )).trim(), 10);
   if (!Number.isFinite(parsed)) return DEFAULT_MAX_ITEMS;
   return Math.min(Math.max(parsed, 1), 300);
 };
+
+const isDebugEnabled = () => TRUE_VALUES.has(String(envValue(
+  'AI_CATALOG_CONTEXT_DEBUG',
+  'DEMO_CATALOG_CONTEXT_DEBUG'
+)).trim().toLowerCase());
 
 const parseJsonObject = (value) => {
   if (!value) return {};
@@ -120,8 +139,8 @@ const buildPromptBlock = (items, meta) => {
   ].join(' | '));
 
   return [
-    'DEMO CATALOG CONTEXT (client_id=demo, compact snapshot; use only for extraction and constraint mapping, not as final availability statement):',
-    `Scope: active visible demo catalog, sale/apartment. Items included: ${meta.itemsIncluded}/${meta.totalVisible}.`,
+    `ACTIVE CATALOG CONTEXT (client_id=${meta.clientId || '-'}, compact snapshot; use only for extraction and constraint mapping, not as final availability statement):`,
+    `Scope: active visible catalog, sale/apartment. Items included: ${meta.itemsIncluded}/${meta.totalVisible}.`,
     'Rules:',
     '- Use this catalog to recognize complex names, district/micro-area intent, room/price/feature constraints.',
     '- Do not quote exact catalog contents to the user unless server results later provide cards.',
@@ -135,11 +154,11 @@ const buildPromptBlock = (items, meta) => {
 };
 
 const buildShowroomPromptBlock = () => [
-  'DEMO SHOWROOM RESPONSE MODE (client_id=demo only):',
-  'Purpose: make the demo bot feel catalog-aware while preserving execution truth.',
+  'SHOWROOM RESPONSE MODE:',
+  'Purpose: make the bot feel catalog-aware while preserving execution truth.',
   'Rules:',
-  '- If the user asks broad catalog questions such as "что есть", "какие объекты", "что есть на Таирова", use DEMO CATALOG CONTEXT as orientation data.',
-  '- You may mention up to 3-5 relevant residential complexes, districts, or micro-areas from DEMO CATALOG CONTEXT as examples of directions available in the live property base.',
+  '- If the user asks broad catalog questions such as "что есть", "какие объекты", "что есть на Таирова", use ACTIVE CATALOG CONTEXT as orientation data.',
+  '- You may mention up to 3-5 relevant residential complexes, districts, or micro-areas from ACTIVE CATALOG CONTEXT as examples of directions available in the live property base.',
   '- Phrase this as property-base orientation, not as final confirmed search results. Prefer wording like: "В базе вижу направления..." or "Могу показать варианты..."',
   '- Never use the words "demo", "demo catalog", "демо" or "демо-каталог" in user-facing assistant_text.',
   '- Do not mention exact property IDs, exact counts, or exact prices before server cards/results are available.',
@@ -174,7 +193,7 @@ export async function buildDemoCatalogContext(clientId) {
   const targetClientId = getTargetClientId();
   const enabled = isEnabled();
   const maxItems = getMaxItems();
-  const debugEnabled = TRUE_VALUES.has(String(process.env.DEMO_CATALOG_CONTEXT_DEBUG || '').trim().toLowerCase());
+  const debugEnabled = isDebugEnabled();
   const baseMeta = {
     enabled,
     applied: false,
