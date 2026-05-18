@@ -6,6 +6,7 @@ import {
   getSessionInfo,
   clearSessionHttp,
   getStats,
+  handleMiniAppOpen,
   handleInteraction
 } from '../controllers/audioController.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
@@ -153,6 +154,8 @@ router.post('/upload',
   logFileInfo,
   transcribeAndRespond
 );
+
+router.post('/miniapp-open', handleMiniAppOpen);
 
 // 📌 Получить информацию о сессии
 router.get('/session/:sessionId', requireSuperAdminDebug, getSessionInfo);

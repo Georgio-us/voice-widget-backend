@@ -6,6 +6,7 @@ import { getAllProperties } from '../services/propertiesRepository.js';
 import { listResidentialComplexes } from '../services/residentialComplexesRepository.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { buildDemoCatalogContext, buildDemoPromptFlavorContext } from '../services/demoCatalogContextService.js';
+import { pool } from '../services/db.js';
 import { expandResidentialComplexInput, residentialComplexInputToArray, normalizeResidentialComplexName } from '../services/residentialComplexMatcher.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
@@ -13,15 +14,45 @@ import { readTelegramIdentityFromRequest } from '../services/telegramInitDataSer
 import { buildScoreContext, annotatePropertyScoresByContext } from '../services/scoringEngine.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
 import { appendMessage, upsertSessionLog } from '../services/sessionLogger.js';
-import { sendSessionActivityStartToTelegram, updateSessionActivityFinalToTelegram } from '../services/telegramNotifier.js';
 import {
+  notifyNewTelegramUserToTelegram,
+  sendSessionActivityStartToTelegram,
+  updateSessionActivityFinalToTelegram
+} from '../services/telegramNotifier.js';
+import {
+  notifyNewTelegramUserToProjectTelegram,
   sendSessionActivityStartToProjectTelegram,
   updateSessionActivityFinalToProjectTelegram
 } from '../services/projectTelegramNotifier.js';
+import { upsertTelegramUser } from '../services/usersRepository.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
+const BOT_CLIENT_ID = String(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID || 'demo').trim() || 'demo';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
+const getUsersJoinStats = async (clientId = BOT_CLIENT_ID) => {
+  const safeClientId = String(clientId || BOT_CLIENT_ID).trim() || BOT_CLIENT_ID;
+  const fallback = { totalUsers: null, usersToday: null };
+  try {
+    const [{ rows: totalRows }, { rows: todayRows }] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1`,
+        [safeClientId]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1 AND first_seen_at::date = NOW()::date`,
+        [safeClientId]
+      )
+    ]);
+    return {
+      totalUsers: totalRows?.[0]?.c ?? 0,
+      usersToday: todayRows?.[0]?.c ?? 0
+    };
+  } catch (error) {
+    if (error?.code === '42P01' || error?.code === '42703') return fallback;
+    throw error;
+  }
+};
 const INSIGHTS_RESPONSE_SCHEMA = {
   name: 'insights_response',
   schema: {
@@ -3707,6 +3738,59 @@ const transcribeAndRespond = async (req, res) => {
   }
 };
 
+const handleMiniAppOpen = async (req, res) => {
+  try {
+    const identity = readTelegramIdentityFromRequest(req);
+    const verifiedTgUserId = identity?.verified?.ok ? String(identity.verified.tgUserId || '').trim() : '';
+    const body = req.body || {};
+    const tgUserId = verifiedTgUserId || String(body?.tgUserId || '').trim();
+    if (!tgUserId) {
+      return res.status(400).json({ ok: false, error: 'TG_USER_ID_REQUIRED' });
+    }
+
+    const upsertResult = await upsertTelegramUser({
+      clientId: BOT_CLIENT_ID,
+      tgUserId,
+      username: body?.tgUsername || null,
+      firstName: body?.tgFirstName || null,
+      lastName: body?.tgLastName || null,
+      languageCode: body?.tgLanguageCode || null,
+      meta: {
+        source: 'tg_mini_app_open',
+        ...(body?.startParam ? { startParam: String(body.startParam) } : {})
+      }
+    });
+
+    let notified = false;
+    if (upsertResult?.isNew === true) {
+      const stats = await getUsersJoinStats(BOT_CLIENT_ID);
+      const payload = {
+        tgUserId,
+        username: body?.tgUsername || null,
+        firstName: body?.tgFirstName || null,
+        lastName: body?.tgLastName || null,
+        totalUsers: Number.isFinite(stats?.totalUsers) ? stats.totalUsers : null,
+        usersToday: Number.isFinite(stats?.usersToday) ? stats.usersToday : null,
+        at: Date.now()
+      };
+      await Promise.allSettled([
+        notifyNewTelegramUserToTelegram(payload),
+        notifyNewTelegramUserToProjectTelegram(payload)
+      ]);
+      notified = true;
+    }
+
+    return res.json({
+      ok: true,
+      isNew: upsertResult?.isNew === true,
+      notified
+    });
+  } catch (error) {
+    console.error('❌ /api/audio/miniapp-open error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+};
+
 const clearSessionById = (sessionId) => {
   // RMv3: best-effort Telegram final update on explicit clear
   try {
@@ -3926,6 +4010,7 @@ export {
   clearSessionHttp,
   getSessionInfo,
   getStats,
+  handleMiniAppOpen,
   handleInteraction,
   triggerHandoff,
   triggerCompletion,
