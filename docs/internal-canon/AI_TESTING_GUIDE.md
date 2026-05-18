@@ -1,78 +1,171 @@
-# Руководство по тестированию AI-памяти и логики (Live Backend)
+# AI Testing Guide
 
-В этом документе описано, как тестировать логику искусственного интеллекта (память, добавление/удаление фильтров) **напрямую через API живого сервера**, минуя фронтенд. 
-Это полезно для изоляции проблемы: чтобы понять, "тупит" ли промпт GPT-4, или проблема на стороне UI.
+Status: current live/backend testing guide
+Updated: 2026-05-18
 
-## Как устроен Endpoint
+## 1. Purpose
 
-Основной рабочий эндпоинт виджета:
-**`POST /api/audio/upload`**
+Use this guide to test AI extraction, catalog context, residential-complex matching and search behavior directly against a backend endpoint.
 
-Хотя название намекает на аудио, **бекэнд умеет принимать обычный текст**. Это сделано специально для фолбеков и тестирования.
+This isolates whether a problem is caused by:
 
-### Ограничения и правила:
-1. **Content-Type**: Запрос должен отправляться как `multipart/form-data` (form-data). JSON в `req.body` для этого эндпоинта не сработает из-за `multer`.
-2. **sessionId**: Строгий формат. Должен соответствовать регулярке `/^user_\d+_[a-z0-9]+$/` (например: `user_12345_test`). Если отправить `test`, сервер вернет ошибку `INVALID_SESSION_FORMAT`.
-3. **Поля Form-Data**:
-   - `sessionId`: `user_99999_test`
-   - `text`: `Хочу 2-комнатную квартиру в Аркадии`
+- transcription/model extraction,
+- backend normalization,
+- catalog context,
+- frontend/manual filter merge,
+- card search.
 
----
+## 2. Main Endpoint
 
-## Способ 1: Быстрый тест через `curl`
-
-Если вам нужно проверить один запрос из терминала:
-
-```bash
-curl -s -X POST https://voice-widget-backend-tgdubai-split.up.railway.app/api/audio/upload \
-  -F "sessionId=user_12345_test" \
-  -F "text=Хочу 2 комнаты в Аркадии" | jq .
-```
-
-*Замените URL на ваш текущий продакшен/стейджинг.*
-
----
-
-## Способ 2: Прогонка сценариев (Скрипт `live_test.js`)
-
-Для тестирования того, **как ИИ помнит историю** (добавляет или удаляет параметры на основе прошлых шагов), `curl` неудобен, так как нужно слать запросы последовательно с одним и тем же `sessionId`.
-
-Специально для этого в папке `scripts/` лежит готовый Node.js скрипт:
-**`scripts/live_test.js`**
-
-### Как запустить:
-1. Перейдите в папку бекенда.
-2. Откройте `scripts/live_test.js` и при необходимости измените URL сервера (`API_URL`) и список текстовых фраз (`scenarios`).
-3. Запустите скрипт:
-   ```bash
-   node scripts/live_test.js
-   ```
-
-Скрипт автоматически:
-- Сгенерирует правильный `sessionId`.
-- Отправит серию сообщений одно за другим с задержкой (как будто человек пишет в чат).
-- Выведет в консоль `insights` (JSON-объект, который ИИ сгенерировал на каждом шаге).
-
-### Пример вывода скрипта:
+Primary endpoint:
 
 ```text
-🚀 Начинаем тестирование live-сервера... Session: user_1778782790967_test
-
-==================================================
-🗣️ Шаг 1. ПОЛЬЗОВАТЕЛЬ: "Хочу 2-комнатную квартиру в Аркадии."
-⏳ Ждем ответа сервера...
-✅ Ответ за 3823 мс
-🤖 БОТ: Понял, ищем двушку в Аркадии.
-🧠 INSIGHTS:
-{
-  "operation": "buy",
-  "location": "Аркадия",
-  "rooms": 2
-}
+POST /api/audio/upload
 ```
 
-## Как интерпретировать результаты
+Despite the name, the endpoint can accept plain text for testing.
 
-1. **Добавление параметров:** Если ИИ прислал массив (например, `rooms: [2, 3]`), значит ИИ "понял" команду на добавление. Фронтенд это съест.
-2. **Перезапись параметров:** Если на шаге 2 ИИ прислал `rooms: 4` (без двоек и троек), значит ИИ перезаписал массив.
-3. **Амнезия (потеря данных):** Если вы просили Аркадию на Шаге 1, а на Шаге 3 поле `location` или `district` вдруг стало `null` (хотя вы не просили отменять район) — значит у ИИ **произошла галлюцинация**. Лечится добавлением жестких якорей в `services/personality.js`.
+Requirements:
+
+- request type: `multipart/form-data`,
+- `sessionId` format: `user_<digits>_<lowercase-or-digits>`,
+- text field: `text=<message>`.
+
+Example:
+
+```bash
+curl -sS -X POST https://voice-widget-backend-tgdubai-split.up.railway.app/api/audio/upload \
+  -F 'sessionId=user_1779000000000_ai01' \
+  -F 'text=Покажи ЖК Омега или Альтаир, 1-2 комнаты' | jq .
+```
+
+## 3. What To Inspect
+
+In the response, inspect:
+
+- `payload.insights` or top-level `insights` depending on endpoint shape,
+- `queryTraceV1.sourceInsights`,
+- `queryTraceV1.canonicalPatch`,
+- `queryTraceV1.preValidationQuery`,
+- `queryTraceV1.postValidationQuery`,
+- `queryTraceV1.droppedFields`,
+- `totalMatches`, `strictMatches`, `relaxedMatches`,
+- returned cards/counts if present.
+
+Expected principle:
+
+- model text can be imperfect,
+- canonical patch must be sane,
+- final card search must match canonical/effective query.
+
+## 4. Current Critical Smoke Cases
+
+Run these when changing prompt/catalog/search logic.
+
+### Residential complex group
+
+Message:
+
+```text
+Привет, что есть в Альтаире?
+```
+
+Expected:
+
+- `residentialComplex` resolves to Альтаир group (`ЖК Альтаир 1/2/3`) or equivalent group query,
+- no broad `rcOnly`-only fallback if exact group is available.
+
+### Multi-RC
+
+Message:
+
+```text
+Покажи ЖК Омега или Альтаир, 1-2 комнаты
+```
+
+Expected:
+
+- multiple residential complexes are preserved,
+- rooms include 1 and 2,
+- returned candidates are limited to these complexes where possible.
+
+### Unknown RC
+
+Message:
+
+```text
+Есть что-то в ЖК Хогвартс?
+```
+
+Expected:
+
+- no fabricated `residentialComplex=Хогвартс`,
+- optional `rcOnly=true`,
+- assistant should not claim exact availability.
+
+### District / microdistrict
+
+Messages:
+
+```text
+Что есть на Таирова до 100 тысяч?
+Покажи новостройки на поселке Котовского
+Хочу квартиру в центре
+```
+
+Expected:
+
+- `Таирова` maps to Киевский direction,
+- `поселок Котовского` maps to Суворовский direction,
+- `центр` maps to supported center logic,
+- streets must not become unsupported primary filters.
+
+### Refinement
+
+Sequence with same `sessionId`:
+
+```text
+Ищу 1к квартиру на Таирова
+до 80 тысяч
+только ЖК
+```
+
+Expected:
+
+- later messages enrich/update the current search,
+- previous core intent is not randomly lost,
+- final query includes location, budget and `rcOnly`.
+
+## 5. Catalog Context Env For Tests
+
+When testing active catalog context:
+
+```text
+AI_CATALOG_CONTEXT_ENABLED=1
+AI_CATALOG_CONTEXT_CLIENT_ID=<client_id>
+AI_CATALOG_CONTEXT_MAX_ITEMS=200
+AI_CATALOG_CONTEXT_DEBUG=0
+AI_ASSISTANT_FLAVOR=showroom
+```
+
+Do not rely on old `DEMO_*` env for new tests. It exists only as compatibility fallback.
+
+## 6. Testing Script
+
+For multi-step memory/refinement tests, use or adapt:
+
+```bash
+node scripts/live_test.js
+```
+
+The script should generate a valid `sessionId`, send messages sequentially and print insights/query trace.
+
+## 7. Failure Interpretation
+
+Common failure types:
+
+- AI names the right thing in natural language but canonical patch misses it: prompt/schema extraction issue.
+- Canonical patch is right but cards are wrong: search/effective query issue.
+- Manual filters show different values than AI patch: frontend merge/manual override issue.
+- Unknown ЖК becomes exact `residentialComplex`: strict catalog intent regression.
+- Known ЖК becomes only `rcOnly=true`: catalog matcher/context regression.

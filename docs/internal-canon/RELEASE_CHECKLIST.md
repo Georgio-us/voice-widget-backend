@@ -1,56 +1,114 @@
-# VIA Release Checklist (Short)
+# VIA Release Checklist
 
-## 1) Env (backend)
-- `TELEGRAM_INTERACTIVE_TOKEN` задан
-- `SUPER_ADMIN_ID` / `OWNER_TG_ID` заданы
-- `SUBSCRIPTION_KEY_PEPPER` задан (не пустой)
-- `TELEGRAM_INITDATA_ENFORCE_ADMIN=1`
-- `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID=0`
-- `EXIT_ON_UNCAUGHT_EXCEPTION=1`
-- `EXIT_ON_UNHANDLED_REJECTION=0`
+## 1. Backend Env
 
-## 2) Env (frontend)
-- `VW_API_URL` указывает на нужный backend
-- `VW_CARDS_SEARCH_URL` указывает на нужный backend
-- `VW_SHARE_BASE_URL` указывает на нужный frontend
-- `TELEGRAM_BOT_USERNAME` корректный
+Required:
 
-## 3) DB / migrations
-- Выполнены SQL:
-  - `001_stage1_foundation.sql`
-  - `002_olx_integrations.sql`
-  - `003_client_residential_complexes.sql`
-  - `004_specs_area_m2_decimal.sql`
-  - `005_subscriptions.sql`
+- `TELEGRAM_INTERACTIVE_TOKEN` is set.
+- `SUPER_ADMIN_ID` / `OWNER_TG_ID` are set where required.
+- `SUBSCRIPTION_KEY_PEPPER` is set and non-empty.
+- `TELEGRAM_INITDATA_ENFORCE_ADMIN=1`.
+- `TELEGRAM_INITDATA_ALLOW_LEGACY_TGID=0`.
+- `EXIT_ON_UNCAUGHT_EXCEPTION=1`.
+- `EXIT_ON_UNHANDLED_REJECTION=0`.
 
-## 4) Smoke
-- Backend: `npm --prefix Voice-Widget-Backend run smoke:soft`
-- Frontend: `npm --prefix Voice-Widget-Frontend run smoke:soft`
-- Оба PASS
+AI catalog context, when enabled for a client:
 
-## 5) Runtime checks
-- Mini App открывается без 403/500
-- Кнопка “Найдено/Доступно объектов” работает стабильно
-- Слайдер и список отображаются и листаются
-- `Подробнее` / `Читать описание` работают без вылезания контейнеров
-- В list+slider не ломается `cardId` (нет дубликатов/пропаданий)
+- `AI_CATALOG_CONTEXT_ENABLED=1`.
+- `AI_CATALOG_CONTEXT_CLIENT_ID=<client_id>` matches that Railway service/client database.
+- `AI_CATALOG_CONTEXT_MAX_ITEMS=200` unless there is a specific reason to lower/raise it.
+- `AI_CATALOG_CONTEXT_DEBUG=0` in production.
+- `AI_ASSISTANT_FLAVOR=showroom` when assistant should use active catalog context naturally.
 
-## 6) Subscriptions
-- В “Управление подпиской” видно текущий статус
-- Генерация ключей (super-admin) работает
-- Активация ключа owner-ом работает
-- После активации в БД есть актуальная `owner_subscriptions` запись
+Legacy `DEMO_*` catalog variables should be removed from new deployments after `AI_*` variables are configured.
 
-## 7) Telegram transport
-- Webhook установлен и отвечает 200
-- Нет постоянных `409 Conflict: getUpdates`
+## 2. Frontend Env
 
-## 8) Debug sanity
-- Online/Debug доступен только super-admin
-- Debug Insights показывает актуальные:
-  - interpreted insights
-  - effective filters
-  - timing/tokens
-  - last turn dialog
-  - candidates/cards
+- `VW_API_URL` points to the correct backend.
+- `VW_CARDS_SEARCH_URL` points to the correct backend.
+- `VW_SHARE_BASE_URL` points to the correct frontend.
+- `TELEGRAM_BOT_USERNAME` is correct.
+- If demo recording effects are used, `VW_DEMO_FX` is enabled only intentionally and disabled after recording.
 
+## 3. DB / Migrations
+
+Expected migrations:
+
+- `001_stage1_foundation.sql`
+- `002_olx_integrations.sql`
+- `003_client_residential_complexes.sql`
+- `004_specs_area_m2_decimal.sql`
+- `005_subscriptions.sql`
+
+Before launch, verify:
+
+- `properties.client_id` is correct for the target client.
+- `users.client_id` is correct.
+- `lead_requests.client_id` is correct.
+- `session_logs.payload.clientId` is present where needed for stats/debug continuity.
+- Active seed/demo objects have canonical district/location/ЖК values.
+
+## 4. Smoke
+
+Backend:
+
+- `npm --prefix Voice-Widget-Backend run smoke:soft`
+
+Frontend:
+
+- `npm --prefix Voice-Widget-Frontend run smoke:soft`
+
+Both should pass or known failures must be explicitly accepted.
+
+## 5. Runtime Checks
+
+- Mini App opens without 403/500.
+- Mini App open creates/updates Telegram user when Telegram identity is available.
+- New Telegram user notification is delivered.
+- AI search returns cards for basic sale/apartment queries.
+- Residential complex exact/group matching works.
+- Multi-ЖК queries work.
+- Unknown ЖК does not create fake exact `residentialComplex`.
+- Manual filters override AI fields.
+- `Найдено/Доступно объектов` action works.
+- Slider/list view render without duplicate or missing `cardId`.
+- `Подробнее` / `Читать описание` do not overflow the modal/container.
+
+## 6. Admin / Statistics
+
+- Admin panel opens for owner/super-admin.
+- Stats/requests section shows non-empty totals when data exists.
+- Latest requests accordion opens/closes.
+- Latest activity accordion opens/closes.
+- Details close when the parent accordion closes.
+- Unread stats/request badge appears in admin panel.
+- Crown unread badge appears when there is unread admin activity.
+
+## 7. Subscriptions
+
+- `Управление подпиской` shows current status.
+- Super-admin key generation works.
+- Owner key activation works.
+- After activation, DB has an up-to-date `owner_subscriptions` record.
+
+## 8. Telegram Transport
+
+- Webhook is installed and returns 200.
+- There are no persistent `409 Conflict: getUpdates` errors.
+- Lead notifications include Telegram id/username when available.
+- Mini App open notifications do not spam existing users.
+
+## 9. Debug Sanity
+
+Debug/online diagnostics are available only to super-admin.
+
+Debug Insights should show:
+
+- interpreted insights
+- canonical patch
+- effective filters
+- pre/post validation query
+- strict/relaxed state
+- candidate/card list
+- timing/tokens when available
+- last turn dialog
