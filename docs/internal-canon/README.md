@@ -8,6 +8,7 @@ Current canonical docs:
 - `AI_TESTING_GUIDE.md` - manual/live testing scenarios for AI search behavior.
 - `RELEASE_CHECKLIST.md` - short deployment and smoke checklist.
 - `REQUEST_CRM_STATISTICS.md` - plan and current scope for request/statistics/client CRM features.
+- `RAILWAY_INCIDENT_RUNBOOK.md` - Railway/Postgres incident recovery procedure and backup baseline.
 
 Rules:
 

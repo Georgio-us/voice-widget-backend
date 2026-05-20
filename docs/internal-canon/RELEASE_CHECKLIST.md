@@ -112,3 +112,12 @@ Debug Insights should show:
 - candidate/card list
 - timing/tokens when available
 - last turn dialog
+
+## 10. Operational Safety
+
+- Production/client Postgres has Railway Daily backups enabled when the client is commercially important.
+- After large imports, seed injections, migrations or onboarding, a manual `pg_dump` is saved outside Railway.
+- Backend `/health` returns 200.
+- A basic `/api/cards/search` request returns 200.
+- Admin access route works for the expected owner/super-admin Telegram id.
+- Before destructive recovery actions, use `RAILWAY_INCIDENT_RUNBOOK.md`.
