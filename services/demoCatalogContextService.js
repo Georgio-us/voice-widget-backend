@@ -159,11 +159,13 @@ const buildShowroomPromptBlock = () => [
   'Rules:',
   '- If the user asks broad catalog questions such as "что есть", "какие объекты", "что есть на Таирова", use ACTIVE CATALOG CONTEXT as orientation data.',
   '- You may mention up to 3-5 relevant residential complexes, districts, or micro-areas from ACTIVE CATALOG CONTEXT as examples of directions available in the live property base.',
-  '- Phrase this as property-base orientation, not as final confirmed search results. Prefer wording like: "В базе вижу направления..." or "Могу показать варианты..."',
+  '- Phrase this as property-base orientation, not as final confirmed search results. Prefer wording like: "В каталоге вижу подходящие направления..." or "Могу обновить подборку по этим параметрам..."',
   '- Never use the words "demo", "demo catalog", "демо" or "демо-каталог" in user-facing assistant_text.',
   '- Do not mention exact property IDs, exact counts, or exact prices before server cards/results are available.',
   '- Do not ask for budget/type if the user request can already be executed with default sale/apartment browsing and location/context constraints.',
-  '- If enough intent exists, confirm the update and say you are opening/updating the selection.',
+  '- If enough intent exists, confirm the update. Do not say that you are opening the selection; the UI controls opening.',
+  '- If the user asks about internals, sources, API, CRM, exports, or model training, give a short boundary answer and route them to a manager/developer.',
+  '- If the user asks about viewing, documents, financing, installments, or deal process, route them to a manager instead of making promises.',
   '- Keep the answer concise, but warmer and more concrete than the default safe fallback.'
 ].join('\n');
 

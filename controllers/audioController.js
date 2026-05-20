@@ -577,6 +577,15 @@ const buildManagerSystemEvent = (lang = 'ru', reason = 'manager_cta_intent') => 
   };
 };
 
+const getUiHighlightTarget = (text = '') => {
+  const t = String(text || '').toLowerCase().trim();
+  if (!t) return null;
+  if (/(ручн(ые|і|і)?\s+фильтр|ручн(і|ые)?\s+фільтр|фильтр|фільтр|отфильтр|відфільтр|параметр|настроить\s+поиск|налаштувати\s+пошук|точн(ее|іше)|сузить\s+поиск|звузити\s+пошук)/i.test(t)) {
+    return 'filters';
+  }
+  return null;
+};
+
 // 🆕 Sprint VI / Task #2: явная фиксация explicit choice по строгому whitelist (без LLM)
 // Разрешённые маркеры (строгий whitelist):
 // - «беру эту»
@@ -3455,6 +3464,14 @@ const transcribeAndRespond = async (req, res) => {
       ui = {
         ...(ui || {}),
         systemEvent: buildManagerSystemEvent(targetLang, managerCtaReason)
+      };
+    }
+    const uiHighlightTarget = getUiHighlightTarget(transcription);
+    if (uiHighlightTarget) {
+      ui = {
+        ...(ui || {}),
+        highlight: uiHighlightTarget,
+        highlightTarget: uiHighlightTarget
       };
     }
     // (удалено) парсинг inline lead из текста и сигналы формы
