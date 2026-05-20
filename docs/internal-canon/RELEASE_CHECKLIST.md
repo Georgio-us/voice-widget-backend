@@ -65,7 +65,9 @@ Both should pass or known failures must be explicitly accepted.
 - Mini App opens without 403/500.
 - Mini App open creates/updates Telegram user when Telegram identity is available.
 - New Telegram user notification is delivered.
+- Initial/default catalog shows all active objects, not only sale apartments.
 - AI search returns cards for basic sale/apartment queries.
+- AI/manual search with partial criteria but without explicit operation/type applies sale/apartment defaults.
 - Residential complex exact/group matching works.
 - Multi-ЖК queries work.
 - Unknown ЖК does not create fake exact `residentialComplex`.

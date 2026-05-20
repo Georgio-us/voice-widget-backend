@@ -66,6 +66,13 @@ This behavior is global, not demo-only.
 
 The AI can receive a compact active catalog context so it understands what objects/ЖК are actually present before responding.
 
+Catalog browsing and catalog search are separate modes:
+
+- Initial/default Mini App catalog is browse mode. It must show all active objects for the client (`is_active=true`) without forcing `operation=sale` or `type=apartment`.
+- Search/filter mode starts only after a real user intent or manual filter is applied.
+- In search/filter mode, if the user provides any meaningful criterion but omits the deal/property core, the system applies the safe default core: `operation=sale`, `type=apartment`.
+- Example: first open -> all active objects. Query `интересует Приморский район до 100к` -> sale apartments in/around the requested criteria, unless the user explicitly asks for rent/house/commercial.
+
 Current env variables:
 
 - `AI_CATALOG_CONTEXT_ENABLED=1`

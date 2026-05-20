@@ -313,6 +313,9 @@ router.get('/search', async (req, res) => {
       center,
       parking,
       balconyLoggia,
+      mode,
+      catalogMode,
+      view,
       limit = 10
     } = req.query;
 
@@ -359,6 +362,31 @@ router.get('/search', async (req, res) => {
     const onlyCenter = toBool(center);
     const onlyParking = toBool(parking);
     const onlyBalconyLoggia = toBool(balconyLoggia);
+    const browseModeToken = normalizeText(mode || catalogMode || view);
+    const forceBrowseMode = ['all', 'allactive', 'active', 'browse', 'default'].includes(browseModeToken);
+    const hasSearchFilters = !forceBrowseMode && Boolean(
+      hasValue(city)
+      || districtTokens.length > 0
+      || hasValue(type)
+      || hasValue(operation)
+      || roomsTokens.length > 0
+      || min != null
+      || max != null
+      || areaMin != null
+      || areaMax != null
+      || floorMin != null
+      || floorMax != null
+      || onlyFloorNotFirst
+      || onlyFloorNotLast
+      || onlySmart
+      || onlyArcadia
+      || onlyRc
+      || rcNeedles.length > 0
+      || onlyExclusive
+      || onlyCenter
+      || onlyParking
+      || onlyBalconyLoggia
+    );
 
     // Берём все объекты клиента из CLIENT_ID env
     const rawList = await getAllProperties();
@@ -374,11 +402,15 @@ router.get('/search', async (req, res) => {
       list = list.filter((p) => districtTokens.includes(normalizeDistrictValue(p.district)));
     }
 
-    const effectiveType = type ? String(type).trim() : 'apartment';
-    list = list.filter(p => p.property_type === effectiveType);
+    if (hasSearchFilters || hasValue(type)) {
+      const effectiveType = type ? String(type).trim() : 'apartment';
+      list = list.filter(p => p.property_type === effectiveType);
+    }
 
-    const effectiveOp = operation ? normalizeOperationValue(operation) : 'sale';
-    list = list.filter((p) => normalizeOperationValue(p.operation) === effectiveOp);
+    if (hasSearchFilters || hasValue(operation)) {
+      const effectiveOp = operation ? normalizeOperationValue(operation) : 'sale';
+      list = list.filter((p) => normalizeOperationValue(p.operation) === effectiveOp);
+    }
 
     if (roomsTokens.length > 0) {
       list = list.filter((p) => {
@@ -480,29 +512,7 @@ router.get('/search', async (req, res) => {
 
     // Strict mode if at least one manual filter is actually set.
     // Browse mode if query has no filters (except limit).
-    const hasStrictFilters = Boolean(
-      hasValue(city)
-      || districtTokens.length > 0
-      || hasValue(type)
-      || hasValue(operation)
-      || roomsTokens.length > 0
-      || min != null
-      || max != null
-      || areaMin != null
-      || areaMax != null
-      || floorMin != null
-      || floorMax != null
-      || onlyFloorNotFirst
-      || onlyFloorNotLast
-      || onlySmart
-      || onlyArcadia
-      || onlyRc
-      || rcNeedles.length > 0
-      || onlyExclusive
-      || onlyCenter
-      || onlyParking
-      || onlyBalconyLoggia
-    );
+    const hasStrictFilters = hasSearchFilters;
 
     // Unified deterministic scoring for both manual and AI paths.
     // Core constraints above are hard gates; score below is calculated only for soft fields.
