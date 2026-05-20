@@ -227,7 +227,22 @@ export function buildOlxAuthorizeUrl({
     throw new Error(`OLX_CONFIG_MISSING:${missing.join(',')}`);
   }
   const state = createStateToken({ clientId, tgUserId, returnTo, trustedForward });
-  
+
+  if (forceReauth) {
+    const url = new URL(normalizeOlxAuthorizeBase(config.authUrl));
+    url.pathname = '/oauth/authorize/';
+    url.searchParams.set('client_id', config.clientId);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('redirect_uri', config.redirectUri);
+    url.searchParams.set('state', state);
+
+    if (config.scopes) {
+      url.searchParams.set('scope', config.scopes);
+    }
+
+    return url.toString();
+  }
+
   // OLX's mobile redirector (/oauth/authorize -> m.olx.ua/oauth/authorize) is completely broken and returns 404.
   // However, the actual destination page (/account/?ref[0][action]=oauth...) works perfectly on both desktop and mobile.
   // We construct the final URL directly to bypass their broken redirector.

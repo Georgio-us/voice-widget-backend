@@ -136,8 +136,25 @@ export async function getOlxIntegrationStatus({
     );
     const row = result.rows?.[0] || null;
     if (!row) return { connected: false };
+    const expiresAt = row.expires_at ? new Date(row.expires_at) : null;
+    const expired = expiresAt instanceof Date
+      && Number.isFinite(expiresAt.getTime())
+      && expiresAt.getTime() <= Date.now();
+    if (expired) {
+      return {
+        connected: false,
+        reconnectRequired: true,
+        reason: 'token_expired',
+        previouslyConnected: true,
+        olxUserId: row.olx_user_id || null,
+        scope: row.scope || null,
+        expiresAt: row.expires_at || null,
+        updatedAt: row.updated_at || null
+      };
+    }
     return {
       connected: true,
+      reconnectRequired: false,
       olxUserId: row.olx_user_id || null,
       scope: row.scope || null,
       expiresAt: row.expires_at || null,

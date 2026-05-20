@@ -105,7 +105,7 @@ const verifyHubForward = ({ clientId, tgUserId, hubTs, hubSig }) => {
   return { ok: true };
 };
 
-const buildHubConnectUrl = ({ clientId, tgUserId, returnTo, initData }) => {
+const buildHubConnectUrl = ({ clientId, tgUserId, returnTo, initData, forceReauth = false }) => {
   const hubBase = stripSlash(OLX_CONNECT_BASE);
   if (!hubBase) return '';
   const url = new URL(`${hubBase}/api/olx/connect`);
@@ -113,6 +113,7 @@ const buildHubConnectUrl = ({ clientId, tgUserId, returnTo, initData }) => {
   if (tgUserId) url.searchParams.set('tgUserId', String(tgUserId));
   if (returnTo) url.searchParams.set('returnTo', String(returnTo));
   if (initData) url.searchParams.set('initData', String(initData));
+  if (forceReauth) url.searchParams.set('reauth', '1');
   if (OLX_HUB_SHARED_SECRET && clientId && tgUserId) {
     const hubTs = String(Date.now());
     const hubSig = createHubForwardSignature({ clientId, tgUserId, hubTs });
@@ -196,9 +197,16 @@ router.get('/connect', async (req, res) => {
         clientId,
         tgUserId,
         returnTo,
-        initData
+        initData,
+        forceReauth
       });
       if (hubUrl) {
+        console.info('[OLX_CONNECT]', {
+          clientId,
+          tgUserId,
+          forceReauth,
+          mode: 'hub_forward'
+        });
         return res.redirect(hubUrl);
       }
     }
@@ -209,6 +217,18 @@ router.get('/connect', async (req, res) => {
       trustedForward,
       forceReauth
     });
+    try {
+      const target = new URL(authorizeUrl);
+      console.info('[OLX_CONNECT]', {
+        clientId,
+        tgUserId,
+        forceReauth,
+        mode: forceReauth ? 'oauth_authorize' : 'account_router',
+        target: `${target.origin}${target.pathname}`
+      });
+    } catch {
+      console.info('[OLX_CONNECT]', { clientId, tgUserId, forceReauth, mode: 'unknown_target' });
+    }
     return res.redirect(authorizeUrl);
   } catch (error) {
     const authError = toHttpAuthError(error);
@@ -226,6 +246,12 @@ router.get('/callback', async (req, res) => {
   const olxError = normalize(req.query?.error);
   const olxErrorDescription = normalize(req.query?.error_description);
   const stateRaw = normalize(req.query?.state);
+
+  console.info('[OLX_CALLBACK]', {
+    codePresent: Boolean(normalize(req.query?.code)),
+    statePresent: Boolean(stateRaw),
+    error: olxError || null
+  });
 
   let statePayload = null;
   try {
@@ -291,8 +317,19 @@ router.get('/callback', async (req, res) => {
         targetBackendBase,
         payload: handoffPayload
       });
+      console.info('[OLX_CALLBACK_OK]', {
+        clientId,
+        tgUserId,
+        mode: 'handoff',
+        targetBackendBase
+      });
     } else {
       await upsertOlxIntegration(handoffPayload);
+      console.info('[OLX_CALLBACK_OK]', {
+        clientId,
+        tgUserId,
+        mode: 'local_upsert'
+      });
     }
 
     const redirectUrl = buildFrontendRedirect({
