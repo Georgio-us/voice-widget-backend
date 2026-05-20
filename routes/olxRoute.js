@@ -418,6 +418,13 @@ router.post('/sync', async (req, res) => {
         error: 'OLX_NOT_CONNECTED'
       });
     }
+    if (message.startsWith('OLX_TOKEN_REFRESH_FAILED:') || message === 'MISSING_REFRESH_TOKEN') {
+      return res.status(401).json({
+        ok: false,
+        error: 'OLX_RECONNECT_REQUIRED',
+        details: message || 'refresh_token_expired'
+      });
+    }
     return res.status(500).json({
       ok: false,
       error: 'OLX_SYNC_FAILED',
