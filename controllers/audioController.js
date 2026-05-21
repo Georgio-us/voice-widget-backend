@@ -7,11 +7,42 @@ import { listResidentialComplexes } from '../services/residentialComplexesReposi
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { buildDemoCatalogContext, buildDemoPromptFlavorContext } from '../services/demoCatalogContextService.js';
 import { pool } from '../services/db.js';
-import { expandResidentialComplexInput, residentialComplexInputToArray, normalizeResidentialComplexName } from '../services/residentialComplexMatcher.js';
+import { residentialComplexInputToArray, normalizeResidentialComplexName } from '../services/residentialComplexMatcher.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { readTelegramIdentityFromRequest } from '../services/telegramInitDataService.js';
 import { buildScoreContext, annotatePropertyScoresByContext } from '../services/scoringEngine.js';
+import {
+  INSIGHTS_RESPONSE_SCHEMA,
+  parseStructuredInsightsResponse
+} from '../services/aiExtractionContract.js';
+import {
+  buildManagerSystemEvent,
+  getManagerCtaReason
+} from '../services/managerCtaPolicy.js';
+import {
+  applyResidentialComplexFallbackFromTranscript,
+  validateResidentialComplexInsights
+} from '../services/residentialComplexPolicy.js';
+import {
+  detectCardIntent,
+  detectExplicitChoiceMarker,
+  detectVerbalSelectIntent,
+  getUiHighlightTarget
+} from '../services/chatIntentPolicy.js';
+import { buildInitialAudioSession } from '../services/sessionStateFactory.js';
+import {
+  buildLlmContextPack,
+  buildShapedFactsPackForLLM,
+  logCtx
+} from '../services/llmContextPack.js';
+import {
+  INSIGHT_FIELDS,
+  mapClientProfileToInsights,
+  mergeClientProfile,
+  recalcInsightsProgress,
+  sanitizeInsightValue
+} from '../services/insightsProfilePolicy.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
 import { appendMessage, upsertSessionLog } from '../services/sessionLogger.js';
 import {
@@ -53,70 +84,6 @@ const getUsersJoinStats = async (clientId = BOT_CLIENT_ID) => {
     throw error;
   }
 };
-const INSIGHTS_RESPONSE_SCHEMA = {
-  name: 'insights_response',
-  schema: {
-    type: 'object',
-    additionalProperties: false,
-    required: ['assistant_text', 'insights'],
-    properties: {
-      assistant_text: { type: 'string' },
-      insights: {
-        type: 'object',
-        additionalProperties: false,
-        required: [
-          'name', 'operation', 'budget', 'budgetMax', 'type', 'district', 'location', 'rooms',
-          'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences',
-          'residentialComplex', 'floorNotFirst', 'floorNotLast',
-          'rcOnly', 'parking', 'balconyLoggia', 'arcadia', 'center', 'smart'
-        ],
-        properties: {
-          name: { type: ['string', 'null'] },
-          operation: { type: ['string', 'null'], enum: ['buy', 'rent', null] },
-          budget: { type: ['number', 'string', 'null'] },
-          budgetMax: { type: ['number', 'string', 'null'] },
-          type: { type: ['string', 'null'], enum: ['apartment', 'house', 'land', 'commercial', null] },
-          district: {
-            type: ['string', 'array', 'null'],
-            items: { type: 'string' }
-          },
-          location: {
-            type: ['string', 'array', 'null'],
-            items: { type: 'string' }
-          },
-          rooms: {
-            type: ['number', 'string', 'array', 'null'],
-            items: { type: ['number', 'string'] }
-          },
-          area: { type: ['number', 'string', 'null'] },
-          areaMin: { type: ['number', 'string', 'null'] },
-          areaMax: { type: ['number', 'string', 'null'] },
-          floor: { type: ['number', 'string', 'null'] },
-          features: {
-            type: ['array', 'null'],
-            items: { type: 'string' }
-          },
-          details: { type: ['string', 'null'] },
-          preferences: { type: ['string', 'null'] },
-          residentialComplex: {
-            type: ['string', 'array', 'null'],
-            items: { type: 'string' }
-          },
-          floorNotFirst: { type: ['boolean', 'null'] },
-          floorNotLast: { type: ['boolean', 'null'] },
-          rcOnly: { type: ['boolean', 'null'] },
-          parking: { type: ['boolean', 'null'] },
-          balconyLoggia: { type: ['boolean', 'null'] },
-          arcadia: { type: ['boolean', 'null'] },
-          center: { type: ['boolean', 'null'] },
-          smart: { type: ['boolean', 'null'] }
-        }
-      }
-    }
-  },
-  strict: true
-};
-
 // ====== Diagnostic build tag (DEPLOY_TAG) ======
 const DEPLOY_TAG_FULL = process.env.DEPLOY_TAG || process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown';
 const DEPLOY_TAG_SHORT = (() => {
@@ -269,213 +236,7 @@ const generateSessionId = () => `user_${Date.now()}_${Math.random().toString(36)
 const getOrCreateSession = (sessionId) => {
   if (!sessionId) sessionId = generateSessionId();
   if (!sessions.has(sessionId)) {
-    sessions.set(sessionId, {
-      sessionId,
-      messages: [],
-      createdAt: Date.now(),
-      lastActivity: Date.now(),
-      // 🆕 Профиль клиента для логики воронки
-      clientProfile: {
-        language: null,
-        location: null,
-        budgetMin: null,
-        budgetMax: null,
-        purpose: null,
-        propertyType: null,
-        urgency: null
-      },
-      // 🆕 Текущая стадия диалога
-      stage: 'matching_closing',
-      // 🆕 Sprint III: server-side role (детерминированное состояние через state machine)
-      role: ROLE_SEARCH_READY,
-      // 🆕 РАСШИРЕННАЯ СТРУКТУРА INSIGHTS (v2)
-      insights: {
-        name: null,
-        operation: null,
-        budget: null,
-        budgetMax: null,
-        type: null,
-        district: null,
-        location: null,
-        rooms: null,
-        area: null,
-        areaMin: null,
-        areaMax: null,
-        floor: null,
-        features: null,
-        details: null,
-        preferences: null,
-        residentialComplex: null,
-        floorNotFirst: null,
-        floorNotLast: null,
-        progress: 0
-      },
-      extractionMetrics: {
-        turnsTotal: 0,
-        metaPresentTurns: 0,
-        parseErrors: 0,
-        validationErrors: 0,
-        updatesApplied: 0,
-        fieldFilledTurns: {
-          name: 0,
-          operation: 0,
-          budget: 0,
-          budgetMax: 0,
-          type: 0,
-          district: 0,
-          location: 0,
-          rooms: 0,
-          area: 0,
-          areaMin: 0,
-          areaMax: 0,
-          floor: 0,
-          features: 0,
-          details: 0,
-          preferences: 0,
-          residentialComplex: 0,
-          floorNotFirst: 0,
-          floorNotLast: 0
-        }
-      },
-      metaContract: {
-        needsRepairHint: false,
-        lastError: null,
-        lastMetaRaw: null,
-        lastUpdatedAt: null
-      },
-      // 🆕 Sprint II / Block A: allowedFactsSnapshot (разрешённые факты для AI)
-      // Формируется только после подтверждённого показа карточки (ui_card_rendered)
-      // Пока не используется ни UI, ни AI — чистое введение структуры
-      allowedFactsSnapshot: {},
-      // 🆕 Sprint III: handoff как системный механизм (boundary), не роль
-      handoffDone: false,
-      handoffAt: null,
-      // RMv3 / Sprint 2 / Task 2.1: handoff как server-fact "активирован/показан" (UI state driven, server-first)
-      // ВАЖНО:
-      // - не роль/стадия
-      // - не влияет на LLM напрямую в этой задаче
-      // - не трогает lead-flow
-      handoff: {
-        active: false,
-        shownAt: null,
-        cardId: null,
-        canceled: false,
-        canceledAt: null
-      },
-      // 🆕 Sprint III: lead snapshot (read-only после создания при handoff)
-      leadSnapshot: null,
-      leadSnapshotAt: null,
-      // 🆕 Sprint III: post-handoff enrichment (данные после handoff)
-      postHandoffEnrichment: [],
-      // 🆕 Sprint III: completion conditions (завершение диалога после handoff)
-      completionDone: false,
-      completionAt: null,
-      completionReason: null,
-      // 🆕 Sprint IV: slider context state (активность slider в UI)
-      sliderContext: {
-        active: false,
-        updatedAt: null
-      },
-      // 🆕 Sprint IV: current focus card (какая карточка сейчас в фокусе UI)
-      // NOTE (2026-03-22): intentionally retained after slider simplification.
-      // Required to resolve references like "this apartment / эта квартира".
-      currentFocusCard: {
-        cardId: null,
-        updatedAt: null
-      },
-      // 🆕 Sprint IV: last shown card (последняя показанная карточка, подтверждённая ui_card_rendered)
-      // NOTE (2026-03-22): intentionally retained after slider simplification.
-      // Used as fallback reference anchor when focus is unavailable.
-      lastShown: {
-        cardId: null,
-        updatedAt: null
-      },
-      // RMv3 / Sprint 1 / Task 1: факт выбора карточки пользователем (UI "Выбрать") — server-first
-      selectedCard: {
-        cardId: null,
-        selectedAt: null
-      },
-      // 🆕 Sprint IV: last focus snapshot (последний подтверждённый фокус, фиксируется только при ui_focus_changed)
-      lastFocusSnapshot: null,
-      // 🆕 Sprint V: reference intent (фиксация факта ссылки в сообщении пользователя, без интерпретации)
-      // NOTE (2026-03-22): intentionally retained by product decision.
-      referenceIntent: null,
-      // 🆕 Sprint V: reference ambiguity (фиксация факта неоднозначности reference, без разрешения)
-      referenceAmbiguity: {
-        isAmbiguous: false,
-        reason: null,
-        detectedAt: null,
-        source: 'server_contract'
-      },
-      // 🆕 Sprint V: clarification required state (требуется уточнение из-за reference ambiguity)
-      clarificationRequired: {
-        isRequired: false,
-        reason: null,
-        detectedAt: null,
-        source: 'server_contract'
-      },
-      // 🆕 Sprint V: single-reference binding proposal (предложение cardId из currentFocusCard, не выбор)
-      singleReferenceBinding: {
-        hasProposal: false,
-        proposedCardId: null,
-        source: 'server_contract',
-        detectedAt: null,
-        basis: null
-      },
-      // 🆕 Sprint VI / Task #1: Candidate Shortlist (server-side, observation only)
-      // Инфраструктура Roadmap v2: фиксируем, какие карточки обсуждаются пользователем.
-      // ВАЖНО:
-      // - shortlist ≠ выбор, ≠ handoff, ≠ UX-решение
-      // - append-only, без удаления и автоочистки
-      // - не зависит от like / shownSet / lastShown
-      // - source допустим: 'focus_proposal' | 'explicit_choice_event'
-      candidateShortlist: {
-        items: []
-      },
-      // 🆕 Sprint VI / Task #2: Explicit Choice Event (infrastructure only)
-      // Фиксация факта явного выбора пользователем (речь), НЕ действие:
-      // - не запускает handoff
-      // - не меняет role
-      // - не влияет на UX
-      explicitChoiceEvent: {
-        isConfirmed: false,
-        cardId: null,
-        detectedAt: null,
-        source: 'user_message'
-      },
-      // 🆕 Sprint VI / Task #3: Choice Confirmation Boundary (infrastructure only)
-      // Граница "выбор подтверждён" — чистый state, НЕ действие:
-      // - не запускает handoff
-      // - не меняет role
-      // - не влияет на UX
-      // - не сбрасывается автоматически
-      choiceConfirmationBoundary: {
-        active: false,
-        chosenCardId: null,
-        detectedAt: null,
-        source: null // 'explicit_choice_event'
-      },
-      // 🆕 Sprint VI / Task #4: No-Guessing Invariant (server guard, derived state)
-      // active === true только если clarificationBoundaryActive === true
-      // Это инвариант целостности, не UX и не действие.
-      noGuessingInvariant: {
-        active: false,
-        reason: null, // 'clarification_required'
-        enforcedAt: null
-      },
-      // 🆕 Sprint VII / Task #1: Unknown UI Actions (diagnostics only)
-      // Фиксация неизвестных action, пришедших от UI, без side-effects.
-      unknownUiActions: {
-        count: 0,
-        items: []
-      },
-      // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
-      debugTrace: {
-        items: []
-      },
-      // 🆕 Sprint V: clarification boundary active (диагностическое поле: активна ли граница уточнения)
-      clarificationBoundaryActive: false
-    });
+    sessions.set(sessionId, buildInitialAudioSession(sessionId, { role: ROLE_SEARCH_READY }));
   }
   return sessions.get(sessionId);
 };
@@ -493,115 +254,6 @@ const parseBudgetEUR = (s) => {
   if (!s) return null;
   const m = String(s).replace(/[^0-9]/g, '');
   return m ? parseInt(m, 10) : null;
-};
-
-const detectCardIntent = (text = '') => {
-  const t = String(text).toLowerCase();
-  // NOTE (2026-03-22): text-triggered slider opening is intentionally disabled.
-  // Slider opens only from explicit UI control (objects counter pill).
-  const isShow = false;
-  const isVariants = /(какие|что)\s+(есть|можно)\s+(вариант|квартир)/i.test(t)
-    || /подбери(те)?|подобрать|вариант(ы)?|есть\s+вариант/i.test(t)
-    || /квартир(а|ы|у)\s+(есть|бывают)/i.test(t);
-  return { show: isShow, variants: isVariants };
-};
-
-// RMv3 / Sprint 4 / Task 4.4: demo-only "словесный выбор объекта"
-// ВАЖНО:
-// - максимально простой regex/keyword match (без NLP)
-// - НЕ "покажи" (это отдельный show-intent)
-// - триггер работает только если есть lastShown/currentFocusCard (никаких догадок)
-const detectVerbalSelectIntent = (text = '') => {
-  const t = String(text || '').toLowerCase().trim();
-  if (!t) return false;
-  // Предохранитель: "покажи"/"show" — это show-intent, не выбор
-  if (/(покажи(те)?|показать|посмотреть)/i.test(t)) return false;
-  if (/\b(show|show\s+me|can\s+you\s+show)\b/i.test(t)) return false;
-  // Сигнал "выбор/подходит/нравится" + указание на "этот/эта/последний вариант"
-  const hasChoiceCue = /(понрав|нравит|подход|устраива|бер(у|ем|ём)|давай|выбираю|остановимс|ок\b)/i.test(t);
-  const hasTargetCue = /(эт(от|а|у)\s+(вариант|квартир)|эт(от|а|у)\b|последн(ий|яя|ю)\b|последн(ий|яя|ю)\s+(вариант|квартир))/i.test(t);
-  // "мне нравится этот вариант" → true; "подходит" без указания → false
-  return hasChoiceCue && hasTargetCue;
-};
-
-// Намерение: запись на просмотр / передать менеджеру
-const detectScheduleIntent = (text = '') => {
-  const t = String(text).toLowerCase();
-  return /(записать|записаться|просмотр(ы)?|встретить|встреч(а|у)|перезвон|связать|связаться|передать\s+менеджеру|передай\s+менеджеру)/i.test(t);
-};
-
-const getManagerCtaReason = (text = '', { updatesApplied = true } = {}) => {
-  const t = String(text || '').toLowerCase().trim();
-  if (!t) return null;
-
-  if (detectScheduleIntent(t)) return 'schedule_intent';
-  if (/(менеджер|консультац|связаться|контакт|перезвон|позвон|заявк|оставить\s+контакт)/i.test(t)) {
-    return 'manager_cta_intent';
-  }
-  if (/(ипотек|рассроч|кредит|документ|налог|оформлен|сделк|юрист|юридическ|договор|комисс)/i.test(t)) {
-    return 'legal_or_finance_intent';
-  }
-  if (/(где\s+(результат|подборк)|не\s+вижу\s+(результат|подборк|вариант)|ничего\s+не\s+(показал|показывает|открыл|открывает)|я\s+устал|я\s+устала)/i.test(t)) {
-    return 'result_not_visible';
-  }
-  if (/(где\s+хранятся|из\s+каких\s+источник|source_link|created_at|updated_at|csv|excel|crm|api|airtable|notion|обучени[ея]\s+модел|техническ|интеграц|выгруз|баз[ауы]\s+данн|каталог\s+объект)/i.test(t)) {
-    return 'product_or_technical_question';
-  }
-
-  if (
-    updatesApplied !== true &&
-    /(подробнее|дешевле|дороже|еще|ещё|вариант|объект|квартир|дом|что\s+дальше|как\s+посмотреть|можно\s+посмотреть)/i.test(t)
-  ) {
-    return 'no_new_insights';
-  }
-
-  return null;
-};
-
-const buildManagerSystemEvent = (lang = 'ru', reason = 'manager_cta_intent') => {
-  const key = String(lang || 'ru').toLowerCase();
-  const textByLang = {
-    ru: 'Связаться с менеджером',
-    ua: 'Звʼязатися з менеджером',
-    uk: 'Звʼязатися з менеджером',
-    en: 'Contact manager'
-  };
-  return {
-    type: 'action',
-    text: textByLang[key] || textByLang.ru,
-    action: 'open_manager',
-    payload: {
-      eventId: `mgr_${Date.now()}`,
-      reason
-    }
-  };
-};
-
-const getUiHighlightTarget = (text = '') => {
-  const t = String(text || '').toLowerCase().trim();
-  if (!t) return null;
-  if (/(ручн(ые|і|і)?\s+фильтр|ручн(і|ые)?\s+фільтр|фильтр|фільтр|отфильтр|відфільтр|параметр|настроить\s+поиск|налаштувати\s+пошук|точн(ее|іше)|сузить\s+поиск|звузити\s+пошук)/i.test(t)) {
-    return 'filters';
-  }
-  return null;
-};
-
-// 🆕 Sprint VI / Task #2: явная фиксация explicit choice по строгому whitelist (без LLM)
-// Разрешённые маркеры (строгий whitelist):
-// - «беру эту»
-// - «выбираю эту»
-// - «остановимся на этом варианте»
-// - «да, эту квартиру»
-// Запрещено: «нравится», «подходит», «вроде норм», «давай дальше» и т.п.
-const detectExplicitChoiceMarker = (text = '') => {
-  const t = String(text).toLowerCase().trim();
-  const patterns = [
-    /(?:^|[.!?]\s*|,\s*)беру\s+эту\b/i,
-    /(?:^|[.!?]\s*|,\s*)выбираю\s+эту\b/i,
-    /(?:^|[.!?]\s*|,\s*)остановимся\s+на\s+этом\s+варианте\b/i,
-    /(?:^|[.!?]\s*|,\s*)да,?\s+эту\s+квартиру\b/i
-  ];
-  return patterns.some((re) => re.test(t));
 };
 
 const normalizeDistrict = (val) => {
@@ -855,61 +507,6 @@ const applyHardGateByInsights = (properties = [], insights = {}) => {
   }
 
   return list;
-};
-
-const applyResidentialComplexFallbackFromTranscript = (transcription = '', insights = {}) => {
-  const source = String(transcription || '').trim();
-  if (!source || !insights || typeof insights !== 'object') return { applied: false, rcOnly: false, complex: null };
-  let applied = false;
-  let rcOnlyApplied = false;
-  let complexApplied = null;
-
-  const lower = source.toLowerCase();
-  const rcOnlyRe = /(?:^|\s)(?:[жз]к|[жз]\/к)(?:\s|$)|(?:только|лишь|исключительно)\s+(?:в\s+)?(?:[жз]к|[жз]\/к|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)|\bв\s*[жз]к\b|\bжил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?\b|\bв\s+жил(?:ом|ых|ой)\s+комплекс(?:е|ах|ов)?\b/i;
-  const hasRcOnly = rcOnlyRe.test(lower);
-  if (hasRcOnly && insights.rcOnly !== true) {
-    insights.rcOnly = true;
-    insights.residentialComplexOnly = true;
-    applied = true;
-    rcOnlyApplied = true;
-  }
-
-  if (residentialComplexInputToArray(insights.residentialComplex).length === 0) {
-    const cleanupComplexCandidate = (value) => {
-      let text = String(value || '').trim();
-      if (!text) return '';
-      // Cut obvious continuation after the complex name.
-      text = text
-        .replace(/\s+(?:в|на|для|до|по|из|у|к|рядом|возле|около|near)\b.*$/i, '')
-        .replace(/\s+(?:район|мікрорайон|микрорайон|district|area)\b.*$/i, '')
-        .replace(/\s+\d{1,3}(?:[.,]\d+)?\s*(?:usd|\$|доллар|долл|грн|₴)\b.*$/i, '')
-        .replace(/\s{2,}/g, ' ')
-        .replace(/^[«"'`]+|[»"'`]+$/g, '')
-        .trim();
-      return text;
-    };
-    let complexName = null;
-    const quoted = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s*[«"']([^»"']{2,40})[»"']/i);
-    if (quoted && quoted[1]) {
-      complexName = String(quoted[1]).trim();
-    } else {
-      // SAFE FALLBACK: Only grab 1-3 words max, stop at ANY preposition or punctuation.
-      const plain = source.match(/\b(?:жк|зк|жил(?:ой|ого|ому|ом|ые|ых|ыми|ая|ую)?\s+комплекс(?:ы|а|у|е|ом|ах|ами|ов)?)\s+([a-zа-яё0-9][a-zа-яё0-9\-]{1,20}(?:\s+[a-zа-яё0-9\-]{1,20}){0,2})(?=$|[,.!?;:]|\s+(?:в|на|для|до|котор|где|возле|рядом|около|у|из|по)\b)/i);
-      if (plain && plain[1]) {
-        complexName = String(plain[1]).trim();
-      }
-    }
-    if (complexName) {
-      const cleaned = cleanupComplexCandidate(complexName);
-      if (cleaned.length >= 2) {
-        insights.residentialComplex = cleaned;
-        applied = true;
-        complexApplied = cleaned;
-      }
-    }
-  }
-
-  return { applied, rcOnly: rcOnlyApplied, complex: complexApplied };
 };
 
 const normalizeRoomsConstraint = (value) => {
@@ -1347,439 +944,7 @@ const isRetryableError = (error) => {
   return retryableMessages.some(msg => errorMessage.includes(msg));
 };
 
-// ====== RMv3 / Sprint 1 / Task 1: LLM Context Pack + structured [CTX] log (infrastructure only) ======
-// ВАЖНО:
-// - Context Pack transient: НЕ сохраняется в session, НЕ влияет на логику/промпты/ответ
-// - [CTX] — одна читаемая строка перед каждым LLM-вызовом (chat.completions)
-const buildLlmContextPack = (session, sessionId, call) => {
-  // RMv3 / Sprint 1 / Task 2:
-  // Нормализованный контракт LLM Context Pack (только server-side facts, без вычислений и без записи в session).
-  const sid = String(sessionId || session?.sessionId || '');
-  const meta = {
-    sessionId: sid,
-    role: session?.role ?? null,
-    stage: session?.stage ?? null,
-    call: call ?? null
-  };
-
-  const cp = session?.clientProfile || {};
-  const clientProfile = {
-    language: cp.language ?? null,
-    location: cp.location ?? null,
-    purpose: cp.purpose ?? null,
-    // budget — скалярный server-fact (без нормализации/парсинга):
-    // приоритет: clientProfile.budget -> budgetMax -> budgetMin -> insights.budget -> null
-    budget: (cp.budget ?? cp.budgetMax ?? cp.budgetMin ?? session?.insights?.budget ?? null),
-    // rooms как server-fact: если нет в clientProfile, читаем из insights (если есть)
-    rooms: (cp.rooms ?? session?.insights?.rooms ?? null)
-  };
-
-  const uiContext = {
-    currentFocusCard: { cardId: session?.currentFocusCard?.cardId ?? null },
-    lastShown: { cardId: session?.lastShown?.cardId ?? null },
-    lastFocusSnapshot: { cardId: session?.lastFocusSnapshot?.cardId ?? null },
-    sliderActive: session?.sliderContext?.active === true
-  };
-
-  const referencePipeline = {
-    referenceIntent: { type: session?.referenceIntent?.type ?? null },
-    referenceAmbiguity: { isAmbiguous: session?.referenceAmbiguity?.isAmbiguous === true },
-    clarificationRequired: { isRequired: session?.clarificationRequired?.isRequired === true },
-    clarificationBoundaryActive: session?.clarificationBoundaryActive === true,
-    singleReferenceBinding: {
-      hasProposal: session?.singleReferenceBinding?.hasProposal === true,
-      proposedCardId: session?.singleReferenceBinding?.proposedCardId ?? null
-    }
-  };
-
-  const shortlistItems = Array.isArray(session?.candidateShortlist?.items)
-    ? session.candidateShortlist.items
-        .filter((it) => it && it.cardId)
-        .map((it) => ({ cardId: it.cardId }))
-    : [];
-
-  const choice = {
-    candidateShortlist: { items: shortlistItems },
-    explicitChoiceEvent: { isConfirmed: session?.explicitChoiceEvent?.isConfirmed === true },
-    choiceConfirmationBoundary: { active: session?.choiceConfirmationBoundary?.active === true }
-  };
-
-  const invariants = {
-    noGuessingInvariant: { active: session?.noGuessingInvariant?.active === true }
-  };
-
-  // RMv3 / Sprint 1 / Task 3: Facts Bundle (allowedFacts + cardFacts) for relevant cardIds
-  // ВАЖНО: никаких вычислений/нормализаций фактов — только прокидывание server-facts.
-  const factsCardIdsCandidates = [
-    session?.singleReferenceBinding?.proposedCardId ?? null,
-    session?.currentFocusCard?.cardId ?? null,
-    session?.lastShown?.cardId ?? null,
-    session?.lastFocusSnapshot?.cardId ?? null,
-    ...(Array.isArray(session?.candidateShortlist?.items)
-      ? session.candidateShortlist.items.slice(0, 3).map((it) => it?.cardId ?? null)
-      : [])
-  ];
-
-  const factsCardIds = [];
-  for (const id of factsCardIdsCandidates) {
-    if (!id) continue;
-    if (factsCardIds.includes(id)) continue;
-    factsCardIds.push(id);
-    if (factsCardIds.length >= 5) break;
-  }
-
-  const cardFactsById = {};
-  for (const cardId of factsCardIds) {
-    cardFactsById[String(cardId)] = session?.cardFacts?.[cardId] ?? null;
-  }
-
-  const facts = {
-    allowedFactsSnapshot: session?.allowedFactsSnapshot ?? null,
-    cardFactsById,
-    factsCardIds
-  };
-
-  return { meta, clientProfile, uiContext, referencePipeline, choice, invariants, facts };
-};
-
-const formatCtxLogLine = (pack) => {
-  // [CTX] логирует ТОЛЬКО нормализованный Context Pack (RMv3 / Sprint 1 / Task 2).
-  const deploy = DEPLOY_TAG_SHORT;
-  const sid = String(pack?.meta?.sessionId || '');
-  const shortSid = sid ? sid.slice(-8) : 'unknown';
-  const role = pack?.meta?.role ?? null;
-  const stage = pack?.meta?.stage ?? null;
-  const call = pack?.meta?.call ?? null;
-  const budget = pack?.clientProfile?.budget ?? null;
-
-  const focus = pack?.uiContext?.currentFocusCard?.cardId ?? null;
-  const lastShown = pack?.uiContext?.lastShown?.cardId ?? null;
-  const lastFocus = pack?.uiContext?.lastFocusSnapshot?.cardId ?? null;
-  const slider = pack?.uiContext?.sliderActive === true;
-
-  const refType = pack?.referencePipeline?.referenceIntent?.type ?? null;
-  const amb = pack?.referencePipeline?.referenceAmbiguity?.isAmbiguous === true;
-  const clarReq = pack?.referencePipeline?.clarificationRequired?.isRequired === true;
-  const clarBoundary = pack?.referencePipeline?.clarificationBoundaryActive === true;
-  const bind = pack?.referencePipeline?.singleReferenceBinding?.hasProposal === true;
-  const bindCard = pack?.referencePipeline?.singleReferenceBinding?.proposedCardId ?? null;
-
-  const shortlistIds = Array.isArray(pack?.choice?.candidateShortlist?.items)
-    ? Array.from(new Set(pack.choice.candidateShortlist.items.map((it) => it?.cardId).filter(Boolean)))
-    : [];
-  const choice = pack?.choice?.explicitChoiceEvent?.isConfirmed === true;
-  const choiceBoundary = pack?.choice?.choiceConfirmationBoundary?.active === true;
-
-  const noGuess = pack?.invariants?.noGuessingInvariant?.active === true;
-  const factsIds = Array.isArray(pack?.facts?.factsCardIds) ? pack.facts.factsCardIds.filter(Boolean) : [];
-  const factsCount = factsIds.length;
-  const allowedFacts = (() => {
-    const snap = pack?.facts?.allowedFactsSnapshot ?? null;
-    if (!snap || typeof snap !== 'object') return false;
-    return Object.keys(snap).length > 0;
-  })();
-
-  const fmt = (v) => (v === null || v === undefined || v === '' ? 'null' : String(v));
-  const fmtBool = (b) => (b ? '1' : '0');
-
-  // Одна строка, плоский читаемый формат, стабильный порядок полей.
-  return `[CTX] deploy=${deploy} sid=${shortSid} role=${fmt(role)} stage=${fmt(stage)} call=${fmt(call)} budget=${fmt(budget)} focus=${fmt(focus)} lastShown=${fmt(lastShown)} lastFocus=${fmt(lastFocus)} slider=${fmtBool(slider)} ref=${fmt(refType)} amb=${fmtBool(amb)} clarReq=${fmtBool(clarReq)} clarBoundary=${fmtBool(clarBoundary)} bind=${fmtBool(bind)} bindCard=${fmt(bindCard)} shortlist=[${shortlistIds.join(',')}] choice=${fmtBool(choice)} choiceBoundary=${fmtBool(choiceBoundary)} noGuess=${fmtBool(noGuess)} factsIds=[${factsIds.join(',')}] allowedFacts=${fmtBool(allowedFacts)} factsCount=${fmt(factsCount)}`;
-};
-
-const logCtx = (pack) => {
-  try {
-    logBuildOnce();
-    console.log(formatCtxLogLine(pack));
-  } catch (e) {
-    // diagnostics only — не ломаем runtime
-    console.log('[CTX] (failed_to_format)');
-  }
-};
-
-// RMv3 / Sprint 1 / Task 5: expose server facts to LLM as the FIRST system message (infrastructure only)
-// content format (strict): "RMV3_SERVER_FACTS_V1 " + JSON.stringify(shapedPack)
-// NOTE: Shaping reduces token usage; diagnostics ([CTX]) still uses the full normalized pack.
-const buildCardSummaryLines = (shaped) => {
-  const ids = Array.isArray(shaped?.facts?.factsCardIds) ? shaped.facts.factsCardIds.slice(0, 3) : [];
-  const byId = (shaped?.facts?.cardFactsById && typeof shaped.facts.cardFactsById === 'object')
-    ? shaped.facts.cardFactsById
-    : {};
-
-  const lines = [];
-  for (const cardId of ids) {
-    if (!cardId) continue;
-    const raw = byId[cardId] && typeof byId[cardId] === 'object' ? byId[cardId] : null;
-
-    const city = raw?.city ?? null;
-    const district = raw?.district ?? null;
-    const neighborhood = raw?.neighborhood ?? null;
-    const rooms = raw?.rooms ?? null;
-    const priceEUR = raw?.priceEUR ?? null;
-    const price = raw?.price ?? null;
-
-    const parts = [String(cardId)];
-
-    const locParts = [city, district, neighborhood].filter((v) => v !== null && v !== undefined && String(v).trim() !== '');
-    if (locParts.length > 0) {
-      parts.push(locParts.map(String).join(', '));
-    }
-
-    if (rooms !== null && rooms !== undefined && String(rooms).trim() !== '') {
-      const roomsStr = String(rooms);
-      const alreadyHasRoomsWord = /\brooms?\b/i.test(roomsStr) || /\bкомн/i.test(roomsStr);
-      parts.push(alreadyHasRoomsWord ? roomsStr : `${roomsStr} rooms`);
-    }
-
-    const priceVal = (priceEUR !== null && priceEUR !== undefined && String(priceEUR).trim() !== '')
-      ? { key: 'priceEUR', val: priceEUR }
-      : ((price !== null && price !== undefined && String(price).trim() !== '') ? { key: 'price', val: price } : null);
-
-    if (priceVal) {
-      const s = String(priceVal.val);
-      const hasCurrencyHint = /€|eur/i.test(s);
-      parts.push(hasCurrencyHint ? s : `${priceVal.key}=${s}`);
-    }
-
-    // Если кроме id ничего нет — строка должна быть просто CARD_ID
-    lines.push(parts.join(' | '));
-  }
-
-  return lines.slice(0, 3);
-};
-
-const buildShapedFactsPackForLLM = (pack) => {
-  const meta = {
-    sessionId: pack?.meta?.sessionId ?? null,
-    role: pack?.meta?.role ?? null,
-    stage: pack?.meta?.stage ?? null,
-    call: pack?.meta?.call ?? null
-  };
-
-  const ui = {
-    currentFocusCardId: pack?.uiContext?.currentFocusCard?.cardId ?? null,
-    lastShownCardId: pack?.uiContext?.lastShown?.cardId ?? null
-  };
-
-  const ref = {
-    referenceIntentType: pack?.referencePipeline?.referenceIntent?.type ?? null,
-    ambiguity: pack?.referencePipeline?.referenceAmbiguity?.isAmbiguous === true,
-    clarificationRequired: pack?.referencePipeline?.clarificationRequired?.isRequired === true,
-    clarificationBoundaryActive: pack?.referencePipeline?.clarificationBoundaryActive === true,
-    binding: {
-      hasProposal: pack?.referencePipeline?.singleReferenceBinding?.hasProposal === true,
-      proposedCardId: pack?.referencePipeline?.singleReferenceBinding?.proposedCardId ?? null
-    }
-  };
-
-  const rawAllowed = pack?.facts?.allowedFactsSnapshot ?? null;
-  const allowedFactsKeys = (rawAllowed && typeof rawAllowed === 'object')
-    ? Object.keys(rawAllowed).slice(0, 20)
-    : [];
-  const allowedFactsCount = (rawAllowed && typeof rawAllowed === 'object')
-    ? Object.keys(rawAllowed).length
-    : 0;
-
-  // factsCardIds max 3 (priority): proposed -> focus -> lastShown
-  const factsCardIds = [];
-  const candIds = [
-    ref.binding.proposedCardId ?? null,
-    ui.currentFocusCardId ?? null,
-    ui.lastShownCardId ?? null
-  ];
-  for (const id of candIds) {
-    if (!id) continue;
-    if (factsCardIds.includes(id)) continue;
-    factsCardIds.push(id);
-    if (factsCardIds.length >= 3) break;
-  }
-
-  const whitelist = new Set([
-    'id',
-    'cardId',
-    'title',
-    'city',
-    'district',
-    'neighborhood',
-    'price',
-    'priceEUR',
-    'rooms',
-    'area',
-    'floor'
-  ]);
-
-  const cardFactsById = {};
-  for (const cardId of factsCardIds) {
-    const raw = pack?.facts?.cardFactsById?.[cardId] ?? null;
-    if (!raw || typeof raw !== 'object') {
-      cardFactsById[String(cardId)] = null;
-      continue;
-    }
-    const shapedCard = {};
-    for (const key of Object.keys(raw)) {
-      if (!whitelist.has(key)) continue;
-      const val = raw[key];
-      if (val === undefined || val === null) continue;
-      shapedCard[key] = val;
-    }
-    // если вообще ничего не попало — всё равно возвращаем объект (не null), чтобы видеть "есть, но пусто"
-    cardFactsById[String(cardId)] = shapedCard;
-  }
-
-  const shaped = {
-    meta,
-    ui,
-    ref,
-    clarificationMode:
-      ref.clarificationBoundaryActive === true ||
-      ref.ambiguity === true ||
-      ref.clarificationRequired === true,
-    facts: {
-      factsCardIds,
-      allowedFactsKeys,
-      allowedFactsCount,
-      cardFactsById
-    }
-  };
-
-  shaped.facts.cardSummaryLines = buildCardSummaryLines(shaped);
-
-  return shaped;
-};
-
 // ====== Вспомогательные функции профиля/META ======
-
-const mergeClientProfile = (current, delta) => {
-  const result = { ...(current || {}) };
-  if (delta && typeof delta === 'object') {
-    for (const [key, value] of Object.entries(delta)) {
-      if (value !== undefined && value !== null) {
-        result[key] = value;
-      }
-    }
-  }
-  return result;
-};
-
-const normalizeNumber = (v) => {
-  if (v === null || v === undefined) return null;
-  const n = Number(String(v).replace(/[^\d.-]/g, ''));
-  return Number.isFinite(n) ? Math.round(n) : null;
-};
-
-const formatBudgetFromRange = (min, max) => {
-  const minNum = normalizeNumber(min);
-  const maxNum = normalizeNumber(max);
-  const minFormatted = formatNumberUS(minNum);
-  const maxFormatted = formatNumberUS(maxNum);
-  if (minFormatted && maxFormatted) return `${minFormatted}–${maxFormatted} USD`;
-  if (!minFormatted && maxFormatted) return `до ${maxFormatted} USD`;
-  if (minFormatted && !maxFormatted) return `от ${minFormatted} USD`;
-  return null;
-};
-
-const INSIGHT_FIELDS = [
-  'name', 'operation', 'budget', 'budgetMax', 'type', 'district', 'location', 'rooms',
-  'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences',
-  'residentialComplex', 'floorNotFirst', 'floorNotLast'
-];
-
-const recalcInsightsProgress = (insights) => {
-  if (!insights || typeof insights !== 'object') return;
-  const weights = {
-    name: 7,
-    operation: 7,
-    budget: 7,
-    budgetMax: 7,
-    type: 7,
-    district: 7,
-    location: 7,
-    rooms: 7,
-    area: 7,
-    areaMin: 7,
-    areaMax: 7,
-    floor: 7,
-    features: 7,
-    details: 7,
-    preferences: 7,
-    residentialComplex: 7,
-    floorNotFirst: 7,
-    floorNotLast: 7
-  };
-  let totalProgress = 0;
-  for (const [field, weight] of Object.entries(weights)) {
-    const val = insights[field];
-    if (val != null && String(val).trim()) totalProgress += weight;
-  }
-  insights.progress = Math.min(totalProgress, 99);
-};
-
-const sanitizeInsightValue = (value) => {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed.length ? trimmed : null;
-  }
-  if (Array.isArray(value)) {
-    const cleaned = value.map((item) => String(item ?? '').trim()).filter(Boolean);
-    return cleaned.length ? cleaned.join(', ') : null;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (typeof value === 'object') {
-    if ('value' in value) return sanitizeInsightValue(value.value);
-    try {
-      const packed = JSON.stringify(value);
-      return packed && packed !== '{}' ? packed : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-};
-
-const mapPurposeToOperationRu = (purpose) => {
-  if (!purpose) return null;
-  const s = String(purpose).toLowerCase();
-  if (/(buy|покуп|купить|purchase|invest|инвест)/i.test(s)) return 'покупка';
-  if (/(rent|аренд|оренд|снять|lease)/i.test(s)) return 'аренда';
-  return null;
-};
-
-const mapClientProfileToInsights = (clientProfile, insights) => {
-  if (!clientProfile || !insights) return;
-  // Бюджет
-  const explicitBudget = sanitizeInsightValue(clientProfile.budget);
-  const budgetStr = explicitBudget || formatBudgetFromRange(clientProfile.budgetMin, clientProfile.budgetMax);
-  if (budgetStr) insights.budget = budgetStr;
-  if (clientProfile.budgetMax != null) insights.budgetMax = clientProfile.budgetMax;
-  // Локация
-  const location = sanitizeInsightValue(clientProfile.location);
-  if (location) insights.location = location;
-  // Тип
-  const propertyType = sanitizeInsightValue(clientProfile.propertyType);
-  if (propertyType) insights.type = propertyType;
-  // Операция
-  const op = mapPurposeToOperationRu(clientProfile.purpose);
-  if (op) insights.operation = op;
-  const operation = sanitizeInsightValue(clientProfile.operation);
-  if (operation) insights.operation = operation;
-  // Срочность → предпочтения
-  if (clientProfile.urgency && /сроч/i.test(String(clientProfile.urgency))) {
-    insights.preferences = 'срочный поиск';
-  }
-  // Поля clientProfile, полезные для debug/подбора
-  for (const [profileKey, insightKey] of [
-    ['name', 'name'],
-    ['rooms', 'rooms'],
-    ['area', 'area'],
-    ['floor', 'floor'],
-    ['details', 'details'],
-    ['preferences', 'preferences']
-  ]) {
-    const val = sanitizeInsightValue(clientProfile[profileKey]);
-    if (val) insights[insightKey] = val;
-  }
-  recalcInsightsProgress(insights);
-};
 
 const applyMetaInsightsToSession = (session, meta, userUtterance = '') => {
   if (!session || !meta || typeof meta !== 'object') return { applied: false, invalidFields: ['meta'] };
@@ -2554,26 +1719,6 @@ const extractAssistantAndMeta = (fullText) => {
   }
 };
 
-const parseStructuredInsightsResponse = (content) => {
-  const fail = { assistantText: null, meta: null, raw: content ?? null, parseError: true };
-  if (typeof content !== 'string' || !content.trim()) return fail;
-  try {
-    const parsed = JSON.parse(content);
-    if (!parsed || typeof parsed !== 'object') return fail;
-    const assistantText = typeof parsed.assistant_text === 'string' ? parsed.assistant_text.trim() : '';
-    const insights = parsed.insights && typeof parsed.insights === 'object' ? parsed.insights : null;
-    if (!assistantText || !insights) return fail;
-    return {
-      assistantText,
-      meta: { insights },
-      raw: content,
-      parseError: false
-    };
-  } catch {
-    return fail;
-  }
-};
-
 const transcribeAndRespond = async (req, res) => {
   const startTime = Date.now();
   let sessionId = null;
@@ -3279,7 +2424,7 @@ const transcribeAndRespond = async (req, res) => {
     // 🔄 Используем retry для GPT API
     // RMv3 / Sprint 1: transient LLM Context Pack + [CTX] log (infrastructure only)
     llmContextPackForMainCall = buildLlmContextPack(session, sessionId, 'main');
-    logCtx(llmContextPackForMainCall);
+    logCtx(llmContextPackForMainCall, { deployTagShort: DEPLOY_TAG_SHORT, logBuildOnce });
     let completion = await callOpenAIWithRetry(() => 
       openai.chat.completions.create({
         messages,
@@ -3417,25 +2562,12 @@ const transcribeAndRespond = async (req, res) => {
     // --- NEW: STRICT SERVER-SIDE VALIDATION AGAINST CATALOG ---
     try {
       const clientId = process.env.CLIENT_ID || 'georgio-us';
-      const rcs = await listResidentialComplexes(clientId, { limit: 1000 });
-      if (rcs && rcs.length > 0) {
-        const rcExpansion = expandResidentialComplexInput(session.insights.residentialComplex, rcs);
-        if (rcExpansion.matched.length > 0) {
-          session.insights.residentialComplex = rcExpansion.matched.length === 1
-            ? rcExpansion.matched[0]
-            : rcExpansion.matched;
-          session.insights.residentialComplexOnly = true;
-          session.insights.rcOnly = true;
-          if (rcExpansion.matched.length > 1) {
-            console.log(`[RC_VALIDATOR] Expanded RC "${rcExpansion.requested.join(', ')}" -> ${rcExpansion.matched.join(' | ')}`);
-          }
-        } else if (rcExpansion.requested.length > 0) {
-          console.warn(`[RC_VALIDATOR] Rejected unknown RC: "${rcExpansion.requested.join(', ')}". Forcing rcOnly=true.`);
-          session.insights.residentialComplex = null;
-          session.insights.residentialComplexOnly = true;
-          session.insights.rcOnly = true;
-        }
-      }
+      await validateResidentialComplexInsights({
+        clientId,
+        insights: session.insights,
+        limit: 1000,
+        logger: console
+      });
     } catch (e) {
       console.error('[RC_VALIDATOR] Failed to validate RC against catalog:', e);
     }
@@ -3452,7 +2584,6 @@ const transcribeAndRespond = async (req, res) => {
 
     // 🔎 Детектор намерения/вариантов
     const { variants } = detectCardIntent(transcription);
-    const schedule = detectScheduleIntent(transcription);
 
     // UI extras and cards container
     let cards = [];
