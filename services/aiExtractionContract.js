@@ -22,16 +22,16 @@ export const INSIGHTS_RESPONSE_SCHEMA = {
           budgetMax: { type: ['number', 'string', 'null'] },
           type: { type: ['string', 'null'], enum: ['apartment', 'house', 'land', 'commercial', null] },
           district: {
-            type: ['string', 'array', 'null'],
+            type: ['array', 'null'],
             items: { type: 'string' }
           },
           location: {
-            type: ['string', 'array', 'null'],
+            type: ['array', 'null'],
             items: { type: 'string' }
           },
           rooms: {
-            type: ['number', 'string', 'array', 'null'],
-            items: { type: ['number', 'string'] }
+            type: ['array', 'null'],
+            items: { type: 'string' }
           },
           area: { type: ['number', 'string', 'null'] },
           areaMin: { type: ['number', 'string', 'null'] },
@@ -44,7 +44,7 @@ export const INSIGHTS_RESPONSE_SCHEMA = {
           details: { type: ['string', 'null'] },
           preferences: { type: ['string', 'null'] },
           residentialComplex: {
-            type: ['string', 'array', 'null'],
+            type: ['array', 'null'],
             items: { type: 'string' }
           },
           floorNotFirst: { type: ['boolean', 'null'] },

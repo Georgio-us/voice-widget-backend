@@ -99,9 +99,9 @@ RESPONSE STRUCTURE (MANDATORY):
     "budget": number | string | null,
     "budgetMax": number | string | null,
     "type": "apartment" | "house" | "land" | "commercial" | null,
-    "district": string | string[] | null,
-    "location": string | string[] | null,
-    "rooms": number | string | (number | string)[] | null,
+    "district": string[] | null,
+    "location": string[] | null,
+    "rooms": string[] | null,
     "area": number | string | null,
     "areaMin": number | string | null,
     "areaMax": number | string | null,
@@ -111,7 +111,7 @@ RESPONSE STRUCTURE (MANDATORY):
     "features": string[] | null,
     "details": string | null,
     "preferences": string | null,
-    "residentialComplex": string | string[] | null,
+    "residentialComplex": string[] | null,
     "rcOnly": boolean | null,
     "parking": boolean | null,
     "balconyLoggia": boolean | null,
@@ -166,9 +166,11 @@ RESPONSE STRUCTURE (MANDATORY):
   - "не последний этаж" => floorNotLast = true
   - "не первый и не последний этаж" => floorNotFirst = true and floorNotLast = true
 - For multi-value extraction:
-  - If user specifies alternatives for district (e.g., "Приморский или Киевский"), return multi-value in "district".
-  - If user specifies alternatives for rooms (e.g., "1 или 2 комнаты", "однушка или двушка"), return multi-value in "rooms".
-  - For room alternatives, prefer array output in "rooms" (example: [1,2]) and do not collapse to a single value.
+  - The fields "district", "location", "rooms", and "residentialComplex" MUST always be arrays or null.
+  - Even if the user gives one value, return a one-item array: district=["Приморский"], rooms=["2"], residentialComplex=["ЖК Альтаир 2"].
+  - If user specifies alternatives for district (e.g., "Приморский или Киевский"), return all values in "district".
+  - If user specifies alternatives for rooms (e.g., "1 или 2 комнаты", "однушка или двушка"), return all values in "rooms" as strings.
+  - For room alternatives, use array output in "rooms" (example: ["1","2"]) and do not collapse to a single value.
   - If user says both primary and fallback room preference (e.g., "двухкомнатные, но однушки тоже интересуют"), include both values in "rooms".
   - "location" is legacy-compatible input and may be present, but district intent should be carried in "district".
 - For district names normalization:
