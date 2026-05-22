@@ -70,6 +70,11 @@ const normalizeNeighborhoodValue = (value) => {
   if (!raw) return '';
   if (/(аркад|arcad|аркаді)/i.test(raw)) return 'arcadia';
   if (/(центр|center|central)/i.test(raw)) return 'center';
+  if (/(молдаван|moldav)/i.test(raw)) return 'moldavanka';
+  if (/(черемуш|cheremush)/i.test(raw)) return 'cheremushky';
+  if (/(слобод|slobid|slobod)/i.test(raw)) return 'slobidka';
+  if (/(таир|tairo)/i.test(raw)) return 'tairovo';
+  if (/(котовск|котовськ|kotov)/i.test(raw)) return 'kotovskoho';
   return raw;
 };
 const getFeatureComplex = (property) => {
@@ -294,6 +299,8 @@ router.get('/search', async (req, res) => {
     const {
       city,
       district,
+      microdistrict,
+      neighborhood,
       rooms,
       type,
       operation,
@@ -346,6 +353,12 @@ router.get('/search', async (req, res) => {
     const districtTokens = Array.from(new Set(
       toQueryArray(district).map((v) => normalizeDistrictValue(v)).filter(Boolean)
     ));
+    const microdistrictTokens = Array.from(new Set(
+      [
+        ...toQueryArray(microdistrict),
+        ...toQueryArray(neighborhood)
+      ].map((v) => normalizeNeighborhoodValue(v)).filter(Boolean)
+    ));
     const areaMin = toNumber(minArea);
     const areaMax = toNumber(maxArea);
     const floorMin = toInt(minFloor);
@@ -367,6 +380,7 @@ router.get('/search', async (req, res) => {
     const hasSearchFilters = !forceBrowseMode && Boolean(
       hasValue(city)
       || districtTokens.length > 0
+      || microdistrictTokens.length > 0
       || hasValue(type)
       || hasValue(operation)
       || roomsTokens.length > 0
@@ -400,6 +414,18 @@ router.get('/search', async (req, res) => {
 
     if (districtTokens.length > 0) {
       list = list.filter((p) => districtTokens.includes(normalizeDistrictValue(p.district)));
+    }
+
+    if (microdistrictTokens.length > 0) {
+      list = list.filter((p) => {
+        const haystack = [
+          p.neighborhood,
+          p.location_neighborhood,
+          p.title
+        ].map((value) => String(value || '')).join(' ');
+        const normalized = normalizeNeighborhoodValue(haystack);
+        return microdistrictTokens.some((token) => normalized === token);
+      });
     }
 
     if (hasSearchFilters || hasValue(type)) {
