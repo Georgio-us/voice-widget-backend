@@ -59,6 +59,24 @@ import { upsertTelegramUser } from '../services/usersRepository.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const BOT_CLIENT_ID = String(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID || 'demo').trim() || 'demo';
 
+const normalizeUiLanguage = (value) => {
+  const v = String(value || '').trim().toLowerCase().slice(0, 2);
+  if (v === 'ru') return 'ru';
+  if (v === 'en') return 'en';
+  return 'uk';
+};
+
+const buildLanguageLockPrompt = (lang) => {
+  const normalized = normalizeUiLanguage(lang);
+  if (normalized === 'ru') {
+    return 'Runtime language contract: answer assistant_text only in Russian. Do not switch language because of speech recognition or user text unless the UI language changes.';
+  }
+  if (normalized === 'en') {
+    return 'Runtime language contract: answer assistant_text only in English. Do not switch language because of speech recognition or user text unless the UI language changes.';
+  }
+  return 'Runtime language contract: answer assistant_text only in Ukrainian. Do not switch to Russian because the user speaks Russian; Russian is allowed only when the UI sends lang=ru.';
+};
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
 const getUsersJoinStats = async (clientId = BOT_CLIENT_ID) => {
@@ -719,7 +737,7 @@ const formatCardForClient = (req, p) => {
   };
 };
 
-// Определяем язык по истории сессии (ru/en)
+// Legacy fallback only; runtime UI language is the source of truth.
 const detectLangFromSession = (session) => {
   try {
     const lastUser = [...session.messages].reverse().find(m => m.role === 'user');
@@ -727,7 +745,7 @@ const detectLangFromSession = (session) => {
     if (/[А-Яа-яЁё]/.test(sample)) return 'ru';
     if (/[A-Za-z]/.test(sample)) return 'en';
   } catch {}
-  return 'ru';
+  return 'uk';
 };
 
 // Язык по приоритету: профиль → история
@@ -739,6 +757,7 @@ const getPrimaryLanguage = (session) => {
 
 const getUiLanguage = (session) => {
   const lang = String(getPrimaryLanguage(session) || '').toLowerCase();
+  if (lang === 'uk' || lang === 'ua') return 'uk';
   if (lang === 'en') return 'en';
   if (lang === 'es') return 'es';
   return 'ru';
@@ -2354,21 +2373,11 @@ const transcribeAndRespond = async (req, res) => {
       if (/^[\s\S]*[a-zA-Z]/.test(sample)) return 'en';
       return null;
     })();
-    const targetLang = (() => {
-      // Для аудио приоритет — язык фактически распознанной речи
-      if (req.file && detectedLangFromText) return detectedLangFromText;
-      const fromReq = (req.body && req.body.lang) ? String(req.body.lang).toLowerCase() : null;
-      if (fromReq) return fromReq;
-      return detectedLangFromText || 'en';
-    })();
+    const targetLang = normalizeUiLanguage(req.body?.lang);
 
-    // Для аудио синхронизируем язык профиля с фактически распознанной речью.
-    // Для текста сохраняем прежнее поведение (устанавливаем только если ещё не задан).
-    if (req.file && detectedLangFromText) {
-      session.clientProfile.language = detectedLangFromText;
-    } else if (!session.clientProfile.language) {
-      session.clientProfile.language = targetLang;
-    }
+    // Product contract: assistant language follows UI language, not Whisper/text detection.
+    // Default UI language is Ukrainian; Russian is used only after explicit UI switch.
+    session.clientProfile.language = targetLang;
 
     // RMv3 / Fetch RC Catalog to restrict AI hallucination
     const promptClientId = String(process.env.CLIENT_ID || 'georgio-us').trim();
@@ -2414,6 +2423,10 @@ const transcribeAndRespond = async (req, res) => {
       {
         role: 'system',
         content: baseSystemPrompt
+      },
+      {
+        role: 'system',
+        content: buildLanguageLockPrompt(targetLang)
       },
       ...(metaRepairHint ? [metaRepairHint] : []),
       ...dialogMessages
@@ -2482,11 +2495,13 @@ const transcribeAndRespond = async (req, res) => {
     } catch {
       console.log('[META_RAW] failed_to_stringify');
     }
-    let botResponse = assistantText || rawModelContent || 'Хорошо, уточню детали и вернусь с лучшими вариантами.';
-    // Bonus: после ответа GPT подтверждаем язык сессии по распознанному языку пользовательского текста.
-    if (detectedLangFromText) {
-      session.clientProfile.language = detectedLangFromText;
-    }
+    const fallbackBotResponse = targetLang === 'ru'
+      ? 'Хорошо, уточню детали и вернусь с лучшими вариантами.'
+      : (targetLang === 'en'
+        ? 'Okay, I will clarify the details and return with suitable options.'
+        : 'Добре, уточню деталі й повернуся з відповідними варіантами.');
+    let botResponse = assistantText || rawModelContent || fallbackBotResponse;
+    session.clientProfile.language = targetLang;
 
     // Patch (outside roadmap): client-visible bind vs spoke measurement (Safari DevTools)
     const spoke = extractSpokeCardId(botResponse);

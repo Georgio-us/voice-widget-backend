@@ -130,7 +130,7 @@ export async function createLead({
         normalizedEmail,
         normalizedPreferredContactMethod,
         normalizedComment,
-        language || 'ru',
+        language || 'ua',
         normalizedPropertyId,
         consent,
         normalizedExtra

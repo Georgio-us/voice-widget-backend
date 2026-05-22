@@ -6,9 +6,78 @@ import { logEvent, EventTypes } from '../services/eventLogger.js';
 import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
 import { notifyLeadToProjectTelegram } from '../services/projectTelegramNotifier.js';
 import { pool } from '../services/db.js';
+import { getPropertyByExternalId } from '../services/propertiesRepository.js';
 
 const router = express.Router();
 const isWantBotSource = (value) => String(value || '').trim().toLowerCase().startsWith('guest_want_bot');
+
+const formatMoney = (amount, currency = 'USD') => {
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return `${Math.round(n).toLocaleString('en-US')} ${String(currency || 'USD').trim() || 'USD'}`;
+};
+
+const formatPropertyOperationUa = (value) => {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'rent') return 'оренда';
+  if (v === 'sale') return 'продаж';
+  return v || 'обʼєкт';
+};
+
+const formatPropertyTypeUa = (value) => {
+  const v = String(value || '').trim().toLowerCase();
+  if (['apartment', 'flat'].includes(v)) return 'квартира';
+  if (v === 'house') return 'будинок';
+  if (v === 'land') return 'ділянка';
+  if (v === 'commercial') return 'комерція';
+  return v || 'нерухомість';
+};
+
+const buildPropertyLeadSummary = (row) => {
+  if (!row) return null;
+  const geo = row.geo && typeof row.geo === 'object' ? row.geo : {};
+  const externalId = String(row.external_id || '').trim();
+  const title = String(row.title || '').trim();
+  const district = String(geo.district || row.location_district || '').trim();
+  const neighborhood = String(geo.neighborhood || row.location_neighborhood || '').trim();
+  const roomsRaw = Number(row.specs_rooms || 0);
+  const rooms = Number.isFinite(roomsRaw) && roomsRaw > 0 ? `${roomsRaw} кімн.` : '';
+  const areaRaw = Number(row.specs_area_m2 || 0);
+  const area = Number.isFinite(areaRaw) && areaRaw > 0 ? `${areaRaw} м²` : '';
+  const price = formatMoney(row.price_amount, row.price_currency);
+  const parts = [
+    formatPropertyOperationUa(row.operation),
+    formatPropertyTypeUa(row.property_type),
+    district,
+    neighborhood,
+    rooms,
+    area,
+    price
+  ].filter(Boolean);
+  return {
+    id: externalId,
+    title,
+    summary: parts.join(' · ')
+  };
+};
+
+const buildPropertyDeepLink = (propertyId) => {
+  const id = String(propertyId || '').trim();
+  if (!id) return '';
+  const botUsername = String(process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').trim();
+  if (botUsername) {
+    return `https://t.me/${botUsername}/app?startapp=${encodeURIComponent(`prop_${id}`)}`;
+  }
+  const base = String(process.env.FRONTEND_URL || '').trim();
+  if (!base) return '';
+  try {
+    const url = new URL(base);
+    url.searchParams.set('propId', id);
+    return url.toString();
+  } catch {
+    return `${base.replace(/\/+$/, '')}/?propId=${encodeURIComponent(id)}`;
+  }
+};
 
 /**
  * POST /api/leads
@@ -123,7 +192,7 @@ router.post('/', async (req, res) => {
       email,
       preferredContactMethod,
       comment,
-      language: language || 'ru',
+      language: language || 'ua',
       propertyId,
       consent,
       telegramUsername: telegramUsernameTrimmed || null,
@@ -166,6 +235,17 @@ router.post('/', async (req, res) => {
       }
     } catch {}
 
+    let propertyLeadSummary = null;
+    let propertyLeadUrl = '';
+    try {
+      const idForSummary = String(propertyId || lastShownCardIdFromSessionLog || '').trim();
+      if (idForSummary) {
+        const row = await getPropertyByExternalId(idForSummary, effectiveClientId);
+        propertyLeadSummary = buildPropertyLeadSummary(row);
+        propertyLeadUrl = buildPropertyDeepLink(propertyLeadSummary?.id || idForSummary);
+      }
+    } catch {}
+
     // Best-effort Telegram notify (не ломает создание лида)
     try {
       await notifyLeadToTelegram({
@@ -180,12 +260,14 @@ router.post('/', async (req, res) => {
         phoneNumber,
         email,
         preferredContactMethod,
-        language: language || 'ru',
+        language: language || 'ua',
         propertyId: propertyId || null,
         consent,
         comment,
         insights: insightsFromSessionLog,
-        lastShownCardId: lastShownCardIdFromSessionLog
+        lastShownCardId: lastShownCardIdFromSessionLog,
+        propertySummary: propertyLeadSummary,
+        propertyUrl: propertyLeadUrl || null
       });
     } catch (tgErr) {
       // Токен НЕ логируем; ошибка не должна ломать ответ
@@ -205,12 +287,14 @@ router.post('/', async (req, res) => {
           phoneNumber,
           email,
           preferredContactMethod,
-          language: language || 'ru',
+          language: language || 'ua',
           propertyId: propertyId || null,
           consent,
           comment,
           insights: insightsFromSessionLog,
-          lastShownCardId: lastShownCardIdFromSessionLog
+          lastShownCardId: lastShownCardIdFromSessionLog,
+          propertySummary: propertyLeadSummary,
+          propertyUrl: propertyLeadUrl || null
         });
       } catch (projectTgErr) {
         console.warn('[telegram-project] lead notify failed', projectTgErr?.message || projectTgErr);
@@ -235,7 +319,7 @@ router.post('/', async (req, res) => {
           leadId: result.id,
           clientId: effectiveClientId,
           source,
-          language: language || 'ru',
+          language: language || 'ua',
           propertyId: propertyId || null,
           hasPhone: !!phoneNumberTrimmed,
           hasEmail: !!emailTrimmed,

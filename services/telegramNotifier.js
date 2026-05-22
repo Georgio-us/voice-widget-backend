@@ -75,6 +75,7 @@ const formatLanguageLabel = (lang) => {
   if (!v) return '';
   const map = {
     ru: 'Русский',
+    ua: 'Українська',
     en: 'English',
     es: 'Español',
     uk: 'Українська',
@@ -211,9 +212,14 @@ export function buildLeadTelegramMessage(lead) {
   // Request block (insights + references)
   const requestLines = [];
   // existing reference from lead payload
-  if (lead?.propertyId) requestLines.push(`• Объект ID: ${clip(lead.propertyId, 80)}`);
+  if (lead?.propertyId) {
+    requestLines.push(`• Объект ID: ${clip(lead.propertyId, 80)}`);
+  }
   // last shown card id from session logs (existing logged cards)
   if (!lead?.propertyId && lead?.lastShownCardId) requestLines.push(`• Показанный объект ID: ${clip(lead.lastShownCardId, 80)}`);
+  if (lead?.propertyUrl) requestLines.push(`• Ссылка на объект: ${clip(lead.propertyUrl, 500)}`);
+  if (lead?.propertySummary?.summary) requestLines.push(`• Объект: ${clip(lead.propertySummary.summary, 500)}`);
+  if (lead?.propertySummary?.title) requestLines.push(`• Заголовок: ${clip(lead.propertySummary.title, 500)}`);
   requestLines.push(...pickInsightLines(lead?.insights));
   if (requestLines.length) {
     lines.push('🏠 Запрос:');

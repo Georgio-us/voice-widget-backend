@@ -282,30 +282,30 @@ const normalizeAlertsMode = (value) => {
 };
 
 const buildGuestMenuText = () => [
-  '🏠 Добро пожаловать в каталог недвижимости.',
-  'Нажмите «🚀 Открыть каталог», чтобы смотреть объекты.',
-  '✍️ Если нужна консультация — напишите сообщение прямо здесь.'
+  '🏠 Вітаємо в каталозі нерухомості.',
+  'Натисніть «🚀 Відкрити каталог», щоб переглядати обʼєкти.',
+  '✍️ Якщо потрібна консультація — напишіть повідомлення прямо тут.'
 ].join('\n');
 
 const alertsStateEmoji = (flag) => (flag ? '✅' : '❌');
 
 const buildAdminMenuText = (alerts = { leads: true, activity: true }) => [
-  '🛠️ Админ-панель',
+  '🛠️ Адмін-панель',
   '━━━━━━━━━━━━━━━━━━━━',
-  `🔔 Лиды: ${alertsStateEmoji(alerts.leads)}`,
-  `👣 Активность: ${alertsStateEmoji(alerts.activity)}`,
+  `🔔 Ліди: ${alertsStateEmoji(alerts.leads)}`,
+  `👣 Активність: ${alertsStateEmoji(alerts.activity)}`,
   '',
-  'Команды:',
-  '/menu — открыть админ-меню',
-  '/stats — статистика за сегодня',
-  '/alerts — статус уведомлений'
+  'Команди:',
+  '/menu — відкрити адмін-меню',
+  '/stats — статистика за сьогодні',
+  '/alerts — статус сповіщень'
 ].join('\n');
 
 const getOpenCatalogKeyboard = (miniAppUrl) => (
   miniAppUrl
     ? {
         inline_keyboard: [
-          [{ text: '🚀 ОТКРЫТЬ КАТАЛОГ НЕДВИЖИМОСТИ', web_app: { url: miniAppUrl } }]
+          [{ text: '🚀 ВІДКРИТИ КАТАЛОГ НЕРУХОМОСТІ', web_app: { url: miniAppUrl } }]
         ]
       }
     : undefined
@@ -313,11 +313,11 @@ const getOpenCatalogKeyboard = (miniAppUrl) => (
 
 const getAdminMenuKeyboard = (miniAppUrl, alerts = { leads: true, activity: true }) => ({
   inline_keyboard: [
-    ...(miniAppUrl ? [[{ text: '🚀 Открыть каталог', web_app: { url: miniAppUrl } }]] : []),
-    [{ text: '📊 Статистика за сегодня', callback_data: 'menu_stats' }],
-    [{ text: `${alerts.leads ? '✅' : '❌'} Лиды`, callback_data: 'toggle_alerts_leads' }],
-    [{ text: `${alerts.activity ? '✅' : '❌'} Активность`, callback_data: 'toggle_alerts_activity' }],
-    [{ text: '🔄 Обновить меню', callback_data: 'menu_refresh' }]
+    ...(miniAppUrl ? [[{ text: '🚀 Відкрити каталог', web_app: { url: miniAppUrl } }]] : []),
+    [{ text: '📊 Статистика за сьогодні', callback_data: 'menu_stats' }],
+    [{ text: `${alerts.leads ? '✅' : '❌'} Ліди`, callback_data: 'toggle_alerts_leads' }],
+    [{ text: `${alerts.activity ? '✅' : '❌'} Активність`, callback_data: 'toggle_alerts_activity' }],
+    [{ text: '🔄 Оновити меню', callback_data: 'menu_refresh' }]
   ]
 });
 
@@ -538,10 +538,10 @@ export async function startTelegramBot() {
     if (selectionToken) {
       const count = decodeSelectionIds(selectionToken).length;
       replyText = count > 0
-        ? `Здравствуйте! Для вас подготовлена подборка из ${count} объектов. Нажмите «Открыть каталог».`
-        : 'Здравствуйте! Для вас подготовлена подборка. Нажмите «Открыть каталог».';
+        ? `Вітаємо! Для вас підготовлено добірку з ${count} обʼєктів. Натисніть «Відкрити каталог».`
+        : 'Вітаємо! Для вас підготовлено добірку. Натисніть «Відкрити каталог».';
     } else if (propId) {
-      replyText = `Открываю объект ${propId}. Нажмите «Открыть каталог».`;
+      replyText = `Відкриваю обʼєкт ${propId}. Натисніть «Відкрити каталог».`;
     } else if (isAdmin) {
       replyText = buildAdminMenuText(adminAlerts);
     } else {
@@ -568,7 +568,7 @@ export async function startTelegramBot() {
       const tgUserId = String(ctx?.from?.id || '').trim();
       const isAdmin = isAdminTgUser(tgUserId);
       if (!isAdmin) {
-        await ctx.reply('Эта команда доступна только администратору.');
+        await ctx.reply('Ця команда доступна тільки адміністратору.');
         return;
       }
       const text = String(ctx.message?.text || '').trim();
@@ -579,11 +579,11 @@ export async function startTelegramBot() {
 
       if (!arg1) {
         await ctx.reply([
-          'Текущие уведомления:',
-          `• Лиды: ${current.leads ? 'включены ✅' : 'выключены ❌'}`,
-          `• Активность: ${current.activity ? 'включена ✅' : 'выключена ❌'}`,
+          'Поточні сповіщення:',
+          `• Ліди: ${current.leads ? 'увімкнені ✅' : 'вимкнені ❌'}`,
+          `• Активність: ${current.activity ? 'увімкнена ✅' : 'вимкнена ❌'}`,
           '',
-          'Использование:',
+          'Використання:',
           '/alerts leads on|off',
           '/alerts activity on|off'
         ].join('\n'));
@@ -599,12 +599,12 @@ export async function startTelegramBot() {
             : { leads: true, activity: true };
         const result = await setAlertsConfig(BOT_CLIENT_ID, tgUserId, patch);
         const a = result.alerts || patch;
-        await ctx.reply(`Обновлено.\n• Лиды: ${a.leads ? '✅' : '❌'}\n• Активность: ${a.activity ? '✅' : '❌'}`);
+        await ctx.reply(`Оновлено.\n• Ліди: ${a.leads ? '✅' : '❌'}\n• Активність: ${a.activity ? '✅' : '❌'}`);
         return;
       }
 
       if (!['leads', 'activity'].includes(arg1) || !['on', 'off'].includes(arg2)) {
-        await ctx.reply('Неверный формат.\nИспользуйте: /alerts leads on|off или /alerts activity on|off');
+        await ctx.reply('Неправильний формат.\nВикористовуйте: /alerts leads on|off або /alerts activity on|off');
         return;
       }
       const patch = arg1 === 'leads'
@@ -612,10 +612,10 @@ export async function startTelegramBot() {
         : { activity: arg2 === 'on' };
       const result = await setAlertsConfig(BOT_CLIENT_ID, tgUserId, patch);
       const a = result.alerts || { ...current, ...patch };
-      await ctx.reply(`Обновлено.\n• Лиды: ${a.leads ? '✅' : '❌'}\n• Активность: ${a.activity ? '✅' : '❌'}`);
+      await ctx.reply(`Оновлено.\n• Ліди: ${a.leads ? '✅' : '❌'}\n• Активність: ${a.activity ? '✅' : '❌'}`);
     } catch (error) {
       console.warn('telegram /alerts failed:', error?.message || error);
-      await ctx.reply('Не удалось обновить режим уведомлений.');
+      await ctx.reply('Не вдалося оновити режим сповіщень.');
     }
   });
 
@@ -623,19 +623,19 @@ export async function startTelegramBot() {
     try {
       const tgUserId = String(ctx?.from?.id || '').trim();
       if (!isAdminTgUser(tgUserId)) {
-        await ctx.reply('Эта команда доступна только администратору.');
+        await ctx.reply('Ця команда доступна тільки адміністратору.');
         return;
       }
       const stats = await getTodayStats(BOT_CLIENT_ID);
       await ctx.reply([
-        'Статистика за сегодня:',
-        `• Активных объектов: ${stats.activeProperties ?? '—'}`,
-        `• Новых заявок: ${stats.leadsToday ?? '—'}`,
-        `• Новых сессий: ${stats.sessionsToday ?? '—'}`
+        'Статистика за сьогодні:',
+        `• Активних обʼєктів: ${stats.activeProperties ?? '—'}`,
+        `• Нових заявок: ${stats.leadsToday ?? '—'}`,
+        `• Нових сесій: ${stats.sessionsToday ?? '—'}`
       ].join('\n'));
     } catch (error) {
       console.warn('telegram /stats failed:', error?.message || error);
-      await ctx.reply('Не удалось получить статистику.');
+      await ctx.reply('Не вдалося отримати статистику.');
     }
   });
 
@@ -646,10 +646,10 @@ export async function startTelegramBot() {
       if (!isAdminTgUser(tgUserId)) return;
       const stats = await getTodayStats(BOT_CLIENT_ID);
       await ctx.reply([
-        'Статистика за сегодня:',
-        `• Активных объектов: ${stats.activeProperties ?? '—'}`,
-        `• Новых заявок: ${stats.leadsToday ?? '—'}`,
-        `• Новых сессий: ${stats.sessionsToday ?? '—'}`
+        'Статистика за сьогодні:',
+        `• Активних обʼєктів: ${stats.activeProperties ?? '—'}`,
+        `• Нових заявок: ${stats.leadsToday ?? '—'}`,
+        `• Нових сесій: ${stats.sessionsToday ?? '—'}`
       ].join('\n'));
     } catch {}
   });
@@ -661,7 +661,7 @@ export async function startTelegramBot() {
       const current = await getAlertsConfig(BOT_CLIENT_ID, tgUserId);
       const result = await setAlertsConfig(BOT_CLIENT_ID, tgUserId, { leads: !current.leads });
       const alerts = result.alerts || { ...current, leads: !current.leads };
-      await ctx.reply(`Уведомления лидов: ${alerts.leads ? 'включены ✅' : 'выключены ❌'}`);
+      await ctx.reply(`Сповіщення про ліди: ${alerts.leads ? 'увімкнені ✅' : 'вимкнені ❌'}`);
       await ctx.reply(buildAdminMenuText(alerts), { reply_markup: getAdminMenuKeyboard(miniAppUrl, alerts) });
     } catch {}
   });
@@ -673,7 +673,7 @@ export async function startTelegramBot() {
       const current = await getAlertsConfig(BOT_CLIENT_ID, tgUserId);
       const result = await setAlertsConfig(BOT_CLIENT_ID, tgUserId, { activity: !current.activity });
       const alerts = result.alerts || { ...current, activity: !current.activity };
-      await ctx.reply(`Уведомления активности: ${alerts.activity ? 'включены ✅' : 'выключены ❌'}`);
+      await ctx.reply(`Сповіщення про активність: ${alerts.activity ? 'увімкнені ✅' : 'вимкнені ❌'}`);
       await ctx.reply(buildAdminMenuText(alerts), { reply_markup: getAdminMenuKeyboard(miniAppUrl, alerts) });
     } catch {}
   });
@@ -858,7 +858,7 @@ export async function startTelegramBot() {
       await ctx.reply(replyText, keyboard ? { reply_markup: keyboard } : undefined);
       return;
     }
-    await ctx.reply('Нажмите «Открыть каталог» или используйте /menu.');
+    await ctx.reply('Натисніть «Відкрити каталог» або використовуйте /menu.');
   });
 
   try {
