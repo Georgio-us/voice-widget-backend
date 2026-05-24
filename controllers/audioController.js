@@ -1189,6 +1189,9 @@ const applyMetaInsightsToSession = (session, meta, userUtterance = '') => {
 
   const invalidFields = [];
   let appliedCount = 0;
+  const enableRewrite = process.env.ENABLE_AI_FILTER_REWRITE === 'true';
+  const CORE_FIELDS = ['type', 'operation'];
+
   for (const field of INSIGHT_FIELDS) {
     const incoming = sourceInsights[field];
     if (incoming === undefined) continue;
@@ -1211,13 +1214,43 @@ const applyMetaInsightsToSession = (session, meta, userUtterance = '') => {
     else if (field === 'floorNotLast') nextValue = parseFloorBooleanFlag(incoming, 'not_last');
     else if (field === 'features') nextValue = parseFeatures(incoming);
     else nextValue = sanitizeInsightValue(incoming);
+    
     const isEmptyArray = Array.isArray(nextValue) && nextValue.length === 0;
-    if (nextValue === null || nextValue === undefined || isEmptyArray || (!Array.isArray(nextValue) && String(nextValue).trim() === '')) {
-      invalidFields.push(field);
-      continue;
+    const isNullish = nextValue === null || nextValue === undefined || isEmptyArray || (!Array.isArray(nextValue) && String(nextValue).trim() === '');
+    const isCore = CORE_FIELDS.includes(field);
+
+    if (enableRewrite) {
+      if (isCore) {
+        // Write-once policy for core fields: prevent AI from rewriting or clearing them once set
+        if (session.insights[field] != null && String(session.insights[field]).trim() !== '') {
+          continue;
+        } else {
+          if (!isNullish) {
+            session.insights[field] = nextValue;
+            appliedCount += 1;
+          }
+        }
+      } else {
+        // Flexible fields: allow AI to explicitly clear them using null or empty array
+        if (isNullish) {
+          if (session.insights[field] !== null) {
+            session.insights[field] = null;
+            appliedCount += 1;
+          }
+        } else {
+          session.insights[field] = nextValue;
+          appliedCount += 1;
+        }
+      }
+    } else {
+      // Legacy strict logic
+      if (isNullish) {
+        invalidFields.push(field);
+        continue;
+      }
+      session.insights[field] = nextValue;
+      appliedCount += 1;
     }
-    session.insights[field] = nextValue;
-    appliedCount += 1;
   }
   // price policy v1 (AI -> execution semantics source fields):
   // - single amount / upper intent => budgetMax only
