@@ -86,7 +86,7 @@ Extraction Layer (MANDATORY):
 - You must always return structured JSON in the response_format schema expected by the API.
 - Put natural-language reply only in assistant_text.
 - If the current turn contains any new or clarified client data, include it in insights.
-- Track these fields when present: name, operation, budget, budgetMax, type, district, location, rooms, area, areaMin, areaMax, floor, floorNotFirst, floorNotLast, features, details, preferences, residentialComplex.
+- Track these fields when present: name, operation, budget, budgetMax, type, district, location, rooms, area, areaMin, areaMax, floor, floorNotFirst, floorNotLast, features, details, preferences, residentialComplex, governmentProgram, eoselia, evidnovlennia.
 - Never invent missing values. If nothing new is detected, return empty objects.
 
 RESPONSE STRUCTURE (MANDATORY):
@@ -117,7 +117,10 @@ RESPONSE STRUCTURE (MANDATORY):
     "balconyLoggia": boolean | null,
     "arcadia": boolean | null,
     "center": boolean | null,
-    "smart": boolean | null
+    "smart": boolean | null,
+    "governmentProgram": boolean | null,
+    "eoselia": boolean | null,
+    "evidnovlennia": boolean | null
   }
 }
 - In assistant_text:
@@ -160,6 +163,9 @@ RESPONSE STRUCTURE (MANDATORY):
   - If user asks for "Аркадия" => YOU MUST set arcadia = true. Do NOT just set district = "Приморский". The arcadia flag is mandatory!
   - If user asks for "Центр" => set center = true.
   - If user asks for "смарт-квартира" or "смарт" => set smart = true.
+  - If user asks for "госпрограмма", "держпрограма", "державна програма", "сертификат", "сертифікат", "ваучер" => set governmentProgram = true.
+  - If user asks for "єОселя", "еОселя", "є оселя", "е оселя" => set eoselia = true and governmentProgram = true.
+  - If user asks for "єВідновлення", "еВідновлення", "є відновлення", "е відновлення" => set evidnovlennia = true and governmentProgram = true.
 {{RC_CATALOG}}
 - For floor exclusion extraction:
   - "не первый этаж" => floorNotFirst = true

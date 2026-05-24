@@ -320,6 +320,9 @@ router.get('/search', async (req, res) => {
       center,
       parking,
       balconyLoggia,
+      governmentProgram,
+      eoselia,
+      evidnovlennia,
       mode,
       catalogMode,
       view,
@@ -375,6 +378,25 @@ router.get('/search', async (req, res) => {
     const onlyCenter = toBool(center);
     const onlyParking = toBool(parking);
     const onlyBalconyLoggia = toBool(balconyLoggia);
+    const onlyGovernmentProgram = toBool(governmentProgram);
+    const onlyEoselia = toBool(eoselia);
+    const onlyEvidnovlennia = toBool(evidnovlennia);
+    const hasGovernmentProgram = (p, program = '') => {
+      const features = p?.features && typeof p.features === 'object' ? p.features : {};
+      const programList = Array.isArray(features.governmentPrograms)
+        ? features.governmentPrograms.map((item) => normalizeText(item)).filter(Boolean)
+        : [];
+      const programToken = normalizeText(program);
+      if (programToken) {
+        return isTrue(features[programToken]) || programList.includes(programToken);
+      }
+      return (
+        isTrue(features.governmentProgram)
+        || isTrue(features.eoselia)
+        || isTrue(features.evidnovlennia)
+        || programList.length > 0
+      );
+    };
     const browseModeToken = normalizeText(mode || catalogMode || view);
     const forceBrowseMode = ['all', 'allactive', 'active', 'browse', 'default'].includes(browseModeToken);
     const hasSearchFilters = !forceBrowseMode && Boolean(
@@ -400,6 +422,9 @@ router.get('/search', async (req, res) => {
       || onlyCenter
       || onlyParking
       || onlyBalconyLoggia
+      || onlyGovernmentProgram
+      || onlyEoselia
+      || onlyEvidnovlennia
     );
 
     // Берём все объекты клиента из CLIENT_ID env
@@ -523,6 +548,18 @@ router.get('/search', async (req, res) => {
 
     if (onlyBalconyLoggia) {
       list = list.filter((p) => isTrue(p?.balcony) || isTrue(p?.features?.balcony) || isTrue(p?.features?.loggia));
+    }
+
+    if (onlyGovernmentProgram) {
+      list = list.filter((p) => hasGovernmentProgram(p));
+    }
+
+    if (onlyEoselia) {
+      list = list.filter((p) => hasGovernmentProgram(p, 'eoselia'));
+    }
+
+    if (onlyEvidnovlennia) {
+      list = list.filter((p) => hasGovernmentProgram(p, 'evidnovlennia'));
     }
 
     if (onlyRc) {

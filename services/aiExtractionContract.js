@@ -13,7 +13,8 @@ export const INSIGHTS_RESPONSE_SCHEMA = {
           'name', 'operation', 'budget', 'budgetMax', 'type', 'district', 'location', 'rooms',
           'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences',
           'residentialComplex', 'floorNotFirst', 'floorNotLast',
-          'rcOnly', 'parking', 'balconyLoggia', 'arcadia', 'center', 'smart'
+          'rcOnly', 'parking', 'balconyLoggia', 'arcadia', 'center', 'smart',
+          'governmentProgram', 'eoselia', 'evidnovlennia'
         ],
         properties: {
           name: { type: ['string', 'null'] },
@@ -54,7 +55,10 @@ export const INSIGHTS_RESPONSE_SCHEMA = {
           balconyLoggia: { type: ['boolean', 'null'] },
           arcadia: { type: ['boolean', 'null'] },
           center: { type: ['boolean', 'null'] },
-          smart: { type: ['boolean', 'null'] }
+          smart: { type: ['boolean', 'null'] },
+          governmentProgram: { type: ['boolean', 'null'] },
+          eoselia: { type: ['boolean', 'null'] },
+          evidnovlennia: { type: ['boolean', 'null'] }
         }
       }
     }
