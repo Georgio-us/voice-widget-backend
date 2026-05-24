@@ -29,6 +29,37 @@ const IMAGE_WARN_SIZE_MB = (() => {
 const IMAGE_WARN_SIZE_BYTES = IMAGE_WARN_SIZE_MB * 1024 * 1024;
 const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
+const buildPropertyDeepLink = (propertyId) => {
+  const id = String(propertyId || '').trim();
+  if (!id) return '';
+  const botUsername = String(process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').trim();
+  if (botUsername) {
+    return `https://t.me/${botUsername}/app?startapp=${encodeURIComponent(`prop_${id}`)}`;
+  }
+  const base = String(process.env.FRONTEND_URL || '').trim();
+  if (!base) return '';
+  try {
+    const url = new URL(base);
+    url.searchParams.set('propId', id);
+    return url.toString();
+  } catch {
+    return `${base.replace(/\/+$/, '')}/?propId=${encodeURIComponent(id)}`;
+  }
+};
+
+const formatAdminPropertySummary = (row) => {
+  if (!row) return '';
+  const geo = row.geo && typeof row.geo === 'object' ? row.geo : {};
+  const title = String(row.title || '').trim();
+  const type = String(row.property_type || '').trim();
+  const operation = String(row.operation || '').trim();
+  const district = String(geo.district || row.location_district || '').trim();
+  const price = Number(row.price_amount);
+  const currency = String(row.price_currency || 'USD').trim() || 'USD';
+  const priceLabel = Number.isFinite(price) && price > 0 ? `${Math.round(price).toLocaleString('en-US')} ${currency}` : '';
+  return [title, operation, type, district, priceLabel].filter(Boolean).join(' · ');
+};
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { files: MAX_IMAGES },
@@ -189,7 +220,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         FROM lead_requests
         WHERE client_id = $1
           AND (NULLIF(created_at::text, '')::timestamptz AT TIME ZONE $2::text)::date = (NOW() AT TIME ZONE $2::text)::date
-          AND COALESCE(source, '') !~* '^widget_'
+          AND COALESCE(source, '') !~* '^guest_want_bot'
         `,
         [clientId, STATS_TIMEZONE],
         { rows: [{ c: 0 }] }
@@ -222,7 +253,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         SELECT COUNT(*)::int AS c
         FROM lead_requests
         WHERE client_id = $1
-          AND COALESCE(source, '') !~* '^widget_'
+          AND COALESCE(source, '') !~* '^guest_want_bot'
         `,
         [clientId],
         { rows: [{ c: 0 }] }
@@ -250,7 +281,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
           extra->>'tgUserId' AS telegram_user_id
         FROM lead_requests
         WHERE client_id = $1
-          AND COALESCE(source, '') !~* '^widget_'
+          AND COALESCE(source, '') !~* '^guest_want_bot'
         ORDER BY created_at DESC NULLS LAST, id DESC
         LIMIT 5
         `,
@@ -276,7 +307,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
           FROM lead_requests
           WHERE client_id = $1
             AND session_id = s.session_id
-            AND COALESCE(source, '') !~* '^widget_'
+            AND COALESCE(source, '') !~* '^guest_want_bot'
           ORDER BY created_at DESC NULLS LAST, id DESC
           LIMIT 1
         ) lr ON true
@@ -288,7 +319,38 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
       )
     ]);
 
+    const recentLeadRows = Array.isArray(recentLeadsResp?.rows) ? recentLeadsResp.rows : [];
     const recentActivityRows = Array.isArray(recentActivityResp?.rows) ? recentActivityResp.rows : [];
+    const propertyIds = new Set();
+    for (const row of recentLeadRows) {
+      const id = String(row?.property_id || '').trim();
+      if (id) propertyIds.add(id);
+    }
+    for (const row of recentActivityRows) {
+      const id = String(row?.lead_property_id || '').trim();
+      if (id) propertyIds.add(id);
+    }
+    const propertyById = new Map();
+    await Promise.all(Array.from(propertyIds).map(async (id) => {
+      try {
+        const row = await getPropertyByExternalId(id, clientId);
+        if (row) propertyById.set(id.toUpperCase(), row);
+      } catch {}
+    }));
+    const buildPropertyMeta = (propertyId) => {
+      const id = String(propertyId || '').trim();
+      if (!id) return {};
+      const row = propertyById.get(id.toUpperCase()) || null;
+      return {
+        property_url: buildPropertyDeepLink(id),
+        property_title: String(row?.title || '').trim() || null,
+        property_summary: formatAdminPropertySummary(row) || null
+      };
+    };
+    const recentLeads = recentLeadRows.map((row) => ({
+      ...row,
+      ...buildPropertyMeta(row?.property_id)
+    }));
     const recentActivity = recentActivityRows.map((row) => {
       const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
       const sessionMeta = payload?.sessionMeta && typeof payload.sessionMeta === 'object' ? payload.sessionMeta : {};
@@ -307,7 +369,8 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         telegram_user_id: tgUserId,
         left_lead: row?.has_lead === true,
         lead_source: String(row?.lead_source || '').trim() || null,
-        lead_property_id: String(row?.lead_property_id || '').trim() || null
+        lead_property_id: String(row?.lead_property_id || '').trim() || null,
+        ...buildPropertyMeta(row?.lead_property_id)
       };
     });
 
@@ -321,7 +384,7 @@ router.get('/stats/summary', requireAdmin, async (req, res) => {
         usersToday: usersTodayResp?.rows?.[0]?.c ?? 0,
         totalLeads: totalLeadsResp?.rows?.[0]?.c ?? 0,
         totalSessions: totalSessionsResp?.rows?.[0]?.c ?? 0,
-        recentLeads: Array.isArray(recentLeadsResp?.rows) ? recentLeadsResp.rows : [],
+        recentLeads,
         recentActivity
       }
     });
@@ -491,16 +554,27 @@ router.get('/clients/list', requireAdmin, async (req, res) => {
     const leadRows = await safeQuery(
       'lead aggregates',
       `
+      WITH base AS (
+        SELECT
+          lr.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(NULLIF(lr.extra->>'tgUserId', ''), LOWER(REGEXP_REPLACE(COALESCE(lr.extra->>'telegramUsername', ''), '^@', '')))
+            ORDER BY lr.created_at DESC NULLS LAST, lr.id DESC
+          ) AS rn
+        FROM lead_requests lr
+        WHERE lr.client_id = $1
+          AND COALESCE(lr.source, '') !~* '^guest_want_bot'
+          AND (COALESCE(lr.extra->>'tgUserId', '') <> '' OR COALESCE(lr.extra->>'telegramUsername', '') <> '')
+      )
       SELECT
-        lr.extra->>'tgUserId' AS tg_user_id,
-        LOWER(REGEXP_REPLACE(COALESCE(lr.extra->>'telegramUsername', ''), '^@', '')) AS username,
+        extra->>'tgUserId' AS tg_user_id,
+        LOWER(REGEXP_REPLACE(COALESCE(extra->>'telegramUsername', ''), '^@', '')) AS username,
         COUNT(*)::int AS leads_count,
-        MAX(lr.created_at) AS last_lead_at
-      FROM lead_requests lr
-      WHERE lr.client_id = $1
-        AND COALESCE(lr.source, '') !~* '^widget_'
-        AND (COALESCE(lr.extra->>'tgUserId', '') <> '' OR COALESCE(lr.extra->>'telegramUsername', '') <> '')
-      GROUP BY lr.extra->>'tgUserId', LOWER(REGEXP_REPLACE(COALESCE(lr.extra->>'telegramUsername', ''), '^@', ''))
+        MAX(created_at) AS last_lead_at,
+        MAX(CASE WHEN rn = 1 THEN source END) AS last_lead_source,
+        MAX(CASE WHEN rn = 1 THEN property_id END) AS last_lead_property_id
+      FROM base
+      GROUP BY extra->>'tgUserId', LOWER(REGEXP_REPLACE(COALESCE(extra->>'telegramUsername', ''), '^@', ''))
       `,
       [clientId],
       []
@@ -541,7 +615,9 @@ router.get('/clients/list', requireAdmin, async (req, res) => {
     for (const row of leadRows) {
       const data = {
         leads_count: Number(row?.leads_count || 0),
-        last_lead_at: row?.last_lead_at || null
+        last_lead_at: row?.last_lead_at || null,
+        last_lead_source: String(row?.last_lead_source || '').trim() || null,
+        last_lead_property_id: String(row?.last_lead_property_id || '').trim() || null
       };
       const tgId = String(row?.tg_user_id || '').trim();
       const username = String(row?.username || '').trim().toLowerCase();
@@ -573,6 +649,9 @@ router.get('/clients/list', requireAdmin, async (req, res) => {
         last_seen_at: row?.last_seen_at || null,
         leads_count: Number(lead?.leads_count || 0),
         last_lead_at: lead?.last_lead_at || null,
+        last_lead_source: lead?.last_lead_source || null,
+        last_lead_property_id: lead?.last_lead_property_id || null,
+        last_lead_property_url: buildPropertyDeepLink(lead?.last_lead_property_id),
         sessions_count: Number(session?.sessions_count || 0),
         last_session_id: session?.last_session_id || null,
         last_session_at: session?.last_session_at || null,

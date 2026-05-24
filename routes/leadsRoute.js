@@ -33,6 +33,62 @@ const formatPropertyTypeUa = (value) => {
   return v || 'нерухомість';
 };
 
+const toPositiveNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(String(value).replace(',', '.'));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const formatNumberShort = (value) => {
+  const n = toPositiveNumber(value);
+  if (n === null) return '';
+  return Number.isInteger(n) ? String(n) : String(n).replace(/\.0+$/, '').replace('.', ',');
+};
+
+const getPropertyFeatures = (row) => (
+  row?.features && typeof row.features === 'object' && !Array.isArray(row.features)
+    ? row.features
+    : {}
+);
+
+const readLandAreaSotka = (row) => {
+  const features = getPropertyFeatures(row);
+  const displaySpecs = features.display_specs && typeof features.display_specs === 'object' ? features.display_specs : {};
+  const candidates = [
+    row?.land_area_sotka,
+    row?.landAreaSotka,
+    features.land_area_sotka,
+    features.landAreaSotka,
+    displaySpecs.land_area_sotka,
+    displaySpecs.landAreaSotka
+  ];
+  for (const candidate of candidates) {
+    const n = toPositiveNumber(candidate);
+    if (n !== null) return n;
+  }
+  return null;
+};
+
+const readGovernmentProgramLabels = (row) => {
+  const features = getPropertyFeatures(row);
+  const rawPrograms = Array.isArray(features.governmentPrograms) ? features.governmentPrograms : [];
+  const labels = new Set();
+  const hasEoselia =
+    features.eoselia === true ||
+    features.eOselya === true ||
+    rawPrograms.some((item) => /osel|осел/i.test(String(item || '')));
+  const hasEvidnovlennia =
+    features.evidnovlennia === true ||
+    features.eVidnovlennia === true ||
+    rawPrograms.some((item) => /vidnov|віднов|виднов|восстанов/i.test(String(item || '')));
+  if (hasEoselia) labels.add('єОселя');
+  if (hasEvidnovlennia) labels.add('єВідновлення');
+  if (!labels.size && (features.governmentProgram === true || features.government_program === true)) {
+    labels.add('держпрограми');
+  }
+  return Array.from(labels);
+};
+
 const buildPropertyLeadSummary = (row) => {
   if (!row) return null;
   const geo = row.geo && typeof row.geo === 'object' ? row.geo : {};
@@ -42,17 +98,29 @@ const buildPropertyLeadSummary = (row) => {
   const neighborhood = String(geo.neighborhood || row.location_neighborhood || '').trim();
   const roomsRaw = Number(row.specs_rooms || 0);
   const rooms = Number.isFinite(roomsRaw) && roomsRaw > 0 ? `${roomsRaw} кімн.` : '';
-  const areaRaw = Number(row.specs_area_m2 || 0);
-  const area = Number.isFinite(areaRaw) && areaRaw > 0 ? `${areaRaw} м²` : '';
+  const type = String(row.property_type || '').trim().toLowerCase();
+  const isHouse = type === 'house';
+  const isLand = type === 'land';
+  const areaM2 = toPositiveNumber(row.specs_area_m2);
+  const landAreaSotka = readLandAreaSotka(row);
+  const areaParts = [];
+  if (!isLand && areaM2 !== null) {
+    areaParts.push(isHouse ? `будинок ${formatNumberShort(areaM2)} м²` : `${formatNumberShort(areaM2)} м²`);
+  }
+  if ((isHouse || isLand) && landAreaSotka !== null) {
+    areaParts.push(`ділянка ${formatNumberShort(landAreaSotka)} сот.`);
+  }
   const price = formatMoney(row.price_amount, row.price_currency);
+  const governmentPrograms = readGovernmentProgramLabels(row);
   const parts = [
     formatPropertyOperationUa(row.operation),
     formatPropertyTypeUa(row.property_type),
     district,
     neighborhood,
     rooms,
-    area,
-    price
+    ...areaParts,
+    price,
+    governmentPrograms.length ? `держпрограми: ${governmentPrograms.join(', ')}` : ''
   ].filter(Boolean);
   return {
     id: externalId,

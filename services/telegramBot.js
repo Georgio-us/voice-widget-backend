@@ -244,6 +244,47 @@ function formatAreaM2(rawArea) {
   return `${text} м²`;
 }
 
+function formatPositiveNumber(rawValue) {
+  if (rawValue === null || rawValue === undefined || rawValue === '') return '';
+  const n = Number(String(rawValue).replace(',', '.'));
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return Number.isInteger(n) ? String(n) : String(n).replace(/\.0+$/, '').replace('.', ',');
+}
+
+function readLandAreaSotka(raw = {}) {
+  const features = raw?.features && typeof raw.features === 'object' && !Array.isArray(raw.features) ? raw.features : {};
+  const displaySpecs = features.display_specs && typeof features.display_specs === 'object' ? features.display_specs : {};
+  const candidates = [
+    raw.land_area_sotka,
+    raw.landAreaSotka,
+    features.land_area_sotka,
+    features.landAreaSotka,
+    displaySpecs.land_area_sotka,
+    displaySpecs.landAreaSotka
+  ];
+  for (const candidate of candidates) {
+    const formatted = formatPositiveNumber(candidate);
+    if (formatted) return formatted;
+  }
+  return '';
+}
+
+function buildAreaTextRu(property = {}) {
+  const type = String(property.propertyType || '').trim().toLowerCase();
+  const isHouse = type === 'house';
+  const isLand = type === 'land';
+  const parts = [];
+  if (!isLand) {
+    const area = formatAreaM2(property.areaM2);
+    if (area && area !== '—') parts.push(isHouse ? `дом ${area}` : area);
+  }
+  if (isHouse || isLand) {
+    const landArea = formatPositiveNumber(property.landAreaSotka);
+    if (landArea) parts.push(`участок ${landArea} сот.`);
+  }
+  return parts.join('; ') || '—';
+}
+
 function isValidPublicImageUrl(url) {
   const value = String(url || '').trim();
   if (!/^https:\/\//i.test(value)) return false;
@@ -268,6 +309,7 @@ async function getPropertyForInlineShare(propId) {
     neighborhood: String(geo?.neighborhood || raw.location_neighborhood || '').trim(),
     rooms: Number(raw.specs_rooms ?? raw.rooms ?? 0) || null,
     areaM2: Number(raw.specs_area_m2 ?? raw.area_m2 ?? raw.area ?? 0) || null,
+    landAreaSotka: readLandAreaSotka(raw),
     priceLabel: formatPriceLabel(raw.price_amount),
     image: images[0] || ''
   };
@@ -781,7 +823,7 @@ export async function startTelegramBot() {
         '🏡 Подобрал объект, который может вам подойти.',
         `🏷 Тип: ${typeWithRooms}`,
         `💰 Цена: ${property.priceLabel || '—'}`,
-        `📐 Площадь: ${formatAreaM2(property.areaM2)}`,
+        `📐 Площадь: ${buildAreaTextRu(property)}`,
         `📍 Район: ${district || '—'}`
       ].join('\n');
 
