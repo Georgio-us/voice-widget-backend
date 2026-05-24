@@ -298,6 +298,14 @@ const parseAreaM2 = (attrsIndex) => {
   return Number.isFinite(value) ? value : null;
 };
 
+const parseLandAreaSotka = (attrsIndex) => {
+  const raw = getAttrText(attrsIndex, [
+    'land_area'
+  ]);
+  const value = toNumber(raw);
+  return Number.isFinite(value) ? value : null;
+};
+
 const parseFloor = (attrsIndex) => {
   const raw = getAttrText(attrsIndex, [
     'floor',
@@ -500,6 +508,7 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
   const { operation, propertyType } = resolveCategoryMapping(advert, attrsIndex);
   const rooms = parseRooms(attrsIndex);
   const areaM2 = parseAreaM2(attrsIndex);
+  const landAreaSotka = parseLandAreaSotka(attrsIndex);
   const floor = parseFloor(attrsIndex);
   const bathrooms = parseBathrooms(attrsIndex);
   const buildingFloors = parseBuildingFloors(attrsIndex);
@@ -538,6 +547,7 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
     street,
     complex: zkh || null,
     kitchen_area: Number.isFinite(kitchenArea) ? kitchenArea : null,
+    land_area_sotka: Number.isFinite(landAreaSotka) ? landAreaSotka : null,
     total_floors: buildingFloors,
     heating,
     repair,
@@ -565,6 +575,8 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
     olxStatus: status || null,
     rooms,
     areaM2,
+    landAreaSotka,
+    land_area_sotka: landAreaSotka,
     floor,
     bathrooms,
     balcony: hasBalcony,
@@ -603,6 +615,7 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
     priceAmountUsd,
     rooms,
     areaM2,
+    landAreaSotka,
     floor,
     hasBalcony,
     hasParking,

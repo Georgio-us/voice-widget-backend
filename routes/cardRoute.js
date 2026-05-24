@@ -207,6 +207,12 @@ const normalizeProperty = (p) => {
   const rooms = toInt(p.specs?.rooms ?? feat.rooms ?? p.specs_rooms);
   const bathrooms = toInt(p.specs?.bathrooms ?? feat.bathrooms ?? p.specs_bathrooms);
   const area_m2 = toNumber(p.specs?.area_m2 ?? feat.areaM2 ?? p.specs_area_m2);
+  const land_area_sotka = toNumber(
+    p.specs?.land_area_sotka
+    ?? feat.landAreaSotka
+    ?? feat.land_area_sotka
+    ?? feat?.display_specs?.land_area_sotka
+  );
   const floor = toInt(p.specs?.floor ?? feat.floor ?? p.specs_floor);
   const building_floors = toInt(
     p.building_floors
@@ -257,6 +263,8 @@ const normalizeProperty = (p) => {
     rooms,
     bathrooms,
     area_m2,
+    land_area_sotka,
+    landAreaSotka: land_area_sotka,
     floor,
     building_floors,
     floors_total: building_floors,

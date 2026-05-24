@@ -675,6 +675,11 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
     const floor = parseIntSafe(req.body?.floor);
     const floorsTotal = parseIntSafe(req.body?.floorsTotal);
     const area = parseDecimalSafe(req.body?.area);
+    const explicitLandAreaSotka = parseDecimalSafe(req.body?.landAreaSotka ?? req.body?.land_area_sotka);
+    const landAreaSotka = Number.isFinite(explicitLandAreaSotka)
+      ? explicitLandAreaSotka
+      : (propertyType === 'land' ? area : null);
+    const areaM2 = propertyType === 'land' ? null : area;
     const price = parseIntSafe(String(req.body?.price || '').replace(/[^\d]/g, ''));
     const balcony = toBool(req.body?.balcony);
     const terrace = toBool(req.body?.terrace);
@@ -717,7 +722,7 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
       rooms,
       floor,
       building_floors: floorsTotal,
-      area_m2: area,
+      area_m2: areaM2,
       price_amount: price,
       balcony,
       terrace,
@@ -730,6 +735,8 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
         newbuilding: toBool(req.body?.newbuilding),
         loggia: toBool(req.body?.loggia),
         parking: toBool(req.body?.parking),
+        landAreaSotka,
+        land_area_sotka: landAreaSotka,
         governmentProgram: toBool(req.body?.governmentProgram) || governmentFlags.governmentProgram,
         governmentPrograms: governmentFlags.governmentPrograms,
         eoselia: governmentFlags.eoselia,
@@ -771,6 +778,11 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
     const floor = parseIntSafe(req.body?.floor);
     const floorsTotal = parseIntSafe(req.body?.floorsTotal);
     const area = parseDecimalSafe(req.body?.area);
+    const explicitLandAreaSotka = parseDecimalSafe(req.body?.landAreaSotka ?? req.body?.land_area_sotka);
+    const landAreaSotka = Number.isFinite(explicitLandAreaSotka)
+      ? explicitLandAreaSotka
+      : (propertyType === 'land' ? area : null);
+    const areaM2 = propertyType === 'land' ? null : area;
     const price = parseIntSafe(String(req.body?.price || '').replace(/[^\d]/g, ''));
     const balcony = toBool(req.body?.balcony);
     const terrace = toBool(req.body?.terrace);
@@ -817,7 +829,7 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
         rooms,
         floor,
         building_floors: floorsTotal,
-        area_m2: area,
+        area_m2: areaM2,
         price_amount: price,
         balcony,
         terrace,
@@ -830,6 +842,8 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
           newbuilding: toBool(req.body?.newbuilding),
           loggia: toBool(req.body?.loggia),
           parking: toBool(req.body?.parking),
+          landAreaSotka,
+          land_area_sotka: landAreaSotka,
           governmentProgram: toBool(req.body?.governmentProgram) || governmentFlags.governmentProgram,
           governmentPrograms: governmentFlags.governmentPrograms,
           eoselia: governmentFlags.eoselia,
