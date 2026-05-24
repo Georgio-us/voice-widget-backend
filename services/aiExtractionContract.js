@@ -11,7 +11,7 @@ export const INSIGHTS_RESPONSE_SCHEMA = {
         additionalProperties: false,
         required: [
           'name', 'operation', 'budget', 'budgetMax', 'type', 'district', 'location', 'rooms',
-          'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences',
+          'area', 'areaMin', 'areaMax', 'landArea', 'landAreaMin', 'landAreaMax', 'floor', 'features', 'details', 'preferences',
           'residentialComplex', 'floorNotFirst', 'floorNotLast',
           'rcOnly', 'parking', 'balconyLoggia', 'arcadia', 'center', 'smart',
           'governmentProgram', 'eoselia', 'evidnovlennia'
@@ -37,6 +37,9 @@ export const INSIGHTS_RESPONSE_SCHEMA = {
           area: { type: ['number', 'string', 'null'] },
           areaMin: { type: ['number', 'string', 'null'] },
           areaMax: { type: ['number', 'string', 'null'] },
+          landArea: { type: ['number', 'string', 'null'] },
+          landAreaMin: { type: ['number', 'string', 'null'] },
+          landAreaMax: { type: ['number', 'string', 'null'] },
           floor: { type: ['number', 'string', 'null'] },
           features: {
             type: ['array', 'null'],

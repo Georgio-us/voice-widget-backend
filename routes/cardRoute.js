@@ -316,6 +316,8 @@ router.get('/search', async (req, res) => {
       maxPrice,
       minArea,
       maxArea,
+      minLandArea,
+      maxLandArea,
       minFloor,
       maxFloor,
       floorNotFirst,
@@ -372,6 +374,8 @@ router.get('/search', async (req, res) => {
     ));
     const areaMin = toNumber(minArea);
     const areaMax = toNumber(maxArea);
+    const landAreaMin = toNumber(minLandArea);
+    const landAreaMax = toNumber(maxLandArea);
     const floorMin = toInt(minFloor);
     const floorMax = toInt(maxFloor);
     const onlyFloorNotFirst = toBool(floorNotFirst);
@@ -418,6 +422,8 @@ router.get('/search', async (req, res) => {
       || max != null
       || areaMin != null
       || areaMax != null
+      || landAreaMin != null
+      || landAreaMax != null
       || floorMin != null
       || floorMax != null
       || onlyFloorNotFirst
@@ -498,6 +504,14 @@ router.get('/search', async (req, res) => {
 
     if (areaMax != null) {
       list = list.filter((p) => Number(p.area_m2) <= areaMax);
+    }
+
+    if (landAreaMin != null) {
+      list = list.filter((p) => Number(p.land_area_sotka) >= landAreaMin);
+    }
+
+    if (landAreaMax != null) {
+      list = list.filter((p) => Number(p.land_area_sotka) <= landAreaMax);
     }
 
     if (floorMin != null) {
@@ -593,6 +607,8 @@ router.get('/search', async (req, res) => {
       maxPrice: max,
       minArea: areaMin,
       maxArea: areaMax,
+      minLandArea: landAreaMin,
+      maxLandArea: landAreaMax,
       minFloor: floorMin,
       maxFloor: floorMax,
       parkingRequired: onlyParking,

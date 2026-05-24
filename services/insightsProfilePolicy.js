@@ -1,6 +1,6 @@
 export const INSIGHT_FIELDS = [
   'name', 'operation', 'budget', 'budgetMax', 'type', 'district', 'location', 'rooms',
-  'area', 'areaMin', 'areaMax', 'floor', 'features', 'details', 'preferences',
+  'area', 'areaMin', 'areaMax', 'landArea', 'landAreaMin', 'landAreaMax', 'floor', 'features', 'details', 'preferences',
   'residentialComplex', 'floorNotFirst', 'floorNotLast'
 ];
 
@@ -54,6 +54,9 @@ export const recalcInsightsProgress = (insights) => {
     area: 7,
     areaMin: 7,
     areaMax: 7,
+    landArea: 7,
+    landAreaMin: 7,
+    landAreaMax: 7,
     floor: 7,
     features: 7,
     details: 7,

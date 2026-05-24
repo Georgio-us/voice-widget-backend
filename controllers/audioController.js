@@ -722,6 +722,8 @@ const formatCardForClient = (req, p) => {
     // Дополнительные поля для back-стороны карточки
     description: p.description ?? null,
     area_m2: p.area_m2 ?? p?.specs?.area_m2 ?? null,
+    land_area_sotka: p.land_area_sotka ?? p.landAreaSotka ?? p?.specs?.land_area_sotka ?? p?.features?.landAreaSotka ?? p?.features?.land_area_sotka ?? null,
+    landAreaSotka: p.landAreaSotka ?? p.land_area_sotka ?? p?.specs?.land_area_sotka ?? p?.features?.landAreaSotka ?? p?.features?.land_area_sotka ?? null,
     price_per_m2: p.price_per_m2 ?? null,
     bathrooms: p.bathrooms ?? p?.specs?.bathrooms ?? null,
     features: p.features ?? null,
@@ -1201,6 +1203,9 @@ const applyMetaInsightsToSession = (session, meta, userUtterance = '') => {
     else if (field === 'area') nextValue = parseNumeric(incoming);
     else if (field === 'areaMin') nextValue = parseNumeric(incoming);
     else if (field === 'areaMax') nextValue = parseNumeric(incoming);
+    else if (field === 'landArea') nextValue = parseNumeric(incoming);
+    else if (field === 'landAreaMin') nextValue = parseNumeric(incoming);
+    else if (field === 'landAreaMax') nextValue = parseNumeric(incoming);
     else if (field === 'floor') nextValue = parseFloorNumber(incoming);
     else if (field === 'floorNotFirst') nextValue = parseFloorBooleanFlag(incoming, 'not_first');
     else if (field === 'floorNotLast') nextValue = parseFloorBooleanFlag(incoming, 'not_last');

@@ -86,7 +86,7 @@ Extraction Layer (MANDATORY):
 - You must always return structured JSON in the response_format schema expected by the API.
 - Put natural-language reply only in assistant_text.
 - If the current turn contains any new or clarified client data, include it in insights.
-- Track these fields when present: name, operation, budget, budgetMax, type, district, location, rooms, area, areaMin, areaMax, floor, floorNotFirst, floorNotLast, features, details, preferences, residentialComplex, governmentProgram, eoselia, evidnovlennia.
+- Track these fields when present: name, operation, budget, budgetMax, type, district, location, rooms, area, areaMin, areaMax, landArea, landAreaMin, landAreaMax, floor, floorNotFirst, floorNotLast, features, details, preferences, residentialComplex, governmentProgram, eoselia, evidnovlennia.
 - Never invent missing values. If nothing new is detected, return empty objects.
 
 RESPONSE STRUCTURE (MANDATORY):
@@ -105,6 +105,9 @@ RESPONSE STRUCTURE (MANDATORY):
     "area": number | string | null,
     "areaMin": number | string | null,
     "areaMax": number | string | null,
+    "landArea": number | string | null,
+    "landAreaMin": number | string | null,
+    "landAreaMax": number | string | null,
     "floor": number | string | null,
     "floorNotFirst": boolean | null,
     "floorNotLast": boolean | null,
@@ -138,6 +141,12 @@ RESPONSE STRUCTURE (MANDATORY):
   - "дом", "дома" => type = "house"
   - "коммерция", "офис", "помещение" => type = "commercial"
   - "участок", "земля" => type = "land"
+- For area extraction:
+  - Use area/areaMin/areaMax only for internal/building area in square meters.
+  - Use landArea/landAreaMin/landAreaMax for land plot area in сотки.
+  - If user says "дом 500 м² и участок 15 соток", set type = "house", area = 500, landArea = 15.
+  - If user says "участок 10 соток", set type = "land", landArea = 10, and do not write 10 into area.
+  - Do not mix house/building area and land plot area.
 - For budget extraction (CRITICAL):
   - Default currency is USD unless user explicitly says гривну: "грн", "гривен", "гривень", "гривня", "гривні", "₴".
   - Convert shorthand correctly:
