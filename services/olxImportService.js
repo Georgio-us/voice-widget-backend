@@ -7,6 +7,11 @@ import {
   upsertOlxIntegration
 } from './olxIntegrationRepository.js';
 import { refreshAccessToken } from './olxOAuthService.js';
+import {
+  detectGovernmentProgramsFromOlxAttributes,
+  detectGovernmentProgramsFromTitle,
+  mergeGovernmentProgramFlags
+} from './governmentProgramsNormalizer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -505,12 +510,20 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
 
   const zkh = normalizeResidentialComplexName(getAttrText(attrsIndex, ['zkh']));
   const street = getAttrText(attrsIndex, ['street_address']) || normalize(location?.street) || null;
+  const title = normalize(advert?.title) || null;
+  const description = normalize(advert?.description) || null;
+  const governmentFlags = mergeGovernmentProgramFlags(
+    detectGovernmentProgramsFromOlxAttributes({
+      eoselia: getAttrText(attrsIndex, ['eoselia'])
+    }),
+    detectGovernmentProgramsFromTitle(title)
+  );
   if (!districtName) {
     const districtFallbackText = [
       neighborhood,
       street,
-      normalize(advert?.title),
-      normalize(advert?.description)
+      title,
+      description
     ].filter(Boolean).join(' ');
     districtName = inferDistrictFromText(districtFallbackText) || null;
   }
@@ -558,6 +571,10 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
     parking: hasParking,
     has_balcony: hasBalcony,
     has_parking: hasParking,
+    governmentProgram: governmentFlags.governmentProgram,
+    governmentPrograms: governmentFlags.governmentPrograms.length ? governmentFlags.governmentPrograms : null,
+    eoselia: governmentFlags.eoselia,
+    evidnovlennia: governmentFlags.evidnovlennia,
     complex: zkh || null,
     zkh: zkh || null,
     display_specs: Object.keys(displaySpecs).length ? displaySpecs : null,
@@ -592,8 +609,8 @@ export function normalizeOlxAdvert(advert = {}, clientId) {
     zkh: zkh || null,
 
     // Shared card/body fields
-    title: normalize(advert?.title) || null,
-    description: normalize(advert?.description) || null,
+    title,
+    description,
     cityLabel: cityLabel || null,
     neighborhood: neighborhood || null,
     address: street,

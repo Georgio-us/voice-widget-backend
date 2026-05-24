@@ -9,6 +9,10 @@ import {
   getPropertyByExternalId,
   updateManualPropertyByExternalId
 } from '../services/propertiesRepository.js';
+import {
+  detectGovernmentProgramsFromTitle,
+  mergeGovernmentProgramFlags
+} from '../services/governmentProgramsNormalizer.js';
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
 
@@ -675,13 +679,13 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
     const balcony = toBool(req.body?.balcony);
     const terrace = toBool(req.body?.terrace);
     const furnished = false;
-    const eoselia = toBool(req.body?.eoselia);
-    const evidnovlennia = toBool(req.body?.evidnovlennia);
-    const governmentProgram = toBool(req.body?.governmentProgram) || eoselia || evidnovlennia;
-    const governmentPrograms = [
-      eoselia ? 'eoselia' : null,
-      evidnovlennia ? 'evidnovlennia' : null
-    ].filter(Boolean);
+    const governmentFlags = mergeGovernmentProgramFlags(
+      {
+        eoselia: toBool(req.body?.eoselia),
+        evidnovlennia: toBool(req.body?.evidnovlennia)
+      },
+      detectGovernmentProgramsFromTitle(title)
+    );
 
     const files = Array.isArray(req.files) ? req.files : [];
     logImageSizes(files, 'create');
@@ -726,10 +730,10 @@ router.post('/properties', uploadImages, requireAdmin, async (req, res) => {
         newbuilding: toBool(req.body?.newbuilding),
         loggia: toBool(req.body?.loggia),
         parking: toBool(req.body?.parking),
-        governmentProgram,
-        governmentPrograms,
-        eoselia,
-        evidnovlennia,
+        governmentProgram: toBool(req.body?.governmentProgram) || governmentFlags.governmentProgram,
+        governmentPrograms: governmentFlags.governmentPrograms,
+        eoselia: governmentFlags.eoselia,
+        evidnovlennia: governmentFlags.evidnovlennia,
         complex: String(req.body?.complex || '').trim() || null
       }
     }, clientId);
@@ -771,13 +775,13 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
     const balcony = toBool(req.body?.balcony);
     const terrace = toBool(req.body?.terrace);
     const furnished = false;
-    const eoselia = toBool(req.body?.eoselia);
-    const evidnovlennia = toBool(req.body?.evidnovlennia);
-    const governmentProgram = toBool(req.body?.governmentProgram) || eoselia || evidnovlennia;
-    const governmentPrograms = [
-      eoselia ? 'eoselia' : null,
-      evidnovlennia ? 'evidnovlennia' : null
-    ].filter(Boolean);
+    const governmentFlags = mergeGovernmentProgramFlags(
+      {
+        eoselia: toBool(req.body?.eoselia),
+        evidnovlennia: toBool(req.body?.evidnovlennia)
+      },
+      detectGovernmentProgramsFromTitle(title)
+    );
 
     const files = Array.isArray(req.files) ? req.files : [];
     logImageSizes(files, 'update');
@@ -826,10 +830,10 @@ router.put('/properties/:externalId', uploadImages, requireAdmin, async (req, re
           newbuilding: toBool(req.body?.newbuilding),
           loggia: toBool(req.body?.loggia),
           parking: toBool(req.body?.parking),
-          governmentProgram,
-          governmentPrograms,
-          eoselia,
-          evidnovlennia,
+          governmentProgram: toBool(req.body?.governmentProgram) || governmentFlags.governmentProgram,
+          governmentPrograms: governmentFlags.governmentPrograms,
+          eoselia: governmentFlags.eoselia,
+          evidnovlennia: governmentFlags.evidnovlennia,
           complex: String(req.body?.complex || '').trim() || null
         }
       },
