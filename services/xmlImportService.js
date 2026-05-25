@@ -20,6 +20,8 @@ export async function upsertXmlProperty(payload, clientId) {
   const areaM2 = Number.isFinite(payload.specs_area_m2) ? payload.specs_area_m2 : null;
   const buildingFloors = Number.isFinite(payload.building_floors) ? payload.building_floors : null;
   const images = Array.isArray(payload.images) ? payload.images : [];
+  const balcony = payload.specs_balcony === true;
+  const buildingYear = Number.isFinite(payload.building_year) ? payload.building_year : null;
   const raw = payload.raw || {};
 
   const geo = {
@@ -30,7 +32,8 @@ export async function upsertXmlProperty(payload, clientId) {
   const features = {
     rooms,
     areaM2,
-    floor
+    floor,
+    ...(payload.extraFeatures || {})
   };
   const media = images.map((url) => ({ type: 'image', url }));
 
@@ -38,11 +41,11 @@ export async function upsertXmlProperty(payload, clientId) {
     INSERT INTO properties (
       client_id, external_id, operation, property_type, price_amount, price_currency,
       geo, features, media, location_city, location_district, location_address,
-      building_floors, specs_rooms, specs_area_m2, specs_floor, description, images, raw, is_active, updated_at
+      building_floors, building_year, specs_rooms, specs_area_m2, specs_floor, specs_balcony, description, images, raw, is_active, updated_at
     ) VALUES (
       $1, $2, $3, $4, $5, $6,
       $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12,
-      $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, true, NOW()
+      $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21::jsonb, true, NOW()
     )
     ON CONFLICT (client_id, external_id) DO UPDATE SET
       operation = EXCLUDED.operation,
@@ -56,9 +59,11 @@ export async function upsertXmlProperty(payload, clientId) {
       location_district = EXCLUDED.location_district,
       location_address = EXCLUDED.location_address,
       building_floors = EXCLUDED.building_floors,
+      building_year = EXCLUDED.building_year,
       specs_rooms = EXCLUDED.specs_rooms,
       specs_area_m2 = EXCLUDED.specs_area_m2,
       specs_floor = EXCLUDED.specs_floor,
+      specs_balcony = EXCLUDED.specs_balcony,
       description = EXCLUDED.description,
       images = EXCLUDED.images,
       raw = EXCLUDED.raw,
@@ -73,7 +78,7 @@ export async function upsertXmlProperty(payload, clientId) {
     payload.price_currency || 'USD',
     JSON.stringify(geo), JSON.stringify(features), JSON.stringify(media),
     city, district || null, address || null,
-    buildingFloors, rooms, areaM2, floor,
+    buildingFloors, buildingYear, rooms, areaM2, floor, balcony,
     description || null, JSON.stringify(images), JSON.stringify(raw)
   ];
 
@@ -140,6 +145,49 @@ export async function parseAndImportXml(url, clientId = 'test') {
       
       const description = offer.description || '';
       
+      let specs_balcony = false;
+      let building_year = null;
+      let extraFeatures = {};
+      
+      const chars = offer.characteristics?.option || [];
+      const charArray = Array.isArray(chars) ? chars : [chars];
+      for (const char of charArray) {
+        if (!char || !char.key || !char.value) continue;
+        const key = String(char.key).trim();
+        const value = String(char.value).trim();
+        if (!value) continue;
+        
+        if (key === 'Балкон') {
+          if (value.toLowerCase() !== 'нет') specs_balcony = true;
+        } else if (key === 'Год постройки') {
+          const yr = parseInt(value, 10);
+          if (Number.isFinite(yr)) building_year = yr;
+        } else {
+          if (key === 'Тип дома' && value.toLowerCase().includes('новострой')) {
+            extraFeatures.residentialComplex = true;
+          }
+          const enKeyMap = {
+            'Состояние': 'condition',
+            'Санузел': 'bathroom_type',
+            'Потолок': 'ceiling',
+            'Материал': 'wall_material',
+            'Коммуникации': 'communications',
+            'Газ': 'gas',
+            'Вода': 'water',
+            'Фасад': 'facade',
+            'Фасокон': 'windows_facing',
+            'Тип дома': 'building_type'
+          };
+          const mappedKey = enKeyMap[key] || key;
+          extraFeatures[mappedKey] = value;
+        }
+      }
+      
+      if (offer.planirovka) {
+        const p = typeof offer.planirovka === 'string' ? offer.planirovka : offer.planirovka?._ || JSON.stringify(offer.planirovka);
+        extraFeatures.layout = p;
+      }
+      
       const raw = {
         source: 'xml_import',
         original_url: url,
@@ -159,8 +207,11 @@ export async function parseAndImportXml(url, clientId = 'test') {
         specs_floor,
         specs_area_m2,
         building_floors,
+        building_year,
+        specs_balcony,
         description,
         images,
+        extraFeatures,
         raw
       };
 
