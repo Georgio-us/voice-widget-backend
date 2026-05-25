@@ -134,7 +134,8 @@ export async function parseAndImportXml(url, clientId = 'test') {
       
       let images = [];
       if (offer.image) {
-        images = Array.isArray(offer.image) ? offer.image : [offer.image];
+        const rawImages = Array.isArray(offer.image) ? offer.image : [offer.image];
+        images = rawImages.filter(url => typeof url === 'string' && url.startsWith('http'));
       }
       
       const description = offer.description || '';
