@@ -33,13 +33,31 @@ const uniqueByNormalized = (items) => {
 };
 
 export function expandResidentialComplexInput(input, catalogRows = []) {
-  const catalogNames = uniqueByNormalized(
-    (Array.isArray(catalogRows) ? catalogRows : []).map((row) => row?.name ?? row)
-  );
-  const normalizedCatalog = catalogNames.map((name) => ({
-    name,
-    norm: normalizeResidentialComplexName(name)
-  })).filter((row) => row.norm);
+  const normalizedCatalog = [];
+  const seenNorm = new Set();
+  
+  for (const row of (Array.isArray(catalogRows) ? catalogRows : [])) {
+    const name = toText(row?.name ?? row);
+    const translations = typeof row === 'object' && row?.nameTranslations ? row.nameTranslations : null;
+    const norm = normalizeResidentialComplexName(name);
+    
+    if (!name || !norm || seenNorm.has(norm)) continue;
+    seenNorm.add(norm);
+    
+    let normRu = null;
+    let normUa = null;
+    if (translations) {
+      try {
+        const t = typeof translations === 'string' ? JSON.parse(translations) : translations;
+        if (t.ru) normRu = normalizeResidentialComplexName(t.ru);
+        if (t.ua) normUa = normalizeResidentialComplexName(t.ua);
+      } catch (e) {
+        // ignore parse error
+      }
+    }
+    
+    normalizedCatalog.push({ name, norm, normRu, normUa });
+  }
 
   const requested = residentialComplexInputToArray(input);
   const matched = [];
@@ -49,18 +67,20 @@ export function expandResidentialComplexInput(input, catalogRows = []) {
     const norm = normalizeResidentialComplexName(raw);
     if (!norm) continue;
 
-    const exact = normalizedCatalog.filter((row) => row.norm === norm);
+    const exact = normalizedCatalog.filter((row) => 
+      row.norm === norm || row.normRu === norm || row.normUa === norm
+    );
     if (exact.length > 0) {
       matched.push(...exact.map((row) => row.name));
       continue;
     }
 
     // Group expansion: "Альтаир" -> "ЖК Альтаир 1", "ЖК Альтаир 2", "ЖК Альтаир 3".
-    const group = normalizedCatalog.filter((row) => (
-      row.norm.startsWith(`${norm} `)
-      || row.norm.startsWith(`${norm}-`)
-      || row.norm.startsWith(`${norm} №`)
-    ));
+    const matchPrefix = (field) => field && (field.startsWith(`${norm} `) || field.startsWith(`${norm}-`) || field.startsWith(`${norm} №`));
+    
+    const group = normalizedCatalog.filter((row) => 
+      matchPrefix(row.norm) || matchPrefix(row.normRu) || matchPrefix(row.normUa)
+    );
     if (group.length > 0) {
       matched.push(...group.map((row) => row.name));
       continue;

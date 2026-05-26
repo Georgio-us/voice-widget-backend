@@ -26,7 +26,7 @@ export async function listResidentialComplexes(clientId, { q = '', limit = 50 } 
   if (!needle) {
     const { rows } = await pool.query(
       `
-      SELECT id, name, created_at AS "createdAt"
+      SELECT id, name, created_at AS "createdAt", name_translations AS "nameTranslations"
       FROM client_residential_complexes
       WHERE client_id = $1
       ORDER BY created_at DESC
@@ -42,7 +42,7 @@ export async function listResidentialComplexes(clientId, { q = '', limit = 50 } 
 
   const { rows } = await pool.query(
     `
-    SELECT id, name, created_at AS "createdAt"
+    SELECT id, name, created_at AS "createdAt", name_translations AS "nameTranslations"
     FROM client_residential_complexes
     WHERE client_id = $1
       AND name ILIKE $2 ESCAPE '\\'
@@ -54,9 +54,9 @@ export async function listResidentialComplexes(clientId, { q = '', limit = 50 } 
   return rows;
 }
 
-/**
- * Вставка ЖК; при дубле по (client_id, name_normalized) возвращает существующую строку.
- */
+import { translateResidentialComplex } from './localizationService.js';
+import { normalizeResidentialComplexName } from './residentialComplexMatcher.js';
+
 export async function insertResidentialComplex(clientId, rawName, createdByTgUserId = null) {
   const safeClientId = resolveClientId(clientId);
   const name = String(rawName ?? '').trim().replace(/\s+/g, ' ');
@@ -71,15 +71,36 @@ export async function insertResidentialComplex(clientId, rawName, createdByTgUse
     ? String(createdByTgUserId).trim()
     : '';
   const tgNum = /^\d{1,19}$/.test(tgStr) ? tgStr : null;
+  
+  const translations = await translateResidentialComplex(name);
+  let normTranslations = null;
+  if (translations) {
+    normTranslations = {
+      ru: normalizeResidentialComplexName(translations.ru),
+      ua: normalizeResidentialComplexName(translations.ua)
+    };
+  }
 
   const insert = await pool.query(
     `
-    INSERT INTO client_residential_complexes (client_id, name, created_by_tg_user_id)
-    VALUES ($1, $2, $3)
+    INSERT INTO client_residential_complexes (
+      client_id, 
+      name, 
+      created_by_tg_user_id,
+      name_translations,
+      name_normalized_translations
+    )
+    VALUES ($1, $2, $3, $4, $5)
     ON CONFLICT (client_id, name_normalized) DO NOTHING
-    RETURNING id, name, created_at AS "createdAt"
+    RETURNING id, name, created_at AS "createdAt", name_translations AS "nameTranslations"
     `,
-    [safeClientId, name, tgNum]
+    [
+      safeClientId, 
+      name, 
+      tgNum, 
+      translations ? JSON.stringify(translations) : null,
+      normTranslations ? JSON.stringify(normTranslations) : null
+    ]
   );
 
   if (insert.rows[0]) {
@@ -88,7 +109,7 @@ export async function insertResidentialComplex(clientId, rawName, createdByTgUse
 
   const { rows } = await pool.query(
     `
-    SELECT id, name, created_at AS "createdAt"
+    SELECT id, name, created_at AS "createdAt", name_translations AS "nameTranslations"
     FROM client_residential_complexes
     WHERE client_id = $1
       AND name_normalized = ${normalizeNameExpr(2)}
