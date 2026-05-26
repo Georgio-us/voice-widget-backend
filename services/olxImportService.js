@@ -12,6 +12,7 @@ import {
   detectGovernmentProgramsFromTitle,
   mergeGovernmentProgramFlags
 } from './governmentProgramsNormalizer.js';
+import { ensureResidentialComplexes } from './residentialComplexesRepository.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -741,20 +742,9 @@ async function upsertImportedResidentialComplexes({
     : '';
   const tgNum = /^\d{1,19}$/.test(tgStr) ? tgStr : null;
 
-  const inserted = await pool.query(
-    `
-    INSERT INTO client_residential_complexes (client_id, name, created_by_tg_user_id)
-    SELECT $1, item.name, $2
-    FROM (
-      SELECT DISTINCT btrim(regexp_replace(unnest($3::text[]), E'\\s+', ' ', 'g')) AS name
-    ) AS item
-    WHERE item.name <> ''
-    ON CONFLICT (client_id, name_normalized) DO NOTHING
-    `,
-    [safeClientId, tgNum, uniqueNames]
-  );
-
-  return Number(inserted?.rowCount || 0);
+  // Instead of raw direct SQL INSERT, we route this through ensureResidentialComplexes 
+  // to properly deduplicate by ru/ua aliases and trigger OpenAI translations if needed.
+  return await ensureResidentialComplexes(safeClientId, uniqueNames, tgNum);
 }
 
 async function fetchAdvertsPage(accessToken, { offset = 0, limit = 100 } = {}) {

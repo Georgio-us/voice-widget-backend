@@ -2423,7 +2423,18 @@ const transcribeAndRespond = async (req, res) => {
     try {
       const rcs = await listResidentialComplexes(promptClientId, { limit: 200 });
       if (rcs && rcs.length > 0) {
-        rcCatalogStr = rcs.map(r => r.name).join(', ');
+        rcCatalogStr = rcs.map(r => {
+          const aliases = new Set();
+          if (r.nameTranslations) {
+            try {
+              const t = typeof r.nameTranslations === 'string' ? JSON.parse(r.nameTranslations) : r.nameTranslations;
+              if (t.ru && t.ru !== r.name) aliases.add(t.ru);
+              if (t.ua && t.ua !== r.name) aliases.add(t.ua);
+            } catch (e) {}
+          }
+          const aliasesStr = aliases.size > 0 ? ` (${Array.from(aliases).join('/')})` : '';
+          return `${r.name}${aliasesStr}`;
+        }).join(', ');
       }
     } catch (e) {
       console.warn('Failed to load RC catalog for prompt:', e);
