@@ -120,9 +120,10 @@ export async function parseAndImportXml(url, clientId = 'test') {
       const type = offer.type === 'аренда' ? 'rent' : 'sale';
       
       let property_type = 'apartment';
-      if (offer.category === 'дом' || offer.category === 'дача') property_type = 'house';
-      if (offer.category === 'участок') property_type = 'land';
-      if (offer.category === 'коммерческая' || offer.category === 'коммерция') property_type = 'commercial';
+      const cat = (offer.category || '').toLowerCase().trim();
+      if (['дом', 'дача', 'таунхаусы', 'таунхаус'].includes(cat)) property_type = 'house';
+      else if (['участок', 'uchastok'].includes(cat)) property_type = 'land';
+      else if (['коммерческая', 'коммерция', 'офисы', 'торговые помещения', 'промышленность', 'склады'].includes(cat)) property_type = 'commercial';
 
       const price_amount = offer.price?.value ? Number(offer.price.value) : null;
       const price_currency = offer.price?.currency || 'USD';
