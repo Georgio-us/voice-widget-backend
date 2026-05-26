@@ -360,9 +360,10 @@ router.get('/residential-complexes', async (req, res) => {
       return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
     }
     const q = String(req.query?.q ?? '').trim();
+    const lang = String(req.query?.lang ?? 'ua').trim().toLowerCase().slice(0, 2) === 'ru' ? 'ru' : 'ua';
     const limitRaw = Number.parseInt(String(req.query?.limit ?? '50').trim(), 10);
     const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
-    const items = await listResidentialComplexes(SERVICE_CLIENT_ID, { q, limit });
+    const items = await listResidentialComplexes(SERVICE_CLIENT_ID, { q, limit, lang });
     return res.json({ ok: true, items });
   } catch (error) {
     console.error('GET /api/cards/residential-complexes:', error);
