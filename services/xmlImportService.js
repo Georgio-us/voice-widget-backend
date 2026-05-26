@@ -2,6 +2,7 @@ import fs from 'fs';
 import xml2js from 'xml2js';
 import fetch from 'node-fetch';
 import { pool } from './db.js';
+import { ensureResidentialComplexes } from './residentialComplexesRepository.js';
 
 export async function upsertXmlProperty(payload, clientId) {
   const safeClientId = String(clientId || 'test').trim();
@@ -111,6 +112,17 @@ export async function parseAndImportXml(url, clientId = 'test') {
   
   console.log(`Found ${offersArray.length} offers. Starting import...`);
   
+  // --- PRE-IMPORT RC NAMES ---
+  try {
+    const rcNames = [...new Set(offersArray.map(o => String(o.novostroi_name || '').trim()).filter(Boolean))];
+    if (rcNames.length > 0) {
+      console.log(`Ensuring ${rcNames.length} unique Residential Complexes...`);
+      await ensureResidentialComplexes(clientId, rcNames);
+    }
+  } catch (err) {
+    console.error('Failed to ensure RC names for XML feed', err.message);
+  }
+  
   let imported = 0;
   for (const offer of offersArray) {
     try {
@@ -149,6 +161,12 @@ export async function parseAndImportXml(url, clientId = 'test') {
       let specs_balcony = false;
       let building_year = null;
       let extraFeatures = {};
+      
+      const rcName = String(offer.novostroi_name || '').trim();
+      if (rcName) {
+        extraFeatures.complex = rcName;
+        extraFeatures.zkh = rcName;
+      }
       
       const chars = offer.characteristics?.option || [];
       const charArray = Array.isArray(chars) ? chars : [chars];
