@@ -1,5 +1,3 @@
-import { File } from 'node:buffer';
-globalThis.File = File;
 import { OpenAI } from 'openai';
 // DB repository (Postgres)
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
@@ -21,13 +19,7 @@ import {
 } from '../services/llmContextPack.js';
 import { INSIGHT_FIELDS } from '../services/insightsProfilePolicy.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
-import { appendMessage, upsertSessionLog } from '../services/sessionLogger.js';
-import {
-  sendSessionActivityStartToTelegram
-} from '../services/telegramNotifier.js';
-import {
-  sendSessionActivityStartToProjectTelegram
-} from '../services/projectTelegramNotifier.js';
+import { appendMessage } from '../services/sessionLogger.js';
 import {
   getUiLanguage,
   normalizeUiLanguage
@@ -74,6 +66,11 @@ import {
   recordInteractionDebugTrace
 } from '../services/audioInteractionDebugService.js';
 import {
+  getAudioRequestNetworkMeta,
+  initializeNewAudioSessionSideEffects
+} from '../services/audioRequestBootstrapService.js';
+import { resolveAudioInput } from '../services/audioInputService.js';
+import {
   REF_FALLBACK_CONFIDENCE_THRESHOLD,
   classifyReferenceIntentFallbackLLM,
   detectReferenceIntent,
@@ -111,8 +108,7 @@ const transcribeAndRespond = async (req, res) => {
   let sessionId = null;
   
   // Извлекаем IP и User-Agent в начале функции, чтобы они были доступны в блоке catch
-  const userIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.connection?.remoteAddress || null;
-  const userAgent = req.headers['user-agent'] || null;
+  const { userIp, userAgent } = getAudioRequestNetworkMeta(req);
 
   try {
     if (!req.file && !req.body.text) {
@@ -122,85 +118,9 @@ const transcribeAndRespond = async (req, res) => {
     sessionId = req.body.sessionId || generateSessionId();
     const isNewSession = !sessions.has(sessionId);
     const session = getOrCreateSession(sessionId);
-    // RMv3: Telegram "someone is using the widget right now" (on first real user request = first /upload)
-    // ВАЖНО:
-    // - НЕ по клику "открыть виджет", а по факту обращения (/upload)
-    // - best-effort: не ломает основной поток
-    // - храним message_id в session, чтобы потом обновить тем же сообщением при финализации (TTL/clear)
-    try {
-      if (isNewSession === true) {
-        const tgUser = {
-          userId: req.body?.tgUserId ? String(req.body.tgUserId).trim() : null,
-          username: req.body?.tgUsername ? String(req.body.tgUsername).trim() : null,
-          firstName: req.body?.tgFirstName ? String(req.body.tgFirstName).trim() : null,
-          lastName: req.body?.tgLastName ? String(req.body.tgLastName).trim() : null
-        };
-        // best-effort geo from headers (no external dependencies)
-        const h = (k) => {
-          try { return req?.headers?.[k] || req?.headers?.[String(k || '').toLowerCase()] || null; } catch { return null; }
-        };
-        const country =
-          (h('cf-ipcountry') || h('x-vercel-ip-country') || h('x-country') || h('x-geo-country') || null);
-        const city =
-          (h('x-vercel-ip-city') || h('x-city') || h('x-geo-city') || h('cf-ipcity') || null);
-        const geo = {
-          ...(country ? { country: String(country).trim() } : {}),
-          ...(city ? { city: String(city).trim() } : {})
-        };
-        const hasTgUser = Object.values(tgUser).some((v) => String(v || '').trim().length > 0);
-        if (hasTgUser) {
-          session.telegramUser = {
-            ...(tgUser.userId ? { userId: tgUser.userId } : {}),
-            ...(tgUser.username ? { username: tgUser.username } : {}),
-            ...(tgUser.firstName ? { firstName: tgUser.firstName } : {}),
-            ...(tgUser.lastName ? { lastName: tgUser.lastName } : {})
-          };
-        }
-        upsertSessionLog({
-          sessionId,
-          userAgent,
-          userIp,
-          payloadPatch: {
-            sessionMeta: {
-              ...(hasTgUser ? { telegramUser: session.telegramUser } : {})
-            }
-          }
-        }).catch(() => {});
-        // store on session (server is source of truth)
-        session.geo = geo && (geo.country || geo.city) ? geo : null;
-        session.telegram = session.telegram || {};
-        sendSessionActivityStartToTelegram({
-          sessionId: session.sessionId || sessionId,
-          startedAt: session.createdAt,
-          geo: session.geo,
-          telegramUser: session.telegramUser || null,
-          messageCount: Array.isArray(session.messages) ? session.messages.length : 0
-        })
-          .then((r) => {
-            if (r?.ok === true && r?.messageId) {
-              session.telegram.activityMessageId = r.messageId;
-              session.telegram.activityMessageAt = Date.now();
-            }
-          })
-          .catch(() => {});
-        session.telegramProject = session.telegramProject || {};
-        sendSessionActivityStartToProjectTelegram({
-          sessionId: session.sessionId || sessionId,
-          startedAt: session.createdAt,
-          geo: session.geo,
-          telegramUser: session.telegramUser || null,
-          messageCount: Array.isArray(session.messages) ? session.messages.length : 0
-        })
-          .then((r) => {
-            if (r?.ok === true && r?.messageIds && typeof r.messageIds === 'object') {
-              session.telegramProject.activityMessageIds = { ...r.messageIds };
-              session.telegramProject.activityMessageAt = Date.now();
-            }
-          })
-          .catch(() => {});
-      }
-    } catch {}
-    const inputTypeForLog = req.file ? 'audio' : 'text'; // для логирования (английский)
+    if (isNewSession === true) {
+      initializeNewAudioSessionSideEffects({ req, session, sessionId, userIp, userAgent });
+    }
     const clientDebugEnabled = isClientDebugEnabled(req);
     // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — defensive guard
     if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
@@ -221,35 +141,12 @@ const transcribeAndRespond = async (req, res) => {
       clampApplied: false
     };
 
-    let transcription = '';
-    let transcriptionTime = 0;
-
-    if (req.file) {
-      const audioFile = new File([req.file.buffer], req.file.originalname, {
-        type: req.file.mimetype
-      });
-
-      const transcriptionStart = Date.now();
-      
-      // 🔄 Используем retry для Whisper API
-      // Важно: language НЕ передаем — Whisper сам автоопределяет язык речи.
-      const whisperPayload = {
-        file: audioFile,
-        model: 'whisper-1',
-        response_format: 'text'
-      };
-      const whisperResponse = await callOpenAIWithRetry(() => 
-        openai.audio.transcriptions.create(whisperPayload), 2, 'Whisper'
-      );
-      
-      transcriptionTime = Date.now() - transcriptionStart;
-      // Возвращаем сырой текст транскрипции без каких-либо изменений
-      transcription = typeof whisperResponse === 'string'
-        ? whisperResponse
-        : String(whisperResponse?.text || '');
-    } else {
-      transcription = req.body.text.trim();
-    }
+    const {
+      transcription,
+      transcriptionTime,
+      inputTypeForLog,
+      inputType
+    } = await resolveAudioInput({ req, openai });
 
     addMessageToSession(sessionId, 'user', transcription);
     updateAudioSessionInsightsProgress(session, transcription);
@@ -861,7 +758,6 @@ const transcribeAndRespond = async (req, res) => {
     addMessageToSession(sessionId, 'assistant', botResponse);
 
     const totalTime = Date.now() - startTime;
-    const inputType = req.file ? 'аудио' : 'текст'; // для ответа API (русский)
 
     // Логируем успешный ответ ассистента
     const messageId = `${sessionId}_${Date.now()}`;
