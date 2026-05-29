@@ -114,7 +114,10 @@ export async function parseAndImportXml(url, clientId = 'test') {
   
   // --- PRE-IMPORT RC NAMES ---
   try {
-    const rcNames = [...new Set(offersArray.map(o => String(o.novostroi_name || '').trim()).filter(Boolean))];
+    const rcNames = [...new Set(offersArray.flatMap(o => {
+      const arr = Array.isArray(o.novostroi_name) ? o.novostroi_name : [o.novostroi_name];
+      return arr.map(n => String(n || '').trim()).filter(Boolean);
+    }))];
     if (rcNames.length > 0) {
       console.log(`Ensuring ${rcNames.length} unique Residential Complexes...`);
       await ensureResidentialComplexes(clientId, rcNames);
@@ -162,7 +165,8 @@ export async function parseAndImportXml(url, clientId = 'test') {
       let building_year = null;
       let extraFeatures = {};
       
-      const rcName = String(offer.novostroi_name || '').trim();
+      const rawRcNames = Array.isArray(offer.novostroi_name) ? offer.novostroi_name : [offer.novostroi_name];
+      const rcName = [...new Set(rawRcNames.map(n => String(n || '').trim()).filter(Boolean))].join(', ');
       if (rcName) {
         extraFeatures.complex = rcName;
         extraFeatures.zkh = rcName;

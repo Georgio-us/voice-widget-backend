@@ -74,7 +74,10 @@ const normalizeNeighborhoodValue = (value) => {
 const getFeatureComplex = (property) => {
   const direct = property?.features?.complex;
   const fromDisplay = property?.features?.display_specs?.complex;
-  return String(direct || fromDisplay || '').trim();
+  const raw = String(direct || fromDisplay || '').trim();
+  if (!raw) return '';
+  const tokens = raw.split(',').map(s => s.trim()).filter(Boolean);
+  return [...new Set(tokens)].join(', ');
 };
 
 const getTotalFloors = (property = {}) => {
@@ -308,7 +311,11 @@ const normalizeProperty = (p) => {
     features: {
       ...feat,
       smartFlat: feat.smartFlat === true,
-      complex: toText(feat.complex),
+      complex: (() => {
+        const c = toText(feat.complex);
+        if (!c) return null;
+        return [...new Set(c.split(',').map(s => s.trim()).filter(Boolean))].join(', ');
+      })(),
       display_specs: toJsonObject(feat.display_specs) || null
     }
   };
