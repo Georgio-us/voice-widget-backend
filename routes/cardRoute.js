@@ -12,7 +12,6 @@ import {
   getFeatureComplex,
   getTotalFloors,
   hasGovernmentProgram,
-  hasToken,
   hasValue,
   isTrue,
   normalizeDistrictValue,
@@ -27,6 +26,27 @@ const router = express.Router();
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
 
 // property/card normalization is centralized in services/propertySearchNormalizer.js
+
+const matchesNeighborhoodFlag = (property, target, tokens = []) => {
+  const normalizedParts = [
+    property?.district,
+    property?.neighborhood,
+    property?.location_neighborhood,
+    property?.title,
+    property?.address
+  ].map((value) => normalizeNeighborhoodValue(value));
+  if (normalizedParts.some((value) => value === target)) return true;
+
+  const haystack = [
+    property?.district,
+    property?.neighborhood,
+    property?.location_neighborhood,
+    property?.title,
+    property?.address
+  ].map((value) => String(value || '').toLowerCase()).join(' ');
+
+  return tokens.some((token) => haystack.includes(token));
+};
 
 // ===============================
 //            ROUTES
@@ -263,12 +283,7 @@ router.get('/search', async (req, res) => {
     }
 
     if (onlyArcadia) {
-      list = list.filter((p) => {
-        const neighborhoodNorm = normalizeNeighborhoodValue(p?.neighborhood);
-        if (neighborhoodNorm === 'arcadia') return true;
-        // Temporary fallback: title only (description excluded as too noisy).
-        return hasToken(p?.title, 'аркад') || hasToken(p?.title, 'arcad');
-      });
+      list = list.filter((p) => matchesNeighborhoodFlag(p, 'arcadia', ['аркад', 'arcad']));
     }
 
     if (onlyExclusive) {
@@ -276,7 +291,7 @@ router.get('/search', async (req, res) => {
     }
 
     if (onlyCenter) {
-      list = list.filter((p) => normalizeNeighborhoodValue(p?.neighborhood) === 'center');
+      list = list.filter((p) => matchesNeighborhoodFlag(p, 'center', ['центр', 'center', 'central']));
     }
 
     if (onlyParking) {
