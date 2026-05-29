@@ -2,1779 +2,109 @@ import { File } from 'node:buffer';
 globalThis.File = File;
 import { OpenAI } from 'openai';
 // DB repository (Postgres)
-import { getAllProperties } from '../services/propertiesRepository.js';
-import { listResidentialComplexes } from '../services/residentialComplexesRepository.js';
-import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
-import { buildDemoCatalogContext, buildDemoPromptFlavorContext } from '../services/demoCatalogContextService.js';
-import { pool } from '../services/db.js';
-import { residentialComplexInputToArray, normalizeResidentialComplexName } from '../services/residentialComplexMatcher.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
-import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
-import { readTelegramIdentityFromRequest } from '../services/telegramInitDataService.js';
-import { buildScoreContext, annotatePropertyScoresByContext } from '../services/scoringEngine.js';
 import {
-  INSIGHTS_RESPONSE_SCHEMA,
-  parseStructuredInsightsResponse
-} from '../services/aiExtractionContract.js';
+  getAllNormalizedProperties,
+  getRankedProperties
+} from '../services/audioPropertySearchService.js';
 import {
-  buildManagerSystemEvent,
-  getManagerCtaReason
-} from '../services/managerCtaPolicy.js';
-import {
-  applyResidentialComplexFallbackFromTranscript,
-  validateResidentialComplexInsights
-} from '../services/residentialComplexPolicy.js';
+  normalizeCardIdValue
+} from '../services/audioPropertySearchUtils.js';
 import {
   detectCardIntent,
-  detectExplicitChoiceMarker,
-  detectVerbalSelectIntent,
-  getUiHighlightTarget
+  detectExplicitChoiceMarker
 } from '../services/chatIntentPolicy.js';
-import { buildInitialAudioSession } from '../services/sessionStateFactory.js';
 import {
   buildLlmContextPack,
   buildShapedFactsPackForLLM,
   logCtx
 } from '../services/llmContextPack.js';
-import {
-  INSIGHT_FIELDS,
-  mapClientProfileToInsights,
-  mergeClientProfile,
-  recalcInsightsProgress,
-  sanitizeInsightValue
-} from '../services/insightsProfilePolicy.js';
+import { INSIGHT_FIELDS } from '../services/insightsProfilePolicy.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
 import { appendMessage, upsertSessionLog } from '../services/sessionLogger.js';
 import {
-  notifyNewTelegramUserToTelegram,
-  sendSessionActivityStartToTelegram,
-  updateSessionActivityFinalToTelegram
+  sendSessionActivityStartToTelegram
 } from '../services/telegramNotifier.js';
 import {
-  notifyNewTelegramUserToProjectTelegram,
-  sendSessionActivityStartToProjectTelegram,
-  updateSessionActivityFinalToProjectTelegram
+  sendSessionActivityStartToProjectTelegram
 } from '../services/projectTelegramNotifier.js';
-import { upsertTelegramUser } from '../services/usersRepository.js';
+import {
+  getUiLanguage,
+  normalizeUiLanguage
+} from '../services/audioLanguagePolicy.js';
+import { triggerCompletion, triggerHandoff } from '../services/audioHandoffStateService.js';
+import { ROLE_SEARCH_READY, transitionRole } from '../services/audioSessionRoleService.js';
+import { buildAudioStructuredMessages } from '../services/audioPromptBuilder.js';
+import { callStructuredInsightsLlm } from '../services/audioStructuredLlmService.js';
+import { processStructuredMeta } from '../services/audioMetaProcessingService.js';
+import { buildAssistantUiDecision } from '../services/audioUiDecisionService.js';
+import { applyVerbalSelectUiDecision } from '../services/audioVerbalSelectService.js';
+import { createAudioSessionStore, generateSessionId } from '../services/audioSessionStore.js';
+import {
+  applyCardRenderedInteractionState,
+  applyFocusChangedInteractionState,
+  applyHandoffCancelInteractionState,
+  applySelectInteractionState,
+  applySliderEndedInteractionState,
+  applySliderStartedInteractionState,
+  applyUnknownInteractionState
+} from '../services/audioInteractionStateService.js';
+import {
+  buildLikeInteractionPayload,
+  buildNextInteractionPayload,
+  buildShowInteractionPayload,
+  ensureInteractionCandidates,
+  getInteractionMatchCounts
+} from '../services/audioInteractionNavigationService.js';
+import {
+  buildAudioSessionInfoPayload,
+  buildAudioStatsPayload
+} from '../services/audioSessionInfoService.js';
+import { updateAudioSessionInsightsProgress } from '../services/audioInsightsProgressService.js';
+import { handleAudioMiniAppOpen } from '../services/audioMiniAppOpenService.js';
+import {
+  cleanupExpiredAudioSessions,
+  clearAudioSessionById,
+  handleAudioSessionClearHttp
+} from '../services/audioSessionCleanupService.js';
+import { resolveViewerAccessForDebug } from '../services/audioViewerAccessDebugService.js';
+import { sendAudioErrorResponse } from '../services/audioErrorResponseService.js';
+import {
+  createInteractionDebugWrapper,
+  recordInteractionDebugTrace
+} from '../services/audioInteractionDebugService.js';
+import {
+  REF_FALLBACK_CONFIDENCE_THRESHOLD,
+  classifyReferenceIntentFallbackLLM,
+  detectReferenceIntent,
+  shouldUseReferenceFallback
+} from '../services/audioReferenceIntentService.js';
+import { extractAssistantAndMeta } from '../services/audioAssistantMetaParser.js';
+import { formatCardForClient } from '../services/audioCardFormatter.js';
+import { callOpenAIWithRetry } from '../services/openAiRetryService.js';
+import {
+  DEPLOY_TAG_SHORT,
+  clip,
+  extractSpokeCardId,
+  getDeployShortOrNull,
+  getLatestMatchRuleId,
+  isClientDebugEnabled,
+  logBuildOnce,
+  normalizeForClientDebug
+} from '../services/audioDebugUtils.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const BOT_CLIENT_ID = String(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID || 'demo').trim() || 'demo';
 
-const normalizeUiLanguage = (value) => {
-  const v = String(value || '').trim().toLowerCase().slice(0, 2);
-  if (v === 'ru') return 'ru';
-  if (v === 'en') return 'en';
-  return 'uk';
-};
-
-const buildLanguageLockPrompt = (lang) => {
-  const normalized = normalizeUiLanguage(lang);
-  if (normalized === 'ru') {
-    return 'Runtime language contract: answer assistant_text only in Russian. Do not switch language because of speech recognition or user text unless the UI language changes.';
-  }
-  if (normalized === 'en') {
-    return 'Runtime language contract: answer assistant_text only in English. Do not switch language because of speech recognition or user text unless the UI language changes.';
-  }
-  return 'Runtime language contract: answer assistant_text only in Ukrainian. Do not switch to Russian because the user speaks Russian; Russian is allowed only when the UI sends lang=ru.';
-};
-
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sessions = new Map();
-const getUsersJoinStats = async (clientId = BOT_CLIENT_ID) => {
-  const safeClientId = String(clientId || BOT_CLIENT_ID).trim() || BOT_CLIENT_ID;
-  const fallback = { totalUsers: null, usersToday: null };
-  try {
-    const [{ rows: totalRows }, { rows: todayRows }] = await Promise.all([
-      pool.query(
-        `SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1`,
-        [safeClientId]
-      ),
-      pool.query(
-        `SELECT COUNT(*)::int AS c FROM users WHERE client_id = $1 AND first_seen_at::date = NOW()::date`,
-        [safeClientId]
-      )
-    ]);
-    return {
-      totalUsers: totalRows?.[0]?.c ?? 0,
-      usersToday: todayRows?.[0]?.c ?? 0
-    };
-  } catch (error) {
-    if (error?.code === '42P01' || error?.code === '42703') return fallback;
-    throw error;
-  }
-};
-// ====== Diagnostic build tag (DEPLOY_TAG) ======
-const DEPLOY_TAG_FULL = process.env.DEPLOY_TAG || process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown';
-const DEPLOY_TAG_SHORT = (() => {
-  const t = String(DEPLOY_TAG_FULL || 'unknown');
-  if (t.length <= 8) return t;
-  return t.slice(-8);
-})();
-const getDeployShortOrNull = () => (DEPLOY_TAG_FULL && DEPLOY_TAG_FULL !== 'unknown' ? DEPLOY_TAG_SHORT : null);
-let BUILD_LOGGED = false;
-const logBuildOnce = () => {
-  if (BUILD_LOGGED) return;
-  BUILD_LOGGED = true;
-  console.log(`[BUILD] deploy=${DEPLOY_TAG_FULL}`);
-};
-
-// ====== Client-visible debug gate (Safari-friendly) ======
-const isClientDebugEnabled = (req) => {
-  const envOn = String(process.env.VW_DEBUG_CLIENT || '').trim() === '1';
-  const headerOn = String(req?.headers?.['x-vw-debug'] || '').trim() === '1';
-  return envOn && headerOn;
-};
-
-const clip = (str, n = 80) => {
-  if (str === null || str === undefined) return '';
-  const s = String(str);
-  if (s.length <= n) return s;
-  return s.slice(0, n);
-};
-
-const normalizeForClientDebug = (text) => {
-  if (!text || typeof text !== 'string') return '';
-  return String(text)
-    .toLowerCase()
-    .replace(/ё/g, 'е')
-    .normalize('NFKD')
-    .replace(/\p{M}+/gu, '')
-    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-};
-
-const extractSpokeCardId = (text) => {
-  if (!text || typeof text !== 'string') return { cardId: null, confidence: 'none' };
-  const matches = String(text).match(/\bA\d{3}\b/g) || [];
-  const uniq = Array.from(new Set(matches));
-  if (uniq.length === 1) return { cardId: uniq[0], confidence: 'exact' };
-  return { cardId: null, confidence: 'none' };
-};
-
-const getLatestMatchRuleId = (session) => {
-  const items = session?.debugTrace?.items;
-  if (!Array.isArray(items) || items.length === 0) return null;
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i];
-    if (it && it.type === 'reference_detected') {
-      return it?.payload?.matchRuleId || null;
-    }
-  }
-  return null;
-};
-
-// 🆕 Sprint II / Block A: Allowed Facts Schema — явный список разрешённых фактов для AI
-// Определяет, какие поля карточки считаются допустимыми фактами
-const ALLOWED_FACTS_SCHEMA = [
-  'cardId',      // ID показанной карточки
-  'city',        // Город
-  'district',    // Район
-  'neighborhood', // Район/квартал
-  'priceEUR',    // Цена в евро (число)
-  'rooms',       // Количество комнат (число)
-  'floor',       // Этаж (число)
-  'hasImage'     // Наличие изображений (boolean)
-];
-
-const ROLE_SEARCH_READY = 'search_ready';
-
-// 🆕 Sprint III: централизованная функция смены role через state machine
-const transitionRole = (session, event) => {
-  const currentRole = session?.role || ROLE_SEARCH_READY;
-  if (!session) return false;
-  if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-    session.debugTrace = { items: [] };
-  }
-  session.role = ROLE_SEARCH_READY;
-  session.debugTrace.items.push({
-    type: 'role_transition',
-    at: Date.now(),
-    payload: { from: currentRole, to: session.role, event }
-  });
-  return true;
-};
-
-const cleanupOldSessions = () => {
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
-  for (const [sessionId, session] of sessions.entries()) {
-    if (session.lastActivity < oneHourAgo) {
-      // RMv3: best-effort Telegram final update on session expiry (TTL-based finalization)
-      try {
-        const messageId = session?.telegram?.activityMessageId || null;
-        if (messageId) {
-          updateSessionActivityFinalToTelegram({
-            messageId,
-            sessionId: session?.sessionId || sessionId,
-            startedAt: session?.createdAt ?? null,
-            lastActivityAt: session?.lastActivity ?? null,
-            durationMs: (typeof session?.createdAt === 'number' && typeof session?.lastActivity === 'number')
-              ? Math.max(0, session.lastActivity - session.createdAt)
-              : null,
-            geo: session?.geo || null,
-            messageCount: Array.isArray(session?.messages) ? session.messages.length : null,
-            sliderReached: !!(session?.sliderContext && session.sliderContext.updatedAt),
-            insights: session?.insights || null,
-            cardsShownCount: session?.shownSet ? (session.shownSet.size || 0) : null,
-            likesCount: Array.isArray(session?.liked) ? session.liked.length : null,
-            selectedCardId: session?.selectedCard?.cardId || null,
-            handoffActive: session?.handoff?.shownAt ? true : (session?.handoff?.active === true),
-            handoffCanceled: session?.handoff?.canceled === true
-          }).catch(() => {});
-        }
-        const projectMessageIds = session?.telegramProject?.activityMessageIds || null;
-        if (projectMessageIds && typeof projectMessageIds === 'object') {
-          updateSessionActivityFinalToProjectTelegram({
-            messageIds: projectMessageIds,
-            sessionId: session?.sessionId || sessionId,
-            startedAt: session?.createdAt ?? null,
-            lastActivityAt: session?.lastActivity ?? null,
-            durationMs: (typeof session?.createdAt === 'number' && typeof session?.lastActivity === 'number')
-              ? Math.max(0, session.lastActivity - session.createdAt)
-              : null,
-            geo: session?.geo || null,
-            messageCount: Array.isArray(session?.messages) ? session.messages.length : null,
-            sliderReached: !!(session?.sliderContext && session.sliderContext.updatedAt),
-            insights: session?.insights || null,
-            cardsShownCount: session?.shownSet ? (session.shownSet.size || 0) : null,
-            likesCount: Array.isArray(session?.liked) ? session.liked.length : null,
-            selectedCardId: session?.selectedCard?.cardId || null,
-            handoffActive: session?.handoff?.shownAt ? true : (session?.handoff?.active === true),
-            handoffCanceled: session?.handoff?.canceled === true
-          }).catch(() => {});
-        }
-      } catch {}
-      sessions.delete(sessionId);
-    }
-  }
-};
+const {
+  getOrCreateSession,
+  addMessageToSession
+} = createAudioSessionStore({ sessions, defaultRole: ROLE_SEARCH_READY });
+const cleanupOldSessions = () => cleanupExpiredAudioSessions({ sessions });
 setInterval(cleanupOldSessions, 60 * 60 * 1000);
 
-const generateSessionId = () => `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-const getOrCreateSession = (sessionId) => {
-  if (!sessionId) sessionId = generateSessionId();
-  if (!sessions.has(sessionId)) {
-    sessions.set(sessionId, buildInitialAudioSession(sessionId, { role: ROLE_SEARCH_READY }));
-  }
-  return sessions.get(sessionId);
-};
-
-const addMessageToSession = (sessionId, role, content) => {
-  const session = sessions.get(sessionId);
-  if (session) {
-    session.messages.push({ role, content, timestamp: Date.now() });
-    session.lastActivity = Date.now();
-  }
-};
-
-// ====== Подбор карточек на основе insights / текста ======
-const parseBudgetEUR = (s) => {
-  if (!s) return null;
-  const m = String(s).replace(/[^0-9]/g, '');
-  return m ? parseInt(m, 10) : null;
-};
-
-const normalizeDistrict = (val) => {
-  if (!val) return '';
-  let s = String(val).toLowerCase().replace(/^район\s+/i, '').trim();
-  const map = {
-    // Odesa districts
-    'одесса': 'odesa', 'одеса': 'odesa', 'odessa': 'odesa', 'odesa': 'odesa',
-    'приморский': 'prymorskyi', 'проморский': 'prymorskyi', 'прыморский': 'prymorskyi', 'приморський': 'prymorskyi', 'проморський': 'prymorskyi', 'прыморський': 'prymorskyi', 'prymorskyi': 'prymorskyi', 'primorsky': 'prymorskyi', 'promorsky': 'prymorskyi',
-    'киевский': 'kyivskyi', 'київський': 'kyivskyi', 'kyivskyi': 'kyivskyi', 'kievskiy': 'kyivskyi',
-    'малиновский': 'khadzhibeyskyi', 'малиновський': 'khadzhibeyskyi', 'хаджибейский': 'khadzhibeyskyi', 'khadzhibeyskyi': 'khadzhibeyskyi',
-    'суворовский': 'peresypskyi', 'суворовський': 'peresypskyi', 'пересыпский': 'peresypskyi', 'пересипський': 'peresypskyi', 'peresypskyi': 'peresypskyi',
-    // Greater Odesa localities -> base district buckets
-    'лиманка': 'kyivskyi', 'limanka': 'kyivskyi',
-    'крыжановка': 'peresypskyi', 'крижанівка': 'peresypskyi', 'kryzhanivka': 'peresypskyi', 'kryzhanovka': 'peresypskyi',
-    'авангард': 'khadzhibeyskyi', 'avangard': 'khadzhibeyskyi',
-    // Odesa micro-areas / landmarks
-    'аркадия': 'arcadia', 'аркадія': 'arcadia', 'arcadia': 'arcadia',
-    'большой фонтан': 'fontan', 'великий фонтан': 'fontan', 'фонтан': 'fontan', 'fontan': 'fontan',
-    'черемушки': 'cheremushky', 'черемушки одесса': 'cheremushky', 'cheremushky': 'cheremushky',
-    'молдаванка': 'moldavanka', 'moldavanka': 'moldavanka',
-    'слободка': 'slobidka', 'slobidka': 'slobidka',
-    'поселок котовского': 'kotovskoho', 'селище котовського': 'kotovskoho', 'kotovskoho': 'kotovskoho',
-    'лузановка': 'luzanivka', 'лузанівка': 'luzanivka', 'luzanivka': 'luzanivka'
-  };
-  return map[s] || s;
-};
-
-const splitLocationTargets = (value) => {
-  if (value == null) return [];
-  const arr = Array.isArray(value) ? value : [value];
-  return arr
-    .flatMap((item) => String(item || '').split(/\s*(?:,|\/|\\|\||\s+или\s+|\s+либо\s+|;)\s*/i))
-    .map((part) => String(part || '').trim())
-    .filter(Boolean);
-};
-
-const getNormalizedLocationTargets = (locationValue) => {
-  const parts = splitLocationTargets(locationValue);
-  const targets = new Set();
-  parts.forEach((part) => {
-    const normalized = normalizeDistrict(part);
-    if (normalized) targets.add(normalized);
-    // Arcadia/center are typically queries inside Prymorsky district.
-    if (normalized === 'arcadia' || normalized === 'fontan') {
-      targets.add('prymorskyi');
-    }
-  });
-  return Array.from(targets).filter((v) => v && v !== 'odesa');
-};
-
-const hasHardFilters = (insights = {}) => {
-  return Boolean(
-    insights?.operation ||
-    insights?.budget ||
-    insights?.budgetMax ||
-    insights?.type ||
-    insights?.district ||
-    insights?.location ||
-    insights?.rooms
-  );
-};
-
-const normalizeOperationForProperty = (value) => {
-  if (!value) return null;
-  const raw = String(value).trim().toLowerCase();
-  if (!raw) return null;
-  if (/(buy|sale|sell|purchase|покуп|купить|продаж)/i.test(raw)) return 'buy';
-  if (/(rent|lease|rental|аренд|оренд|снять)/i.test(raw)) return 'rent';
-  return null;
-};
-
-const normalizeCardIdValue = (value) => {
-  const raw = String(value ?? '').trim();
-  return raw ? raw.toUpperCase() : '';
-};
-
-const normalizeTypeForProperty = (value) => {
-  if (!value) return null;
-  const raw = String(value).trim().toLowerCase();
-  if (!raw) return null;
-  if (/(apartment|flat|апартамент|апарты|квартир)/i.test(raw)) return 'apartment';
-  if (/(house|villa|home|townhouse|дом|вилл|таунхаус)/i.test(raw)) return 'house';
-  if (/(land|plot|участок|земля)/i.test(raw)) return 'land';
-  if (/(commercial|office|retail|warehouse|коммер|офис|склад|нежил)/i.test(raw)) return 'commercial';
-  return null;
-};
-
-const getBudgetCap = (insights = {}) => {
-  const fromMax = parseBudgetEUR(insights?.budgetMax);
-  if (fromMax != null && Number.isFinite(fromMax)) return fromMax;
-  const fromBudget = parseBudgetEUR(insights?.budget);
-  if (fromBudget != null && Number.isFinite(fromBudget)) return fromBudget;
-  return null;
-};
-
-const parseIntLoose = (value) => {
-  if (value == null) return null;
-  if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
-  const m = String(value).match(/\d+/);
-  if (!m) return null;
-  const n = Number(m[0]);
-  return Number.isFinite(n) ? n : null;
-};
-
-const parseFloatLoose = (value) => {
-  if (value == null) return null;
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  const normalized = String(value).replace(',', '.');
-  const match = normalized.match(/-?\d+(?:\.\d+)?/);
-  if (!match) return null;
-  const n = Number(match[0]);
-  return Number.isFinite(n) ? n : null;
-};
-
-const toLowerTokens = (value) => {
-  if (value == null) return [];
-  if (Array.isArray(value)) {
-    return value
-      .flatMap((v) => String(v == null ? '' : v).split(/[,\n;|]/))
-      .map((v) => String(v || '').trim().toLowerCase())
-      .filter(Boolean);
-  }
-  return String(value)
-    .split(/[,\n;|]/)
-    .map((v) => String(v || '').trim().toLowerCase())
-    .filter(Boolean);
-};
-
-const getRequestedAmenityFlags = (insights = {}) => {
-  const pool = [
-    ...toLowerTokens(insights?.features),
-    ...toLowerTokens(insights?.details),
-    ...toLowerTokens(insights?.preferences)
-  ];
-  const text = pool.join(' ');
-  return {
-    parking: /(parking|паркинг|парковк|паркомест|парко ?місц)/i.test(text),
-    balcony: /(balcony|балкон|лоджи|лоджія|loggia)/i.test(text)
-  };
-};
-
-const parseFloorPreference = (insights = {}) => {
-  const text = [
-    ...toLowerTokens(insights?.floor),
-    ...toLowerTokens(insights?.details),
-    ...toLowerTokens(insights?.preferences),
-    ...toLowerTokens(insights?.features)
-  ].join(' ');
-  const parsedFloor = parseIntLoose(insights?.floor);
-  const numericFloor = Number.isFinite(parsedFloor) && parsedFloor > 0 ? parsedFloor : null;
-  return {
-    numericFloor,
-    notFirst: /(не\s*перв|not\s*first)/i.test(text),
-    notLast: /(не\s*послед|не\s*остан|not\s*last)/i.test(text),
-    low: /(низк|low)/i.test(text),
-    middle: /(средн|middle|mid)/i.test(text),
-    high: /(высок|high)/i.test(text)
-  };
-};
-
-const getPropertyComplex = (property = {}) =>
-  String(property?.features?.complex || property?.features?.display_specs?.complex || '').trim();
-
-const hasRcOnlySignal = (insights = {}) => {
-  const rc = residentialComplexInputToArray(insights?.residentialComplex).join(', ');
-  if (rc) return true;
-  const parts = [];
-  if (Array.isArray(insights?.features)) parts.push(...insights.features);
-  else if (insights?.features != null) parts.push(insights.features);
-  if (insights?.details != null) parts.push(insights.details);
-  if (insights?.preferences != null) parts.push(insights.preferences);
-  if (insights?.district != null) parts.push(insights.district);
-  if (insights?.location != null) parts.push(insights.location);
-  const text = parts.map((v) => String(v || '').toLowerCase()).join(' ');
-  if (!text) return false;
-  return /(?:только\s*[жз]к|лишь\s*[жз]к|исключительно\s*[жз]к|(?:^|\s)(?:[жз]к|[жз]\/к)(?:\s|$)|в\s*[жз]к|жил(?:ой|ого|ом|ые|ых)?\s+комплекс(?:ы|а|е|ах)?|в\s+жил(?:ом|ых)\s+комплекс(?:е|ах)|residential\s+complex(?:es)?)/i.test(text);
-};
-
-const applyHardGateByInsights = (properties = [], insights = {}) => {
-  let list = Array.isArray(properties) ? properties.slice() : [];
-  const expectedOperation = normalizeOperationForProperty(insights?.operation);
-  if (expectedOperation) {
-    list = list.filter((p) => normalizeOperationForProperty(p?.operation) === expectedOperation);
-  }
-  const expectedType = normalizeTypeForProperty(insights?.type);
-  if (expectedType) {
-    list = list.filter((p) => normalizeTypeForProperty(p?.property_type) === expectedType);
-  }
-  const insightDistrictTargets = getNormalizedLocationTargets(
-    insights?.district != null ? insights.district : insights?.location
-  );
-  if (insightDistrictTargets.length) {
-    list = list.filter((p) => {
-      const propParts = [
-        normalizeDistrict(p?.district),
-        normalizeDistrict(p?.neighborhood),
-        normalizeDistrict(p?.city)
-      ].filter(Boolean);
-      if (!propParts.length) return false;
-      return insightDistrictTargets.some((target) => propParts.some((propPart) => (
-        propPart === target
-        || propPart.includes(target)
-        || target.includes(propPart)
-      )));
-    });
-  }
-  if (insights?.rcOnly === true || insights?.residentialComplexOnly === true || hasRcOnlySignal(insights)) {
-    list = list.filter((p) => getPropertyComplex(p).length > 0);
-  }
-  const rcNeedles = residentialComplexInputToArray(insights?.residentialComplex)
-    .map((value) => normalizeResidentialComplexName(value))
-    .filter(Boolean);
-  if (rcNeedles.length) {
-    list = list.filter((p) => {
-      const complex = normalizeResidentialComplexName(getPropertyComplex(p));
-      return !!complex && rcNeedles.some((needle) => complex === needle || complex.includes(needle));
-    });
-  }
-
-  // --- Strict District Gates ---
-  if (insights?.arcadia === true) {
-    list = list.filter((p) => {
-      const d = String(p?.district || '').toLowerCase();
-      const n = String(p?.neighborhood || '').toLowerCase();
-      return d.includes('аркадия') || n.includes('аркадия') || d.includes('arcadia') || n.includes('arcadia');
-    });
-  }
-  if (insights?.center === true) {
-    list = list.filter((p) => {
-      const d = String(p?.district || '').toLowerCase();
-      const n = String(p?.neighborhood || '').toLowerCase();
-      return d.includes('центр') || n.includes('центр') || d.includes('center') || n.includes('center');
-    });
-  }
-
-  // --- Strict Feature Gates ---
-  if (insights?.parking === true) {
-    list = list.filter((p) => {
-      const f = p?.features || {};
-      return f.parking === true || f.parking === 'true' || f.parking === 1 || f.parking === '1';
-    });
-  }
-  if (insights?.balconyLoggia === true) {
-    list = list.filter((p) => {
-      const f = p?.features || {};
-      const hasBalcony = f.balcony === true || f.balcony === 'true' || f.balcony === 1 || f.balcony === '1';
-      const hasLoggia = f.loggia === true || f.loggia === 'true' || f.loggia === 1 || f.loggia === '1';
-      return hasBalcony || hasLoggia;
-    });
-  }
-
-  return list;
-};
-
-const normalizeRoomsConstraint = (value) => {
-  const raw = String(value ?? '').trim().toLowerCase();
-  if (!raw) return '';
-  if (['4plus', '5plus'].includes(raw)) return raw;
-  if (/^5\+?$/.test(raw)) return '5plus';
-  if (/^4\+?$/.test(raw)) return '4plus';
-  const parsed = parseIntLoose(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? String(parsed) : '';
-};
-
-const buildScoreContextFromInsights = (insights = {}) => {
-  const floorPref = parseFloorPreference(insights);
-  const budgetCap = getBudgetCap(insights);
-  const exactArea = parseFloatLoose(insights?.area);
-  const minArea = parseFloatLoose(insights?.areaMin);
-  const maxArea = parseFloatLoose(insights?.areaMax);
-  const areaMin = Number.isFinite(minArea) ? minArea : (Number.isFinite(exactArea) ? exactArea : null);
-  const areaMax = Number.isFinite(maxArea) ? maxArea : (Number.isFinite(exactArea) ? exactArea : null);
-  const floorExact = floorPref.numericFloor;
-  const floorMin = Number.isFinite(floorExact) ? floorExact : (floorPref.notFirst ? 2 : null);
-  const floorMax = Number.isFinite(floorExact) ? floorExact : null;
-  const amenity = getRequestedAmenityFlags(insights);
-  return buildScoreContext({
-    roomsRaw: normalizeRoomsConstraint(insights?.rooms),
-    minPrice: null,
-    maxPrice: Number.isFinite(budgetCap) ? budgetCap : null,
-    minArea: Number.isFinite(areaMin) ? areaMin : null,
-    maxArea: Number.isFinite(areaMax) ? areaMax : null,
-    minFloor: Number.isFinite(floorMin) ? floorMin : null,
-    maxFloor: Number.isFinite(floorMax) ? floorMax : null,
-    parkingRequired: amenity.parking === true,
-    balconyRequired: amenity.balcony === true
-  });
-};
-
-const annotatePropertyWithScores = (property, insights = {}) => {
-  const scoreContext = buildScoreContextFromInsights(insights);
-  return annotatePropertyScoresByContext(property, scoreContext);
-};
-
-// Нормализация строки из БД к формату карточек, совместимому с фронтом
-const mapRowToProperty = (row) => {
-  const toJsonObject = (v) => {
-    if (!v) return null;
-    if (typeof v === 'object' && !Array.isArray(v)) return v;
-    if (typeof v !== 'string') return null;
-    try {
-      const parsed = JSON.parse(v);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
-  };
-  const toJsonArray = (v) => {
-    if (!v) return [];
-    if (Array.isArray(v)) return v;
-    if (typeof v !== 'string') return [];
-    try {
-      const parsed = JSON.parse(v);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  };
-
-  const geo = toJsonObject(row.geo) || {};
-  const features = toJsonObject(row.features) || {};
-  const media = toJsonArray(row.media);
-
-  const images = Array.isArray(row.images)
-    ? row.images
-    : (typeof row.images === 'string'
-        ? (() => { try { return JSON.parse(row.images); } catch { return []; } })()
-        : []);
-  const mergedImages = (Array.isArray(images) ? images : []).filter(Boolean);
-  if (!mergedImages.length && media.length) {
-    for (const item of media) {
-      if (!item || typeof item !== 'object') continue;
-      if (String(item.type || '').toLowerCase() === 'video') continue;
-      if (item.url) mergedImages.push(String(item.url));
-    }
-  }
-  return {
-    // важный момент: используем external_id как основной id (совместимость со старым фронтом)
-    id: row.external_id || String(row.id),
-    city: geo.city || row.location_city || null,
-    district: geo.district || row.location_district || null,
-    neighborhood: geo.neighborhood || row.location_neighborhood || null,
-    operation: row.operation || null,
-    property_type: row.property_type || null,
-    price_period: row.price_period || null,
-    priceEUR: row.price_amount != null ? Number(row.price_amount) : null,
-    price_per_m2: row.price_per_m2 != null ? Number(row.price_per_m2) : (features.pricePerM2 != null ? Number(features.pricePerM2) : null),
-    rooms: row.specs_rooms != null ? Number(row.specs_rooms) : (features.rooms != null ? Number(features.rooms) : null),
-    bathrooms: row.specs_bathrooms != null ? Number(row.specs_bathrooms) : (features.bathrooms != null ? Number(features.bathrooms) : null),
-    area_m2: row.specs_area_m2 != null ? Number(row.specs_area_m2) : (features.areaM2 != null ? Number(features.areaM2) : null),
-    floor: row.specs_floor != null ? Number(row.specs_floor) : (features.floor != null ? Number(features.floor) : null),
-    description: row.description || null,
-    images: mergedImages,
-    geo,
-    features,
-    media
-  };
-};
-
-const getAllNormalizedProperties = async () => {
-  const rows = await getAllProperties();
-  return rows.map(mapRowToProperty);
-};
-
-const rankPropertiesByInsights = (properties, insights) => {
-  const gated = applyHardGateByInsights(properties, insights);
-  const scoreContext = buildScoreContextFromInsights(insights);
-  const scored = gated.map((p) => {
-    const annotated = annotatePropertyScoresByContext(p, scoreContext);
-    return {
-      p: annotated,
-      relaxedScore: Number(annotated?._score ?? 0),
-      strictScore: Number(annotated?._strictScore ?? 0),
-      tier: String(annotated?._tier || 'low')
-    };
-  });
-  const rankedRows = scored
-    .filter(({ relaxedScore }) => relaxedScore > 0)
-    .sort((a, b) => b.relaxedScore - a.relaxedScore);
-  const strictMatches = scored.filter(({ strictScore }) => strictScore > 0).length;
-  const relaxedMatches = rankedRows.length;
-  return {
-    ranked: rankedRows.map(({ p, relaxedScore, strictScore, tier }) => ({
-      ...p,
-      _score: relaxedScore,
-      _strictScore: strictScore,
-      _tier: tier
-    })),
-    totalMatches: relaxedMatches,
-    strictMatches,
-    relaxedMatches
-  };
-};
-
-const getRankedProperties = async (insights) => {
-  const all = await getAllNormalizedProperties();
-  return rankPropertiesByInsights(all, insights);
-};
-
-const findBestProperties = async (insights, limit = 1) => {
-  const { ranked } = await getRankedProperties(insights);
-  return ranked.slice(0, limit);
-};
-
-const getBaseUrl = (req) => {
-  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-  const host = req.headers['x-forwarded-host'] || req.get('host');
-  return host ? `${proto}://${host}` : '';
-};
-
-const formatNumberUS = (value) => {
-  if (value === null || value === undefined) return null;
-  const numeric = Number(String(value).replace(/[^\d.-]/g, ''));
-  if (!Number.isFinite(numeric)) return null;
-  return Math.round(numeric).toLocaleString('en-US');
-};
-
-const detectBudgetCurrency = (text = '') => {
-  const s = String(text || '').toLowerCase();
-  if (/\b(uah|грн|гривн|гривня|гривні|гривен)\b/.test(s) || /₴/.test(s)) return 'UAH';
-  if (/(\$|\busd\b|\bdollar\b|\bdollars\b|доллар|доллара|долларов)/.test(s)) return 'USD';
-  // Каталог и новые объекты — USD; гривня только если явно в тексте
-  return 'USD';
-};
-
-const formatCardForClient = (req, p) => {
-  const baseUrl = getBaseUrl(req);
-  const images = (Array.isArray(p.images) ? p.images : [])
-    .map((src) => String(src || '').trim())
-    .filter(Boolean)
-    .map((src) => src.replace('https://<backend-host>', baseUrl));
-  const image = images.length ? images[0] : null;
-  const formattedPrice = formatNumberUS(p.priceEUR ?? p?.price?.amount);
-  return {
-    id: p.id,
-    // Левые поля (география)
-    city: p.city ?? p?.location?.city ?? null,
-    district: p.district ?? p?.location?.district ?? null,
-    neighborhood: p.neighborhood ?? p?.location?.neighborhood ?? null,
-    operation: p.operation ?? null,
-    property_type: p.property_type ?? null,
-    // Правые поля (основные цифры)
-    price: formattedPrice ? `${formattedPrice} USD` : null,
-    priceEUR: p.priceEUR ?? p?.price?.amount ?? null,
-    rooms: p.rooms ?? p?.specs?.rooms ?? null,
-    floor: p.floor ?? p?.specs?.floor ?? null,
-    // Дополнительные поля для back-стороны карточки
-    description: p.description ?? null,
-    area_m2: p.area_m2 ?? p?.specs?.area_m2 ?? null,
-    land_area_sotka: p.land_area_sotka ?? p.landAreaSotka ?? p?.specs?.land_area_sotka ?? p?.features?.landAreaSotka ?? p?.features?.land_area_sotka ?? null,
-    landAreaSotka: p.landAreaSotka ?? p.land_area_sotka ?? p?.specs?.land_area_sotka ?? p?.features?.landAreaSotka ?? p?.features?.land_area_sotka ?? null,
-    price_per_m2: p.price_per_m2 ?? null,
-    bathrooms: p.bathrooms ?? p?.specs?.bathrooms ?? null,
-    features: p.features ?? null,
-    geo: p.geo ?? null,
-    price_period: p.price_period ?? null,
-    score: p._score ?? p.score ?? 0,
-    strictScore: p._strictScore ?? p.strictScore ?? 0,
-    matchTier: p._tier ?? p.matchTier ?? 'low',
-    // Изображение
-    image,
-    imageUrl: image,
-    images
-  };
-};
-
-// Legacy fallback only; runtime UI language is the source of truth.
-const detectLangFromSession = (session) => {
-  try {
-    const lastUser = [...session.messages].reverse().find(m => m.role === 'user');
-    const sample = lastUser?.content || '';
-    if (/[А-Яа-яЁё]/.test(sample)) return 'ru';
-    if (/[A-Za-z]/.test(sample)) return 'en';
-  } catch {}
-  return 'uk';
-};
-
-// Язык по приоритету: профиль → история
-const getPrimaryLanguage = (session) => {
-  const prof = session?.clientProfile?.language;
-  if (prof) return String(prof).toLowerCase();
-  return detectLangFromSession(session);
-};
-
-const getUiLanguage = (session) => {
-  const lang = String(getPrimaryLanguage(session) || '').toLowerCase();
-  if (lang === 'uk' || lang === 'ua') return 'uk';
-  if (lang === 'en') return 'en';
-  if (lang === 'es') return 'es';
-  return 'ru';
-};
-
-// --------- Simple parsers for contact and time from text ---------
-const parseEmailFromText = (text) => {
-  const m = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return m ? m[0] : null;
-};
-
-const parsePhoneFromText = (text) => {
-  // Allow +, spaces, dashes, parentheses; normalize to +digits
-  const m = text.match(/\+?\s*[0-9][0-9\s()\-]{5,}/);
-  if (!m) return null;
-  const digits = m[0].replace(/[^0-9+]/g, '');
-  const normalized = `+${digits.replace(/^\++/,'')}`;
-  return normalized.length >= 7 ? normalized : null;
-};
-
-const parseTimeWindowFromText = (text) => {
-  try {
-    const lower = text.toLowerCase();
-    const tz = 'Europe/Madrid';
-    const now = new Date();
-    const todayStr = new Date(now).toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
-    const tomorrow = new Date(now.getTime() + 24*60*60*1000);
-    const tomorrowStr = tomorrow.toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
-
-    const isToday = /(сегодня|today)/i.test(lower);
-    const isTomorrow = /(завтра|tomorrow)/i.test(lower);
-
-    // HH or HH:MM
-    const timeSingle = lower.match(/\b(\d{1,2})(?::(\d{2}))?\b/);
-    // ranges like 17–19 or 17-19
-    const timeRange = lower.match(/\b(\d{1,2})\s*[–\-]\s*(\d{1,2})\b/);
-
-    let date = null; let from = null; let to = null;
-    if (isToday) date = todayStr; else if (isTomorrow) date = tomorrowStr;
-    if (timeRange) { from = `${timeRange[1].padStart(2,'0')}:00`; to = `${timeRange[2].padStart(2,'0')}:00`; }
-    else if (timeSingle) { from = `${timeSingle[1].padStart(2,'0')}:${(timeSingle[2]||'00')}`; to = null; }
-
-    if (date && (from || to)) return { date, from, to, timezone: tz };
-    return null;
-  } catch { return null; }
-};
-
-// 🆕 Sprint III: добавление записи в post-handoff enrichment
-const addPostHandoffEnrichment = (session, source, content, meta = {}) => {
-  if (!session || !session.handoffDone) return;
-  
-  if (!Array.isArray(session.postHandoffEnrichment)) {
-    session.postHandoffEnrichment = [];
-  }
-  
-  session.postHandoffEnrichment.push({
-    at: Date.now(),
-    source: source,
-    content: content,
-    meta: meta
-  });
-  
-  console.log(`📝 [Sprint III] Post-handoff enrichment добавлен (source: ${source}, сессия ${session.sessionId?.slice(-8) || 'unknown'})`);
-};
-
-// Insights больше не извлекаются regex-логикой.
-// Смыслы обновляются только через LLM META и mapClientProfileToInsights.
-const updateInsights = (sessionId, newMessage) => {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-
-  if (session.handoffDone) {
-    addPostHandoffEnrichment(session, 'user_message', newMessage, {
-      role: session.role,
-      stage: session.stage
-    });
-  }
-
-  const current = session.insights || {};
-  const normalized = {
-    name: current.name ?? null,
-    operation: current.operation ?? null,
-    budget: current.budget ?? null,
-    budgetMax: current.budgetMax ?? null,
-    type: current.type ?? null,
-    district: current.district ?? null,
-    location: current.location ?? null,
-    rooms: current.rooms ?? null,
-    area: current.area ?? null,
-    areaMin: current.areaMin ?? null,
-    areaMax: current.areaMax ?? null,
-    floor: current.floor ?? null,
-    floorNotFirst: current.floorNotFirst ?? null,
-    floorNotLast: current.floorNotLast ?? null,
-    features: current.features ?? null,
-    details: current.details ?? null,
-    preferences: current.preferences ?? null,
-    residentialComplex: current.residentialComplex ?? null,
-    progress: 0
-  };
-
-  const weights = {
-    name: 7,
-    operation: 7,
-    budget: 7,
-    budgetMax: 7,
-    type: 7,
-    district: 7,
-    location: 7,
-    rooms: 7,
-    area: 7,
-    areaMin: 7,
-    areaMax: 7,
-    floor: 7,
-    floorNotFirst: 7,
-    floorNotLast: 7,
-    features: 7,
-    details: 7,
-    preferences: 7,
-    residentialComplex: 7
-  };
-  let totalProgress = 0;
-  for (const [field, weight] of Object.entries(weights)) {
-    const value = normalized[field];
-    if (value != null && String(value).trim().length > 0) {
-      totalProgress += weight;
-    }
-  }
-  normalized.progress = Math.min(totalProgress, 99);
-  session.insights = normalized;
-};
-
-
-// 🔄 Функция retry для OpenAI API
-const callOpenAIWithRetry = async (apiCall, maxRetries = 2, operation = 'OpenAI') => {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`🔄 ${operation} попытка ${attempt}/${maxRetries}`);
-      const result = await apiCall();
-      if (attempt > 1) {
-        console.log(`✅ ${operation} успешно выполнен с ${attempt} попытки`);
-      }
-      return result;
-    } catch (error) {
-      console.log(`❌ ${operation} ошибка (попытка ${attempt}/${maxRetries}):`, error.message);
-      
-      // Если это последняя попытка - пробрасываем ошибку дальше
-      if (attempt === maxRetries) {
-        console.error(`🚨 ${operation} окончательно провалился после ${maxRetries} попыток`);
-        throw error;
-      }
-      
-      // Определяем, стоит ли повторять запрос
-      const shouldRetry = isRetryableError(error);
-      if (!shouldRetry) {
-        console.log(`⚠️ ${operation} ошибка не подлежит повтору:`, error.message);
-        throw error;
-      }
-      
-      // Экспоненциальная задержка: 1с, 2с, 4с...
-      const delay = 1000 * Math.pow(2, attempt - 1);
-      console.log(`⏳ Ожидание ${delay}мс перед следующей попыткой...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-};
-
-// 🔍 Определяем, можно ли повторить запрос при данной ошибке
-const isRetryableError = (error) => {
-  // Коды ошибок, при которых стоит повторить запрос
-  const retryableCodes = [
-    'ECONNRESET',     // Соединение сброшено
-    'ENOTFOUND',      // DNS проблемы
-    'ECONNREFUSED',   // Соединение отклонено
-    'ETIMEDOUT',      // Таймаут
-    'EAI_AGAIN'       // DNS временно недоступен
-  ];
-  
-  // HTTP статусы, при которых стоит повторить
-  const retryableStatuses = [500, 502, 503, 504, 429];
-  
-  // Проверяем код ошибки
-  if (error.code && retryableCodes.includes(error.code)) {
-    return true;
-  }
-  
-  // Проверяем HTTP статус
-  if (error.status && retryableStatuses.includes(error.status)) {
-    return true;
-  }
-  
-  // Проверяем сообщение об ошибке
-  const errorMessage = error.message?.toLowerCase() || '';
-  const retryableMessages = [
-    'timeout',
-    'network error',
-    'connection',
-    'rate limit',
-    'server error',
-    'service unavailable'
-  ];
-  
-  return retryableMessages.some(msg => errorMessage.includes(msg));
-};
-
 // ====== Вспомогательные функции профиля/META ======
-
-const applyMetaInsightsToSession = (session, meta, userUtterance = '') => {
-  if (!session || !meta || typeof meta !== 'object') return { applied: false, invalidFields: ['meta'] };
-  const sourceInsights = (meta.insights && typeof meta.insights === 'object' && !Array.isArray(meta.insights))
-    ? meta.insights
-    : null;
-  if (!sourceInsights) return { applied: false, invalidFields: ['insights'] };
-  if (!session.insights || typeof session.insights !== 'object') {
-    session.insights = {};
-  }
-
-  const parseBudgetNumber = (value) => {
-    if (value === null || value === undefined) return null;
-    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
-    const raw = String(value).trim().toLowerCase();
-    if (!raw) return null;
-    const isUAH = /\b(грн|гривн|гривня|гривні|гривен|гривень)\b/.test(raw) || /₴/.test(raw);
-    const uahToUsdRate = Number(process.env.UAH_TO_USD_RATE || process.env.UAH_TO_USD || 0.024);
-    const toUsdIfNeeded = (amount) => {
-      if (!Number.isFinite(amount)) return null;
-      if (!isUAH) return Math.round(amount);
-      const rate = Number.isFinite(uahToUsdRate) && uahToUsdRate > 0 ? uahToUsdRate : 0.024;
-      return Math.round(amount * rate);
-    };
-    const normalizeNum = (v) => Number(String(v).replace(',', '.'));
-    const thousandBefore = raw.match(/(?:тыс|тысяч|тис\.?)\s*(\d+(?:[.,]\d+)?)/i);
-    if (thousandBefore) {
-      const n = normalizeNum(thousandBefore[1]);
-      if (Number.isFinite(n)) return toUsdIfNeeded(n * 1000);
-    }
-    const thousandAfter = raw.match(/(\d+(?:[.,]\d+)?)\s*(?:тыс|тысяч|тис\.?)\b/i);
-    if (thousandAfter) {
-      const n = normalizeNum(thousandAfter[1]);
-      if (Number.isFinite(n)) return toUsdIfNeeded(n * 1000);
-    }
-    const compact = raw.replace(/\s+/g, '');
-    const match = compact.match(/^(\d+(?:[.,]\d+)?)(k|к|тыс|тысяч|тис|м|млн|миллион|миллиона|миллионов)?$/i);
-    if (match) {
-      const base = Number(String(match[1]).replace(',', '.'));
-      if (!Number.isFinite(base)) return null;
-      const suffix = String(match[2] || '').toLowerCase();
-      if (['k', 'к', 'тыс', 'тысяч', 'тис'].includes(suffix)) return toUsdIfNeeded(base * 1000);
-      if (['м', 'млн', 'миллион', 'миллиона', 'миллионов'].includes(suffix)) return toUsdIfNeeded(base * 1000000);
-      return toUsdIfNeeded(base);
-    }
-    const digits = raw.replace(/[^\d]/g, '');
-    if (!digits) return null;
-    const parsed = Number(digits);
-    return Number.isFinite(parsed) ? toUsdIfNeeded(parsed) : null;
-  };
-
-  const detectPriceSemantics = (text) => {
-    const raw = String(text || '').trim().toLowerCase();
-    if (!raw) return 'single_or_upper';
-    if (/\b(от|from)\b[\s\S]{0,30}\b(до|to)\b/.test(raw)) return 'range';
-    if (/\b\d+\s*[-–—]\s*\d+\b/.test(raw)) return 'range';
-    if (/\b(в\s*диапазоне|range|between)\b/.test(raw)) return 'range';
-    if (/\b(до|не\s*более|макс(?:имум)?|up\s*to|budget)\b/.test(raw)) return 'upper';
-    if (/\b(от|начиная\s+с|не\s*ниже|min(?:imum)?|from)\b/.test(raw)) return 'lower';
-    return 'single_or_upper';
-  };
-  const detectAreaSemantics = (text) => {
-    const raw = String(text || '').trim().toLowerCase();
-    if (!raw) return 'single_or_upper';
-    if (/\b(от|from)\b[\s\S]{0,30}\b(до|to)\b/.test(raw)) return 'range';
-    if (/\b\d+\s*[-–—]\s*\d+\b/.test(raw)) return 'range';
-    if (/\b(в\s*диапазоне|range|between)\b/.test(raw)) return 'range';
-    if (/\b(до|не\s*более|макс(?:имум)?|up\s*to)\b/.test(raw)) return 'upper';
-    if (/\b(от|начиная\s+с|не\s*ниже|min(?:imum)?|from)\b/.test(raw)) return 'lower';
-    return 'single_or_upper';
-  };
-
-  const parseRoomsValue = (value) => {
-    if (value === null || value === undefined) return null;
-    const detectRoomBands = (textLike) => {
-      const text = String(textLike || '').trim().toLowerCase();
-      if (!text) return [];
-      const found = new Set();
-      if (/(5\+|5plus|\bпят(и|ь)\b|\bпятикомнат|\b5\s*комн|\bfive\b)/i.test(text)) found.add(5);
-      if (/(4\+|4plus|\bчетыр(е|ё|ех|ёх)\b|\bчетырехкомнат|\bчетырёхкомнат|\b4\s*комн|\bfour\b)/i.test(text)) found.add(4);
-      if (/(тр(е|ё)шка|\bтрехкомнат|\bтрёхкомнат|\b3\s*комн|\bthree\b|\bтр(е|ё)х\b)/i.test(text)) found.add(3);
-      if (/(двушка|\bдвухкомнат|\b2\s*комн|\btwo\b|\bдвух\b|\bдву\b)/i.test(text)) found.add(2);
-      if (/(однушка|\bоднокомнат|\b1\s*комн|\bone\b|\bодн\b|studio|студия|смарт)/i.test(text)) found.add(1);
-      return Array.from(found).sort((a, b) => a - b);
-    };
-    const parseOne = (item) => {
-      if (item === null || item === undefined) return null;
-      if (typeof item === 'number' && Number.isFinite(item)) return Math.round(item);
-      const raw = String(item).trim().toLowerCase();
-      if (!raw) return null;
-      const detected = detectRoomBands(raw);
-      if (detected.length === 1) return detected[0];
-      if (detected.length > 1) return detected;
-      const numeric = raw.match(/\d+/);
-      if (!numeric) return null;
-      const parsed = Number(numeric[0]);
-      return Number.isFinite(parsed) ? parsed : null;
-    };
-    const tokens = Array.isArray(value)
-      ? value
-      : String(value).split(/\s*(?:,|\/|\\|\||\s+или\s+|\s+либо\s+|;|&)\s*/i);
-    const uniq = [];
-    for (const token of tokens) {
-      const parsed = parseOne(token);
-      if (parsed == null) continue;
-      if (Array.isArray(parsed)) {
-        parsed.forEach((value) => {
-          if (!uniq.includes(value)) uniq.push(value);
-        });
-      } else if (!uniq.includes(parsed)) uniq.push(parsed);
-    }
-    if (!uniq.length) return null;
-    return uniq.length === 1 ? uniq[0] : uniq;
-  };
-
-  const parseDistrictValue = (value) => {
-    if (value === null || value === undefined) return null;
-    const tokens = splitLocationTargets(value);
-    if (!tokens.length) return null;
-    const uniq = [];
-    for (const token of tokens) {
-      const cleaned = sanitizeInsightValue(token);
-      if (!cleaned) continue;
-      if (!uniq.includes(cleaned)) uniq.push(cleaned);
-    }
-    if (!uniq.length) return null;
-    return uniq.length === 1 ? uniq[0] : uniq;
-  };
-
-  const parseFloorNumber = (value) => {
-    if (value === null || value === undefined) return null;
-    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
-    const raw = String(value).trim().toLowerCase();
-    if (!raw) return null;
-    if (/(не\s*перв|not\s*first|не\s*послед|не\s*остан|not\s*last|высок(ий|ого)|high|средн(ий|его)|middle|mid|низк(ий|ого)|low)/i.test(raw)) {
-      return raw;
-    }
-    const numeric = raw.match(/\d+/);
-    if (!numeric) return null;
-    const parsed = Number(numeric[0]);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
-
-  const normalizeOperation = (value) => {
-    if (value === null || value === undefined) return null;
-    const raw = String(value).trim().toLowerCase();
-    if (!raw) return null;
-    if (/(buy|purchase|invest|покуп|купить|инвест)/i.test(raw)) return 'buy';
-    if (/(rent|lease|аренд|оренд|снять)/i.test(raw)) return 'rent';
-    return null;
-  };
-  const normalizeType = (value) => {
-    if (value === null || value === undefined) return null;
-    const raw = String(value).trim().toLowerCase();
-    if (!raw) return null;
-    if (/(apartment|flat|квартир|апартамент|апарты)/i.test(raw)) return 'apartment';
-    if (/(house|villa|home|дом|вилл)/i.test(raw)) return 'house';
-    if (/(land|plot|участок|земля)/i.test(raw)) return 'land';
-    if (/(commercial|office|retail|warehouse|коммер|офис|склад|нежил)/i.test(raw)) return 'commercial';
-    if (raw === 'apartment' || raw === 'house' || raw === 'land' || raw === 'commercial') return raw;
-    return null;
-  };
-
-  const parseNumeric = (value) => {
-    if (value === null || value === undefined) return null;
-    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
-    const raw = String(value).trim();
-    if (!raw) return null;
-    const normalized = raw.replace(',', '.');
-    const match = normalized.match(/-?\d+(?:\.\d+)?/);
-    if (!match) return null;
-    const parsed = Number(match[0]);
-    return Number.isFinite(parsed) ? Math.round(parsed) : null;
-  };
-
-  const parseFeatures = (value) => {
-    if (value === null || value === undefined) return null;
-    const out = [];
-    const pushToken = (token) => {
-      const normalized = String(token || '').trim().toLowerCase();
-      if (!normalized) return;
-      if (!out.includes(normalized)) out.push(normalized);
-    };
-    if (Array.isArray(value)) {
-      value.forEach((item) => pushToken(item));
-    } else {
-      const raw = String(value || '').trim();
-      if (!raw) return null;
-      raw.split(/[,\n;|]/).forEach((item) => pushToken(item));
-      // heuristic extraction from details-like sentence
-      const map = [
-        ['terrace', /(terrace|терасс|террас)/i],
-        ['balcony', /(balcony|балкон)/i],
-        ['balcony', /(лоджи|лоджія|loggia)/i],
-        ['parking', /(parking|паркинг|парковк|паркомест|парко ?місц)/i],
-        ['pool', /(pool|бассейн)/i],
-        ['sea view', /(sea view|вид на море)/i],
-        ['high floor', /(high floor|высокий этаж)/i],
-        ['middle floor', /(middle floor|средний этаж)/i],
-        ['low floor', /(low floor|низкий этаж)/i]
-      ];
-      map.forEach(([label, re]) => { if (re.test(raw)) pushToken(label); });
-    }
-    return out.length ? out : null;
-  };
-
-  const parseFloorBooleanFlag = (value, kind = 'not_first') => {
-    if (value === null || value === undefined) return null;
-    if (typeof value === 'boolean') return value;
-    const raw = String(value).trim().toLowerCase();
-    if (!raw) return null;
-    if (['true', '1', 'yes', 'y', 'да'].includes(raw)) return true;
-    if (['false', '0', 'no', 'n', 'нет'].includes(raw)) return false;
-    if (kind === 'not_first') {
-      if (/(не\s*перв|not\s*first)/i.test(raw)) return true;
-    } else {
-      if (/(не\s*послед|не\s*остан|not\s*last)/i.test(raw)) return true;
-    }
-    return null;
-  };
-
-  const invalidFields = [];
-  let appliedCount = 0;
-  const enableRewrite = process.env.ENABLE_AI_FILTER_REWRITE === 'true';
-  const CORE_FIELDS = ['type', 'operation'];
-
-  for (const field of INSIGHT_FIELDS) {
-    const incoming = sourceInsights[field];
-    if (incoming === undefined) continue;
-    let nextValue = null;
-    if (field === 'budget') nextValue = parseBudgetNumber(incoming);
-    else if (field === 'budgetMax') nextValue = parseBudgetNumber(incoming);
-    else if (field === 'district') nextValue = parseDistrictValue(incoming);
-    else if (field === 'location') nextValue = parseDistrictValue(incoming);
-    else if (field === 'rooms') nextValue = parseRoomsValue(incoming);
-    else if (field === 'operation') nextValue = normalizeOperation(incoming);
-    else if (field === 'type') nextValue = normalizeType(incoming);
-    else if (field === 'area') nextValue = parseNumeric(incoming);
-    else if (field === 'areaMin') nextValue = parseNumeric(incoming);
-    else if (field === 'areaMax') nextValue = parseNumeric(incoming);
-    else if (field === 'landArea') nextValue = parseNumeric(incoming);
-    else if (field === 'landAreaMin') nextValue = parseNumeric(incoming);
-    else if (field === 'landAreaMax') nextValue = parseNumeric(incoming);
-    else if (field === 'floor') nextValue = parseFloorNumber(incoming);
-    else if (field === 'floorNotFirst') nextValue = parseFloorBooleanFlag(incoming, 'not_first');
-    else if (field === 'floorNotLast') nextValue = parseFloorBooleanFlag(incoming, 'not_last');
-    else if (field === 'features') nextValue = parseFeatures(incoming);
-    else nextValue = sanitizeInsightValue(incoming);
-    
-    const isEmptyArray = Array.isArray(nextValue) && nextValue.length === 0;
-    const isNullish = nextValue === null || nextValue === undefined || isEmptyArray || (!Array.isArray(nextValue) && String(nextValue).trim() === '');
-    const isCore = CORE_FIELDS.includes(field);
-
-    if (enableRewrite) {
-      if (isCore) {
-        // Write-once policy for core fields: prevent AI from rewriting or clearing them once set
-        if (session.insights[field] != null && String(session.insights[field]).trim() !== '') {
-          continue;
-        } else {
-          if (!isNullish) {
-            session.insights[field] = nextValue;
-            appliedCount += 1;
-          }
-        }
-      } else {
-        // Flexible fields: allow AI to explicitly clear them using null or empty array
-        if (isNullish) {
-          if (session.insights[field] !== null) {
-            session.insights[field] = null;
-            appliedCount += 1;
-          }
-        } else {
-          session.insights[field] = nextValue;
-          appliedCount += 1;
-        }
-      }
-    } else {
-      // Legacy strict logic
-      if (isNullish) {
-        invalidFields.push(field);
-        continue;
-      }
-      session.insights[field] = nextValue;
-      appliedCount += 1;
-    }
-  }
-  // price policy v1 (AI -> execution semantics source fields):
-  // - single amount / upper intent => budgetMax only
-  // - explicit range => budget(lower) + budgetMax(upper)
-  // - lower-only => keep in budget, do not auto-populate budgetMax
-  // This block also resolves stale budget/budgetMax conflicts from previous turns.
-  try {
-    const incomingHasBudget = Object.prototype.hasOwnProperty.call(sourceInsights, 'budget');
-    const incomingHasBudgetMax = Object.prototype.hasOwnProperty.call(sourceInsights, 'budgetMax');
-    const incomingBudget = incomingHasBudget ? parseBudgetNumber(sourceInsights?.budget) : null;
-    const incomingBudgetMax = incomingHasBudgetMax ? parseBudgetNumber(sourceInsights?.budgetMax) : null;
-    const semantics = detectPriceSemantics(userUtterance);
-
-    if (semantics === 'range') {
-      if (incomingBudget != null && incomingBudgetMax != null) {
-        const low = Math.min(incomingBudget, incomingBudgetMax);
-        const high = Math.max(incomingBudget, incomingBudgetMax);
-        session.insights.budget = low;
-        session.insights.budgetMax = high;
-      } else if (incomingBudgetMax != null) {
-        session.insights.budget = null;
-        session.insights.budgetMax = incomingBudgetMax;
-      } else if (incomingBudget != null) {
-        session.insights.budget = null;
-        session.insights.budgetMax = incomingBudget;
-      }
-    } else if (semantics === 'upper') {
-      const upper = incomingBudgetMax ?? incomingBudget;
-      if (upper != null) {
-        session.insights.budget = null;
-        session.insights.budgetMax = upper;
-      }
-    } else if (semantics === 'lower') {
-      const lower = incomingBudget ?? incomingBudgetMax;
-      if (lower != null) {
-        session.insights.budget = lower;
-        session.insights.budgetMax = null;
-      }
-    } else {
-      // single_or_upper (default for ambiguous single value)
-      if (incomingBudget != null && incomingBudgetMax != null) {
-        if (incomingBudget < incomingBudgetMax) {
-          session.insights.budget = incomingBudget;
-          session.insights.budgetMax = incomingBudgetMax;
-        } else {
-          session.insights.budget = null;
-          session.insights.budgetMax = Math.max(incomingBudget, incomingBudgetMax);
-        }
-      } else if (incomingBudgetMax != null) {
-        session.insights.budget = null;
-        session.insights.budgetMax = incomingBudgetMax;
-      } else if (incomingBudget != null) {
-        session.insights.budget = null;
-        session.insights.budgetMax = incomingBudget;
-      }
-    }
-  } catch {}
-  // area policy v1 (AI -> execution semantics source fields):
-  // - "до X м²" / "X м²" => upper bound (areaMax)
-  // - explicit range => areaMin + areaMax
-  // - "от X м²" => areaMin only
-  // This also prevents stale/legacy areaMin from acting as default for single-area mentions.
-  try {
-    const incomingHasArea = Object.prototype.hasOwnProperty.call(sourceInsights, 'area');
-    const incomingHasAreaMin = Object.prototype.hasOwnProperty.call(sourceInsights, 'areaMin');
-    const incomingHasAreaMax = Object.prototype.hasOwnProperty.call(sourceInsights, 'areaMax');
-    const incomingArea = incomingHasArea ? parseNumeric(sourceInsights?.area) : null;
-    const incomingAreaMin = incomingHasAreaMin ? parseNumeric(sourceInsights?.areaMin) : null;
-    const incomingAreaMax = incomingHasAreaMax ? parseNumeric(sourceInsights?.areaMax) : null;
-    const areaSemantics = detectAreaSemantics(userUtterance);
-
-    if (areaSemantics === 'range') {
-      if (incomingAreaMin != null && incomingAreaMax != null) {
-        const low = Math.min(incomingAreaMin, incomingAreaMax);
-        const high = Math.max(incomingAreaMin, incomingAreaMax);
-        session.insights.areaMin = low;
-        session.insights.areaMax = high;
-      } else if (incomingArea != null && incomingAreaMax != null) {
-        session.insights.areaMin = Math.min(incomingArea, incomingAreaMax);
-        session.insights.areaMax = Math.max(incomingArea, incomingAreaMax);
-      } else if (incomingAreaMin != null && incomingArea != null) {
-        session.insights.areaMin = Math.min(incomingAreaMin, incomingArea);
-        session.insights.areaMax = Math.max(incomingAreaMin, incomingArea);
-      } else if (incomingAreaMax != null) {
-        session.insights.areaMin = null;
-        session.insights.areaMax = incomingAreaMax;
-      } else if (incomingArea != null) {
-        session.insights.areaMin = null;
-        session.insights.areaMax = incomingArea;
-      }
-    } else if (areaSemantics === 'upper') {
-      const upper = incomingAreaMax ?? incomingArea ?? incomingAreaMin;
-      if (upper != null) {
-        session.insights.areaMin = null;
-        session.insights.areaMax = upper;
-      }
-    } else if (areaSemantics === 'lower') {
-      const lower = incomingAreaMin ?? incomingArea ?? incomingAreaMax;
-      if (lower != null) {
-        session.insights.areaMin = lower;
-        session.insights.areaMax = null;
-      }
-    } else {
-      // single_or_upper default
-      if (incomingAreaMin != null && incomingAreaMax != null) {
-        session.insights.areaMin = Math.min(incomingAreaMin, incomingAreaMax);
-        session.insights.areaMax = Math.max(incomingAreaMin, incomingAreaMax);
-      } else {
-        const upper = incomingAreaMax ?? incomingArea ?? incomingAreaMin;
-        if (upper != null) {
-          session.insights.areaMin = null;
-          session.insights.areaMax = upper;
-        }
-      }
-    }
-  } catch {}
-  // floor flags fallback: if model encoded constraint in floor text, convert to structured flags.
-  if (session.insights.floorNotFirst == null && typeof session.insights.floor === 'string') {
-    const derived = parseFloorBooleanFlag(session.insights.floor, 'not_first');
-    if (derived === true) session.insights.floorNotFirst = true;
-  }
-  if (session.insights.floorNotLast == null && typeof session.insights.floor === 'string') {
-    const derived = parseFloorBooleanFlag(session.insights.floor, 'not_last');
-    if (derived === true) session.insights.floorNotLast = true;
-  }
-  recalcInsightsProgress(session.insights);
-  console.log('[INSIGHTS_UPDATE] Updates applied:', session.insights);
-
-  // best-effort persistence in session_logs for cross-request visibility/debug
-  try {
-    const sid = String(session.sessionId || '').trim();
-    if (sid) {
-      upsertSessionLog({
-        sessionId: sid,
-        payloadPatch: {
-          latestInsights: session.insights,
-          latestInsightsUpdatedAt: new Date().toISOString(),
-          extractionMetrics: session.extractionMetrics || null
-        }
-      }).catch(() => {});
-    }
-  } catch {}
-  return { applied: appliedCount > 0, invalidFields };
-};
-
-const ensureExtractionMetrics = (session) => {
-  if (!session.extractionMetrics || typeof session.extractionMetrics !== 'object') {
-    session.extractionMetrics = {};
-  }
-  const m = session.extractionMetrics;
-  m.turnsTotal = Number(m.turnsTotal || 0);
-  m.metaPresentTurns = Number(m.metaPresentTurns || 0);
-  m.parseErrors = Number(m.parseErrors || 0);
-  m.validationErrors = Number(m.validationErrors || 0);
-  m.updatesApplied = Number(m.updatesApplied || 0);
-  if (!m.fieldFilledTurns || typeof m.fieldFilledTurns !== 'object') {
-    m.fieldFilledTurns = {};
-  }
-  for (const f of INSIGHT_FIELDS) {
-    m.fieldFilledTurns[f] = Number(m.fieldFilledTurns[f] || 0);
-  }
-  return m;
-};
-
-const updateExtractionMetrics = (session, report = {}) => {
-  if (!session) return;
-  const m = ensureExtractionMetrics(session);
-  m.turnsTotal += 1;
-  if (report.metaPresent === true) m.metaPresentTurns += 1;
-  if (report.parseError === true) m.parseErrors += 1;
-  if (report.validationError === true) m.validationErrors += 1;
-  if (report.updatesApplied === true) m.updatesApplied += 1;
-  for (const f of INSIGHT_FIELDS) {
-    const v = session.insights?.[f];
-    if (v !== null && v !== undefined && String(v).trim() !== '') {
-      m.fieldFilledTurns[f] += 1;
-    }
-  }
-  const turns = Math.max(1, m.turnsTotal);
-  const fillRates = {};
-  for (const f of INSIGHT_FIELDS) {
-    fillRates[f] = Number((m.fieldFilledTurns[f] / turns).toFixed(3));
-  }
-  const parseErrorRate = Number((m.parseErrors / turns).toFixed(3));
-  console.log('[INSIGHTS_METRICS]', {
-    turnsTotal: m.turnsTotal,
-    parseErrorRate,
-    updatesApplied: m.updatesApplied,
-    fillRates
-  });
-};
-
-// 🆕 Sprint V: детекция reference в тексте пользователя (без интерпретации)
-// NOTE (2026-03-22): intentionally retained by product decision.
-// This block is the explicit reference resolver for "this/that" utterances.
-// 🔧 Hotfix: Reference Detector Stabilization (Roadmap v2)
-// ВАЖНО: JS \b НЕ работает с кириллицей, поэтому RU матчим через пробельные границы
-const detectReferenceIntent = (text) => {
-  if (!text || typeof text !== 'string') return null;
-
-  const normalized = String(text)
-    .toLowerCase()
-    .replace(/ё/g, 'е')
-    // Unicode-safe normalization:
-    // - keep all letters/numbers across scripts (incl. ES diacritics/ñ)
-    // - strip diacritics (é -> e, ñ -> n) for stable matching
-    .normalize('NFKD')
-    .replace(/\p{M}+/gu, '')
-    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (!normalized) return null;
-
-  // Пробельные границы для RU (JS \b не работает с кириллицей)
-  const norm = ' ' + normalized + ' ';
-
-  // order: multi -> single -> unknown -> null
-
-  // === MULTI (RU через includes, EN через regex \b) ===
-  const multiRuChecks = [
-    { id: 'multi_ru_vot_eti', phrase: ' вот эти ' },
-    { id: 'multi_ru_eti_varianty', phrase: ' эти варианты ' },
-    { id: 'multi_ru_eti_kvartiry', phrase: ' эти квартиры ' },
-    { id: 'multi_ru_eti', phrase: ' эти ' },
-    { id: 'multi_ru_oba', phrase: ' оба ' },
-    { id: 'multi_ru_neskolko', phrase: ' несколько ' }
-  ];
-  for (const r of multiRuChecks) {
-    if (norm.includes(r.phrase)) {
-      return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
-    }
-  }
-  // ES multi (через includes; без \b)
-  const multiEsChecks = [
-    { id: 'multi_es_estas', phrase: ' estas ' },
-    { id: 'multi_es_estos', phrase: ' estos ' },
-    { id: 'multi_es_esas', phrase: ' esas ' },
-    { id: 'multi_es_esos', phrase: ' esos ' },
-    { id: 'multi_es_aquellos', phrase: ' aquellos ' },
-    { id: 'multi_es_aquellas', phrase: ' aquellas ' }
-  ];
-  for (const r of multiEsChecks) {
-    if (norm.includes(r.phrase)) {
-      return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
-    }
-  }
-  // EN multi (regex ok)
-  if (/\bthese\b/.test(normalized)) return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'multi_en_these' };
-  if (/\bboth\b/.test(normalized)) return { type: 'multi', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'multi_en_both' };
-
-  // === SINGLE (RU через includes, EN через regex \b) ===
-  const singleRuChecks = [
-    { id: 'single_ru_vot_eta', phrase: ' вот эта ' },
-    { id: 'single_ru_vot_eto', phrase: ' вот это ' },
-    // 🆕 Patch (outside Roadmap): RU accusative pointer forms ("эту / про эту / вот эту")
-    // ВАЖНО: порядок важен — более специфичные формы должны матчиться раньше, чем "эту"
-    { id: 'single_ru_vot_etu', phrase: ' вот эту ' },
-    { id: 'single_ru_pro_etu', phrase: ' про эту ' },
-    { id: 'single_ru_i_eta', phrase: ' и эта ' },
-    { id: 'single_ru_eta_tozhe', phrase: ' эта тоже ' },
-    { id: 'single_ru_eta_norm', phrase: ' эта норм ' },
-    { id: 'single_ru_eta_kvartira', phrase: ' эта квартира ' },
-    { id: 'single_ru_etot_variant', phrase: ' этот вариант ' },
-    { id: 'single_ru_eto', phrase: ' это ' },
-    { id: 'single_ru_etu', phrase: ' эту ' },
-    { id: 'single_ru_eta', phrase: ' эта ' }
-  ];
-  for (const r of singleRuChecks) {
-    if (norm.includes(r.phrase)) {
-      return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
-    }
-  }
-  // ES single (через includes; без \b)
-  const singleEsChecks = [
-    { id: 'single_es_esta', phrase: ' esta ' },
-    { id: 'single_es_este', phrase: ' este ' },
-    { id: 'single_es_esa', phrase: ' esa ' },
-    { id: 'single_es_ese', phrase: ' ese ' },
-    { id: 'single_es_aquel', phrase: ' aquel ' },
-    { id: 'single_es_aquella', phrase: ' aquella ' }
-  ];
-  for (const r of singleEsChecks) {
-    if (norm.includes(r.phrase)) {
-      return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
-    }
-  }
-  // EN single (regex ok)
-  if (/\bthis one\b/.test(normalized)) return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'single_en_this_one' };
-  if (/\bthat one\b/.test(normalized)) return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'single_en_that_one' };
-  if (/\bthis\b/.test(normalized)) return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'single_en_this' };
-  if (/\bthat\b/.test(normalized)) return { type: 'single', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'single_en_that' };
-
-  // === UNKNOWN (RU через includes, EN через regex \b) ===
-  const unknownRuChecks = [
-    { id: 'unknown_ru_tot_variant', phrase: ' тот вариант ' },
-    { id: 'unknown_ru_tot', phrase: ' тот ' },
-    { id: 'unknown_ru_takaya', phrase: ' такая ' }
-  ];
-  for (const r of unknownRuChecks) {
-    if (norm.includes(r.phrase)) {
-      return { type: 'unknown', detectedAt: Date.now(), source: 'user_message', matchRuleId: r.id };
-    }
-  }
-  // EN unknown (regex ok)
-  if (/\bthat one there\b/.test(normalized)) return { type: 'unknown', detectedAt: Date.now(), source: 'user_message', matchRuleId: 'unknown_en_that_one_there' };
-
-  return null;
-};
-
-// ====== RMv3 / Sprint 2 / Task 1: Reference Fallback Gate (WHEN to call LLM fallback) ======
-// ВАЖНО:
-// - Не вызывает LLM
-// - Не меняет session
-// - Не пишет в referenceIntent
-// - Не логирует при false
-// - При true: один лог [REF_FALLBACK_GATE] reason=eligible
-const shouldUseReferenceFallback = (session, userInput) => {
-  // A) Reference detector не сработал
-  if (!(session?.referenceIntent == null)) return false;
-
-  // Sprint 2 / Task 10: do NOT call fallback if server is already in clarification/boundary mode
-  if (
-    session?.referenceAmbiguity?.isAmbiguous === true ||
-    session?.clarificationRequired?.isRequired === true ||
-    session?.clarificationBoundaryActive === true
-  ) {
-    return false;
-  }
-
-  // B) Есть активный UI-контекст (server-truth)
-  const hasActiveUiContext =
-    Boolean(session?.currentFocusCard?.cardId) ||
-    session?.singleReferenceBinding?.hasProposal === true ||
-    (Array.isArray(session?.candidateShortlist?.items) && session.candidateShortlist.items.length > 0);
-  if (!hasActiveUiContext) return false;
-
-  // C) Сообщение короткое и указательное
-  if (typeof userInput !== 'string') return false;
-  const raw = userInput;
-  const trimmed = raw.trim();
-  if (trimmed.length === 0 || trimmed.length > 15) return false;
-  // Block any numeric characters (ASCII + Unicode digits)
-  if (/\p{Number}/u.test(trimmed)) return false;
-  if (/(€|\$|\beur\b|\busd\b)/i.test(trimmed)) return false;
-
-  // D) Похоже на ссылку, а не вопрос/описание
-  const normalized = trimmed
-    .toLowerCase()
-    .replace(/ё/g, 'е')
-    // Unicode-safe normalization (ES diacritics + punctuation handling)
-    .normalize('NFKD')
-    .replace(/\p{M}+/gu, '')
-    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!normalized) return false;
-
-  // быстрый отсев: вопросы/описания/фильтры/глаголы
-  if (/[?]/.test(trimmed)) return false;
-  const banned = [
-    // RU verbs / intent
-    /покаж/i, /показат/i, /хочу/i, /интерес/i, /нрав/i, /отправ/i, /пришл/i, /дай/i, /возьм/i, /выбер/i,
-    // RU filters
-    /цен/i, /район/i, /комнат/i, /площад/i, /метр/i, /\bдо\b/i,
-    // EN verbs / intent
-    /\bshow\b/i, /\bwant\b/i, /\blike\b/i, /\bsend\b/i, /\bchoose\b/i, /\btake\b/i,
-    // EN filters / question-ish
-    /\bprice\b/i, /\bdistrict\b/i, /\barea\b/i, /\brooms?\b/i, /\bunder\b/i, /\bup\s*to\b/i,
-    /\bwhat\b/i, /\bwhich\b/i, /\bhow\b/i, /\bwhy\b/i
-  ];
-  if (banned.some((re) => re.test(normalized))) return false;
-
-  const words = normalized.split(' ').filter(Boolean);
-  if (words.length === 0 || words.length > 2) return false;
-
-  const allowedSingle = new Set([
-    'эта', 'эт', 'eto', 'eta',
-    'this', 'that', 'thsi', 'dis',
-    // ES minimal deictics (Sprint 2 / Task 6)
-    'esta', 'este', 'eso', 'esa', 'estas', 'estos', 'ese', 'aquel',
-    'one', 'onee'
-  ]);
-  const allowedFirstForOne = new Set([
-    'this', 'that', 'thsi', 'dis',
-    // ES minimal deictics (Sprint 2 / Task 6)
-    'esta', 'este', 'eso', 'esa', 'estas', 'estos', 'ese', 'aquel'
-  ]);
-  const allowedSecond = new Set(['one', 'onee']);
-
-  let eligible = false;
-  if (words.length === 1) {
-    eligible = allowedSingle.has(words[0]);
-  } else if (words.length === 2) {
-    eligible = allowedFirstForOne.has(words[0]) && allowedSecond.has(words[1]);
-  }
-
-  if (!eligible) return false;
-
-  // Диагностика: логируем только при true
-  const sid = String(session?.sessionId || '').slice(-8) || 'unknown';
-  const safeInput = trimmed.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-  console.log(`[REF_FALLBACK_GATE] sid=${sid} input="${safeInput}" reason=eligible`);
-  return true;
-};
-
-// ====== RMv3 / Sprint 2 / Task 2: LLM reference fallback classifier (classifier only) ======
-// ВАЖНО:
-// - Возвращает только классификацию referenceType + диагностические поля
-// - Не выбирает карточки, не читает UI, не добавляет факты
-// - При любой ошибке/мусоре возвращает безопасный дефолт
-const REF_FALLBACK_CONFIDENCE_THRESHOLD = 0.6;
-async function classifyReferenceIntentFallbackLLM({ openai, text, language }) {
-  const safeDefault = {
-    referenceType: null,
-    normalizedText: null,
-    confidence: 0,
-    reasonTag: 'other'
-  };
-
-  try {
-    if (!text || typeof text !== 'string') return safeDefault;
-    const langHint = typeof language === 'string' && language.trim() ? language.trim().toLowerCase() : null;
-
-    const system = [
-      'You are a strict JSON-only classifier.',
-      'Return ONLY valid JSON. No extra text, no markdown, no code fences.',
-      'Task: classify a short user utterance as a reference intent only.',
-      'You MUST NOT pick any card or infer UI state.',
-      '',
-      'Output schema (exact keys only):',
-      '{',
-      '  "referenceType": "single" | "multi" | "unknown" | null,',
-      '  "normalizedText": string | null,',
-      '  "confidence": number,',
-      '  "reasonTag": "typo" | "keyboard_layout" | "mixed_language" | "other" | null',
-      '}',
-      '',
-      'Rules:',
-      '- If not confident, set referenceType=null and confidence=0.',
-      '- confidence must be between 0 and 1.',
-      '- normalizedText: a cleaned/lowercased version of the input (or null).',
-      '- Keep it minimal and deterministic.'
-    ].join('\n');
-
-    const user = JSON.stringify({
-      text: String(text),
-      language: langHint
-    });
-
-    const completion = await callOpenAIWithRetry(() =>
-      openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        temperature: 0,
-        max_tokens: 160,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user }
-        ]
-      }), 2, 'REF-Fallback-Classifier'
-    );
-
-    const raw = completion?.choices?.[0]?.message?.content;
-    if (!raw || typeof raw !== 'string') return safeDefault;
-
-    const cleaned = raw.replace(/```json\s*|\s*```/g, '').trim();
-    let parsed;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      return safeDefault;
-    }
-
-    const allowedTypes = new Set(['single', 'multi', 'unknown']);
-    const allowedReasons = new Set(['typo', 'keyboard_layout', 'mixed_language', 'other']);
-
-    const referenceType = (parsed && typeof parsed.referenceType === 'string' && allowedTypes.has(parsed.referenceType))
-      ? parsed.referenceType
-      : (parsed?.referenceType === null ? null : null);
-
-    const normalizedText = (parsed && typeof parsed.normalizedText === 'string' && parsed.normalizedText.trim())
-      ? parsed.normalizedText
-      : null;
-
-    const confidence = (parsed && typeof parsed.confidence === 'number' && Number.isFinite(parsed.confidence) && parsed.confidence >= 0 && parsed.confidence <= 1)
-      ? parsed.confidence
-      : 0;
-
-    const reasonTag = (parsed && typeof parsed.reasonTag === 'string' && allowedReasons.has(parsed.reasonTag))
-      ? parsed.reasonTag
-      : (parsed?.reasonTag === null ? null : 'other');
-
-    return { referenceType, normalizedText, confidence, reasonTag };
-  } catch {
-    return safeDefault;
-  }
-}
-
-const extractAssistantAndMeta = (fullText) => {
-  try {
-    const marker = '---META---';
-    const idx = fullText.indexOf(marker);
-    if (idx === -1) {
-      return { assistantText: fullText, meta: null, metaRaw: null, parseError: false };
-    }
-    const assistantText = fullText.slice(0, idx).trim();
-    let jsonPart = fullText.slice(idx + marker.length).trim();
-    // Срезаем возможные бэктики
-    jsonPart = jsonPart.replace(/```json\s*|\s*```/g, '').trim();
-    // Защитимся от слишком длинного хвоста
-    if (jsonPart.length > 5000) jsonPart = jsonPart.slice(0, 5000);
-    let parsed = null;
-    let parseError = false;
-    try {
-      parsed = JSON.parse(jsonPart);
-    } catch {
-      parsed = null;
-      parseError = true;
-    }
-    return { assistantText, meta: parsed, metaRaw: jsonPart, parseError };
-  } catch {
-    return { assistantText: fullText, meta: null, metaRaw: null, parseError: true };
-  }
-};
 
 const transcribeAndRespond = async (req, res) => {
   const startTime = Date.now();
@@ -1922,7 +252,7 @@ const transcribeAndRespond = async (req, res) => {
     }
 
     addMessageToSession(sessionId, 'user', transcription);
-    updateInsights(sessionId, transcription);
+    updateAudioSessionInsightsProgress(session, transcription);
     
     // 🆕 Sprint V: детекция reference intent в сообщении пользователя (без интерпретации)
     // 🔧 Hotfix: Reference Detector Stabilization (Roadmap v2)
@@ -1988,7 +318,8 @@ const transcribeAndRespond = async (req, res) => {
         const out = await classifyReferenceIntentFallbackLLM({
           openai,
           text: transcription,
-          language: lang
+          language: lang,
+          retryOpenAI: (fn) => callOpenAIWithRetry(fn, 2, 'REF-Fallback-Classifier')
         });
 
         const thr = REF_FALLBACK_CONFIDENCE_THRESHOLD;
@@ -2417,122 +748,29 @@ const transcribeAndRespond = async (req, res) => {
     // Default UI language is Ukrainian; Russian is used only after explicit UI switch.
     session.clientProfile.language = targetLang;
 
-    // RMv3 / Fetch RC Catalog to restrict AI hallucination
-    const promptClientId = String(process.env.CLIENT_ID || 'georgio-us').trim();
-    let rcCatalogStr = '';
-    try {
-      const rcs = await listResidentialComplexes(promptClientId, { limit: 200 });
-      if (rcs && rcs.length > 0) {
-        rcCatalogStr = rcs.map(r => {
-          const aliases = new Set();
-          if (r.nameTranslations) {
-            try {
-              const t = typeof r.nameTranslations === 'string' ? JSON.parse(r.nameTranslations) : r.nameTranslations;
-              if (t.ru && t.ru !== r.name) aliases.add(t.ru);
-              if (t.ua && t.ua !== r.name) aliases.add(t.ua);
-            } catch (e) {}
-          }
-          const aliasesStr = aliases.size > 0 ? ` (${Array.from(aliases).join('/')})` : '';
-          return `${r.name}${aliasesStr}`;
-        }).join(', ');
-      }
-    } catch (e) {
-      console.warn('Failed to load RC catalog for prompt:', e);
-    }
+    const {
+      messages,
+      demoCatalogContext,
+      demoPromptFlavorContext
+    } = await buildAudioStructuredMessages({
+      session,
+      targetLang,
+      clientId: process.env.CLIENT_ID || 'georgio-us',
+      logger: console
+    });
 
-    const demoCatalogContext = await buildDemoCatalogContext(promptClientId);
-    const demoCatalogContextBlock = demoCatalogContext?.content
-      ? `\n${demoCatalogContext.content}\n`
-      : '';
-    const demoPromptFlavorContext = buildDemoPromptFlavorContext(promptClientId);
-    const demoPromptFlavorContextBlock = demoPromptFlavorContext?.content
-      ? `\n${demoPromptFlavorContext.content}\n`
-      : '';
-
-    const baseSystemPrompt = BASE_SYSTEM_PROMPT.replace(
-      '{{RC_CATALOG}}',
-      rcCatalogStr ? `\nAVAILABLE RESIDENTIAL COMPLEXES (CATALOG):\n${rcCatalogStr}\n` : ''
-    ) + demoCatalogContextBlock + demoPromptFlavorContextBlock;
-    const metaRepairHint = session?.metaContract?.needsRepairHint === true
-      ? {
-          role: 'system',
-          content: 'Contract reminder: return valid JSON matching the insights_response schema.'
-        }
-      : null;
-
-    // RMv3 / Sprint 4 / Task 4.1: полный контекст диалога для LLM (user + assistant)
-    // ВАЖНО:
-    // - порядок сообщений сохраняем хронологический (как в session.messages)
-    // - system сообщения и любые служебные/неизвестные роли не включаем
-    const dialogMessages = session.messages.filter(
-      (msg) => msg && (msg.role === 'user' || msg.role === 'assistant')
-    );
-    
-    const messages = [
-      {
-        role: 'system',
-        content: baseSystemPrompt
-      },
-      {
-        role: 'system',
-        content: buildLanguageLockPrompt(targetLang)
-      },
-      ...(metaRepairHint ? [metaRepairHint] : []),
-      ...dialogMessages
-    ];
-
-    const gptStart = Date.now();
-    
-    // 🔄 Используем retry для GPT API
     // RMv3 / Sprint 1: transient LLM Context Pack + [CTX] log (infrastructure only)
     llmContextPackForMainCall = buildLlmContextPack(session, sessionId, 'main');
     logCtx(llmContextPackForMainCall, { deployTagShort: DEPLOY_TAG_SHORT, logBuildOnce });
-    let completion = await callOpenAIWithRetry(() => 
-      openai.chat.completions.create({
-        messages,
-        model: 'gpt-4o-mini',
-        temperature: 0.2,
-        response_format: { type: 'json_schema', json_schema: INSIGHTS_RESPONSE_SCHEMA },
-        stream: false
-      }), 2, 'GPT'
-    );
-    
-    const gptTime = Date.now() - gptStart;
-
-    let promptTokens = Number(completion?.usage?.prompt_tokens || 0);
-    let completionTokens = Number(completion?.usage?.completion_tokens || 0);
-    let totalTokens = Number(completion?.usage?.total_tokens || 0);
-
-    let rawModelContent = String(completion?.choices?.[0]?.message?.content || '').trim();
-    let parsedStructured = parseStructuredInsightsResponse(rawModelContent);
-    let fallbackUsed = false;
-
-    // Fallback вызывается только при parse fail structured-ответа.
-    if (parsedStructured.parseError) {
-      fallbackUsed = true;
-      const fallbackMessages = [
-        ...messages,
-        {
-          role: 'system',
-          content: 'Repair mode: output ONLY valid JSON by insights_response schema.'
-        }
-      ];
-      const fallbackCompletion = await callOpenAIWithRetry(() =>
-        openai.chat.completions.create({
-          messages: fallbackMessages,
-          model: 'gpt-4o-mini',
-          temperature: 0,
-          response_format: { type: 'json_schema', json_schema: INSIGHTS_RESPONSE_SCHEMA },
-          stream: false
-        }), 1, 'GPT-Structured-Fallback'
-      );
-      promptTokens += Number(fallbackCompletion?.usage?.prompt_tokens || 0);
-      completionTokens += Number(fallbackCompletion?.usage?.completion_tokens || 0);
-      totalTokens += Number(fallbackCompletion?.usage?.total_tokens || 0);
-      rawModelContent = String(fallbackCompletion?.choices?.[0]?.message?.content || '').trim();
-      parsedStructured = parseStructuredInsightsResponse(rawModelContent);
-      completion = fallbackCompletion;
-    }
+    const {
+      gptTime,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      rawModelContent,
+      parsedStructured,
+      fallbackUsed
+    } = await callStructuredInsightsLlm({ openai, messages });
 
     const assistantText = parsedStructured.assistantText;
     const meta = parsedStructured.meta;
@@ -2562,113 +800,34 @@ const transcribeAndRespond = async (req, res) => {
       console.log(`[MISMATCH] sid=${String(sessionId || '').slice(-8) || 'unknown'} bind=${bindCardId || 'null'} spoke=${spoke.cardId || 'null'} focus=${session.currentFocusCard?.cardId || 'null'} lastShown=${session.lastShown?.cardId || 'null'} rule=${rule || 'null'}`);
     }
 
-    let extractionReport = {
-      metaPresent: !!metaRaw,
-      parseError: parseError === true,
-      validationError: false,
-      updatesApplied: false,
-      fallbackUsed
-    };
-    let extractionInvalidFields = [];
-    // META обработка: единый парсинг произвольного ---META--- блока от модели
-    try {
-      if (meta && typeof meta === 'object') {
-        const profilePatches = [];
-        if (meta.clientProfileDelta && typeof meta.clientProfileDelta === 'object') profilePatches.push(meta.clientProfileDelta);
-        if (meta.clientProfile && typeof meta.clientProfile === 'object') profilePatches.push(meta.clientProfile);
-        for (const patch of profilePatches) {
-          session.clientProfile = mergeClientProfile(session.clientProfile, patch);
-        }
-        mapClientProfileToInsights(session.clientProfile, session.insights);
-        const applyResult = applyMetaInsightsToSession(session, meta, transcription);
-        extractionInvalidFields = Array.isArray(applyResult?.invalidFields) ? applyResult.invalidFields : [];
-        extractionReport.validationError = Array.isArray(applyResult?.invalidFields) && applyResult.invalidFields.length > 0;
-        extractionReport.updatesApplied = applyResult?.applied === true;
-        session.metaContract = {
-          ...(session.metaContract || {}),
-          needsRepairHint: extractionReport.parseError || extractionReport.validationError,
-          lastError: extractionReport.parseError ? 'meta_parse_error' : (extractionReport.validationError ? 'meta_validation_error' : null),
-          lastMetaRaw: metaRaw || null,
-          lastUpdatedAt: new Date().toISOString()
-        };
-        const profileLog = {
-          language: session.clientProfile.language,
-          location: session.clientProfile.location,
-          budgetMin: session.clientProfile.budgetMin,
-          budgetMax: session.clientProfile.budgetMax,
-          purpose: session.clientProfile.purpose,
-          propertyType: session.clientProfile.propertyType,
-          urgency: session.clientProfile.urgency
-        };
-        console.log(`🧩 Профиль/инсайты обновлены [${String(sessionId).slice(-8)}]: ${JSON.stringify(profileLog)}`);
-      } else {
-        session.metaContract = {
-          ...(session.metaContract || {}),
-          needsRepairHint: true,
-          lastError: extractionReport.parseError ? 'meta_parse_error' : 'meta_missing',
-          lastMetaRaw: metaRaw || null,
-          lastUpdatedAt: new Date().toISOString()
-        };
-      }
-    } catch (e) {
-      console.log('ℹ️ META отсутствует или невалидна, продолжаем без обновления профиля');
-      extractionReport.validationError = true;
-      session.metaContract = {
-        ...(session.metaContract || {}),
-        needsRepairHint: true,
-        lastError: 'meta_processing_exception',
-        lastMetaRaw: metaRaw || null,
-        lastUpdatedAt: new Date().toISOString()
-      };
-    }
-    const rcFallback = applyResidentialComplexFallbackFromTranscript(transcription, session.insights);
+    const {
+      extractionReport,
+      extractionInvalidFields
+    } = await processStructuredMeta({
+      session,
+      sessionId,
+      meta,
+      metaRaw,
+      parseError,
+      fallbackUsed,
+      transcription,
+      clientId: process.env.CLIENT_ID || 'georgio-us',
+      logger: console
+    });
 
-    // --- NEW: STRICT SERVER-SIDE VALIDATION AGAINST CATALOG ---
-    try {
-      const clientId = process.env.CLIENT_ID || 'georgio-us';
-      await validateResidentialComplexInsights({
-        clientId,
-        insights: session.insights,
-        limit: 1000,
-        logger: console
-      });
-    } catch (e) {
-      console.error('[RC_VALIDATOR] Failed to validate RC against catalog:', e);
+    if (extractionReport.updatesApplied === true) {
+      const suffix = targetLang === 'ru'
+        ? "\n\nНажми «Объекты найдены» 👆, чтобы просмотреть подборку"
+        : "\n\nТисни «Об'єкт знайдено» 👆, щоб переглянути підбірку";
+      botResponse += suffix;
     }
-    // -----------------------------------------------------------
-    if (rcFallback.applied) {
-      extractionReport.fallbackUsed = true;
-      extractionReport.updatesApplied = true;
-      try {
-        console.log(`[RC_FALLBACK] sid=${String(sessionId || '').slice(-8) || 'unknown'} rcOnly=${rcFallback.rcOnly ? 1 : 0} complex=${rcFallback.complex || 'null'}`);
-      } catch {}
-    }
-
-    updateExtractionMetrics(session, extractionReport);
 
     // 🔎 Детектор намерения/вариантов
     const { variants } = detectCardIntent(transcription);
 
     // UI extras and cards container
     let cards = [];
-    let ui = undefined;
-    const managerCtaReason = getManagerCtaReason(transcription, {
-      updatesApplied: extractionReport.updatesApplied === true
-    });
-    if (managerCtaReason) {
-      ui = {
-        ...(ui || {}),
-        systemEvent: buildManagerSystemEvent(targetLang, managerCtaReason)
-      };
-    }
-    const uiHighlightTarget = getUiHighlightTarget(transcription);
-    if (uiHighlightTarget) {
-      ui = {
-        ...(ui || {}),
-        highlight: uiHighlightTarget,
-        highlightTarget: uiHighlightTarget
-      };
-    }
+    let { ui } = buildAssistantUiDecision({ transcription, targetLang, extractionReport });
     // (удалено) парсинг inline lead из текста и сигналы формы
     // прогресс не используется как гейт выдачи контента
 
@@ -2693,25 +852,7 @@ const transcribeAndRespond = async (req, res) => {
     * - UI предлагает карточку напрямую; числовые «N из M» больше не показываем.
     */
 
-    // RMv3 / Sprint 4 / Task 4.4: demo-only словесный выбор объекта → тот же button-flow (через /interaction select)
-    // ВАЖНО:
-    // - используем lastShown (приоритет) или currentFocusCard
-    // - если нет cardId → ничего не делаем (no-guessing)
-    // - не меняем server-facts здесь: запускаем тот же путь, что и кнопка "Выбрать"
-    try {
-      if (detectVerbalSelectIntent(transcription) === true) {
-        const chosenCardId =
-          (session?.lastShown && session.lastShown.cardId) ? String(session.lastShown.cardId) :
-          (session?.currentFocusCard && session.currentFocusCard.cardId) ? String(session.currentFocusCard.cardId) :
-          null;
-        if (chosenCardId) {
-          // Короткое подтверждение (без вопросов/объяснений)
-          botResponse = 'Отлично, зафиксировал выбор.';
-          // UI-совместимость: фронт вызывает sendCardInteraction('select', id) → включится тот же handoff UX
-          ui = { ...(ui || {}), autoSelectCardId: chosenCardId };
-        }
-      }
-    } catch {}
+    ({ botResponse, ui } = applyVerbalSelectUiDecision({ transcription, session, botResponse, ui }));
 
     // Если пользователь просит запись/встречу — (удалено) лид-форма не используется
 
@@ -2934,213 +1075,23 @@ const transcribeAndRespond = async (req, res) => {
     res.json(responsePayload);
 
   } catch (error) {
-    console.error(`❌ Ошибка [${sessionId?.slice(-8) || 'unknown'}]:`, error.message);
-    
-    // Определяем тип ошибки и возвращаем понятное сообщение
-    let userMessage = 'Произошла техническая ошибка. Попробуйте еще раз.';
-    let statusCode = 500;
-    
-    if (error.message.includes('OpenAI') || error.message.includes('API')) {
-      userMessage = 'Сервис ИИ временно недоступен. Попробуйте через минуту.';
-      statusCode = 503;
-    } else if (error.message.includes('audio') || error.message.includes('transcription')) {
-      userMessage = 'Не удалось обработать аудио. Попробуйте записать заново.';
-      statusCode = 422;
-    } else if (error.message.includes('timeout')) {
-      userMessage = 'Запрос выполняется слишком долго. Попробуйте сократить сообщение.';
-      statusCode = 408;
-    }
-    
-    // Логируем ошибку
-    // userIp и userAgent уже объявлены в начале функции
-    
-    // Обрезаем stack до разумной длины (первые 500 символов)
-    const stackTruncated = error.stack ? error.stack.substring(0, 500) : null;
-    
-    logEvent({
-      sessionId: sessionId || null,
-      eventType: EventTypes.ERROR,
-      userIp,
-      userAgent,
-      source: 'backend',
-      payload: buildPayload({
-        scope: 'backend',
-        message: error.message,
-        stack: stackTruncated,
-        meta: {
-          statusCode,
-          path: req.path,
-          method: req.method,
-          eventType: 'transcribeAndRespond'
-        }
-      })
-    }).catch(err => {
-      console.error('❌ Failed to log error event:', err);
-    });
-
-    // Session-level logging: добавляем системное сообщение об ошибке в session_logs
-    if (sessionId) {
-      appendMessage({
-        sessionId,
-        role: 'system',
-        message: {
-          text: `Ошибка: ${error.message}`,
-          meta: {
-            statusCode,
-            path: req.path,
-            method: req.method
-          }
-        },
-        userAgent,
-        userIp
-      }).catch(err => {
-        console.error('❌ Failed to append error message to session log:', err);
-      });
-    }
-    
-    res.status(statusCode).json({ 
-      error: userMessage,
-      timestamp: new Date().toISOString(),
-      requestId: sessionId?.slice(-8) || 'unknown'
-    });
+    return sendAudioErrorResponse({ req, res, error, sessionId, userIp, userAgent });
   }
 };
 
-const handleMiniAppOpen = async (req, res) => {
-  try {
-    const identity = readTelegramIdentityFromRequest(req);
-    const verifiedTgUserId = identity?.verified?.ok ? String(identity.verified.tgUserId || '').trim() : '';
-    const body = req.body || {};
-    const tgUserId = verifiedTgUserId || String(body?.tgUserId || '').trim();
-    if (!tgUserId) {
-      return res.status(400).json({ ok: false, error: 'TG_USER_ID_REQUIRED' });
-    }
-
-    const upsertResult = await upsertTelegramUser({
-      clientId: BOT_CLIENT_ID,
-      tgUserId,
-      username: body?.tgUsername || null,
-      firstName: body?.tgFirstName || null,
-      lastName: body?.tgLastName || null,
-      languageCode: body?.tgLanguageCode || null,
-      meta: {
-        source: 'tg_mini_app_open',
-        ...(body?.startParam ? { startParam: String(body.startParam) } : {})
-      }
-    });
-
-    let notified = false;
-    if (upsertResult?.isNew === true) {
-      const stats = await getUsersJoinStats(BOT_CLIENT_ID);
-      const payload = {
-        tgUserId,
-        username: body?.tgUsername || null,
-        firstName: body?.tgFirstName || null,
-        lastName: body?.tgLastName || null,
-        totalUsers: Number.isFinite(stats?.totalUsers) ? stats.totalUsers : null,
-        usersToday: Number.isFinite(stats?.usersToday) ? stats.usersToday : null,
-        at: Date.now()
-      };
-      await Promise.allSettled([
-        notifyNewTelegramUserToTelegram(payload),
-        notifyNewTelegramUserToProjectTelegram(payload)
-      ]);
-      notified = true;
-    }
-
-    return res.json({
-      ok: true,
-      isNew: upsertResult?.isNew === true,
-      notified
-    });
-  } catch (error) {
-    console.error('❌ /api/audio/miniapp-open error:', error);
-    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
-  }
-};
+const handleMiniAppOpen = (req, res) => handleAudioMiniAppOpen({ req, res, clientId: BOT_CLIENT_ID });
 
 const clearSessionById = (sessionId) => {
-  // RMv3: best-effort Telegram final update on explicit clear
-  try {
-    const session = sessions.get(sessionId);
-    const messageId = session?.telegram?.activityMessageId || null;
-    if (session && messageId) {
-      updateSessionActivityFinalToTelegram({
-        messageId,
-        sessionId: session?.sessionId || sessionId,
-        startedAt: session?.createdAt ?? null,
-        lastActivityAt: session?.lastActivity ?? null,
-        durationMs: (typeof session?.createdAt === 'number' && typeof session?.lastActivity === 'number')
-          ? Math.max(0, session.lastActivity - session.createdAt)
-          : null,
-        geo: session?.geo || null,
-        messageCount: Array.isArray(session?.messages) ? session.messages.length : null,
-        sliderReached: !!(session?.sliderContext && session.sliderContext.updatedAt),
-        insights: session?.insights || null,
-        cardsShownCount: session?.shownSet ? (session.shownSet.size || 0) : null,
-        likesCount: Array.isArray(session?.liked) ? session.liked.length : null,
-        selectedCardId: session?.selectedCard?.cardId || null,
-        handoffActive: session?.handoff?.shownAt ? true : (session?.handoff?.active === true),
-        handoffCanceled: session?.handoff?.canceled === true
-      }).catch(() => {});
-    }
-    const projectMessageIds = session?.telegramProject?.activityMessageIds || null;
-    if (session && projectMessageIds && typeof projectMessageIds === 'object') {
-      updateSessionActivityFinalToProjectTelegram({
-        messageIds: projectMessageIds,
-        sessionId: session?.sessionId || sessionId,
-        startedAt: session?.createdAt ?? null,
-        lastActivityAt: session?.lastActivity ?? null,
-        durationMs: (typeof session?.createdAt === 'number' && typeof session?.lastActivity === 'number')
-          ? Math.max(0, session.lastActivity - session.createdAt)
-          : null,
-        geo: session?.geo || null,
-        messageCount: Array.isArray(session?.messages) ? session.messages.length : null,
-        sliderReached: !!(session?.sliderContext && session.sliderContext.updatedAt),
-        insights: session?.insights || null,
-        cardsShownCount: session?.shownSet ? (session.shownSet.size || 0) : null,
-        likesCount: Array.isArray(session?.liked) ? session.liked.length : null,
-        selectedCardId: session?.selectedCard?.cardId || null,
-        handoffActive: session?.handoff?.shownAt ? true : (session?.handoff?.active === true),
-        handoffCanceled: session?.handoff?.canceled === true
-      }).catch(() => {});
-    }
-  } catch {}
-  sessions.delete(sessionId);
+  clearAudioSessionById({ sessions, sessionId });
 };
 
 const clearSessionHttp = (req, res) => {
-  try {
-    const sessionId = String(req?.params?.sessionId || '').trim();
-    if (!sessionId) {
-      return res.status(400).json({ ok: false, error: 'SESSION_ID_REQUIRED' });
-    }
-    const existed = sessions.has(sessionId);
-    clearSessionById(sessionId);
-    return res.json({ ok: true, cleared: existed, sessionId });
-  } catch (error) {
-    console.error('clearSessionHttp error:', error);
-    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
-  }
+  return handleAudioSessionClearHttp({ req, res, sessions, clearSessionById });
 };
 
 // ✅ Получить статистику всех активных сессий
 const getStats = (req, res) => {
-  const sessionStats = [];
-
-  sessions.forEach((session, sessionId) => {
-    sessionStats.push({
-      sessionId,
-      messageCount: session.messages.length,
-      lastActivity: session.lastActivity,
-      insights: session.insights // 🆕 Теперь содержит все 9 параметров
-    });
-  });
-
-  res.json({
-    totalSessions: sessions.size,
-    sessions: sessionStats
-  });
+  res.json(buildAudioStatsPayload(sessions));
 };
 
 // ✅ Получение полной информации о сессии по ID
@@ -3154,121 +1105,11 @@ const getSessionInfo = async (req, res) => {
       return res.status(404).json({ error: 'Сессия не найдена' });
     }
 
-    const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights || {});
-    const basePayload = {
-      sessionId,
-      clientProfile: session.clientProfile,
-      stage: session.stage,
-      role: session.role, // 🆕 Sprint I: server-side role
-      insights: session.insights, // 🆕 Теперь содержит все 9 параметров
-      totalMatches,
-      strictMatches,
-      relaxedMatches,
-      topCandidates: ranked.slice(0, 24).map((p) => formatCardForClient(req, p)),
-      lastCandidates: Array.isArray(session.lastCandidates) ? session.lastCandidates.slice(0, 80) : [],
-      messageCount: session.messages.length,
-      lastActivity: session.lastActivity,
-      // 🆕 Sprint IV: distinction between shown and focused (для валидации/debug)
-      currentFocusCard: session.currentFocusCard || { cardId: null, updatedAt: null },
-      lastShown: session.lastShown || { cardId: null, updatedAt: null },
-      lastFocusSnapshot: session.lastFocusSnapshot || null,
-      debugSummary: {
-        candidateShortlistCount: Array.isArray(session?.candidateShortlist?.items) ? session.candidateShortlist.items.length : 0,
-        unknownUiActionsCount: Number(session?.unknownUiActions?.count || 0),
-        debugTraceCount: Array.isArray(session?.debugTrace?.items) ? session.debugTrace.items.length : 0
-      }
-    };
-
-    if (!verbose) {
-      return res.json(basePayload);
-    }
-
-    return res.json({
-      ...basePayload,
-      // 🆕 Sprint V: reference and ambiguity states (для валидации/debug)
-      referenceIntent: session.referenceIntent || null,
-      referenceAmbiguity: session.referenceAmbiguity || { isAmbiguous: false, reason: null, detectedAt: null, source: 'server_contract' },
-      clarificationRequired: session.clarificationRequired || { isRequired: false, reason: null, detectedAt: null, source: 'server_contract' },
-      singleReferenceBinding: session.singleReferenceBinding || { hasProposal: false, proposedCardId: null, source: 'server_contract', detectedAt: null, basis: null },
-      clarificationBoundaryActive: session.clarificationBoundaryActive || false,
-      // 🆕 Sprint VI / Task #1: Candidate Shortlist (debug/diagnostics only)
-      candidateShortlist: session.candidateShortlist || { items: [] },
-      // 🆕 Sprint VI / Task #2: Explicit Choice Event (debug/diagnostics only)
-      explicitChoiceEvent: session.explicitChoiceEvent || { isConfirmed: false, cardId: null, detectedAt: null, source: 'user_message' },
-      // 🆕 Sprint VI / Task #3: Choice Confirmation Boundary (debug/diagnostics only)
-      choiceConfirmationBoundary: session.choiceConfirmationBoundary || { active: false, chosenCardId: null, detectedAt: null, source: null },
-      // 🆕 Sprint VI / Task #4: No-Guessing Invariant (debug/diagnostics only)
-      noGuessingInvariant: session.noGuessingInvariant || { active: false, reason: null, enforcedAt: null },
-      // 🆕 Sprint VII / Task #1: Unknown UI Actions (debug/diagnostics only)
-      unknownUiActions: session.unknownUiActions || { count: 0, items: [] },
-      // 🆕 Sprint VII / Task #2: Debug Trace (debug/diagnostics only)
-      debugTrace: session.debugTrace || { items: [] }
-    });
+    return res.json(await buildAudioSessionInfoPayload({ req, sessionId, session, verbose }));
   } catch (e) {
     console.error('getSessionInfo error:', e);
     res.status(500).json({ error: 'internal' });
   }
-};
-
-// 🆕 Sprint III: централизованная функция установки handoff как boundary-события
-const triggerHandoff = (session, reason = 'lead_submitted') => {
-  if (!session) {
-    console.warn('⚠️ [Sprint III] triggerHandoff вызван без session');
-    return false;
-  }
-  
-  if (session.handoffDone) {
-    console.log(`ℹ️ [Sprint III] Handoff уже выполнен для сессии ${session.sessionId?.slice(-8) || 'unknown'}`);
-    return false;
-  }
-  
-  // 🆕 Sprint III: создаём lead snapshot как часть boundary-события
-  if (!session.leadSnapshot) {
-    const snapshotAt = Date.now();
-    session.leadSnapshot = {
-      sessionId: session.sessionId || null,
-      createdAt: session.createdAt || null,
-      snapshotAt: snapshotAt,
-      clientProfile: session.clientProfile ? { ...session.clientProfile } : null,
-      insights: session.insights ? { ...session.insights } : null,
-      // Дополнительные данные, если они есть
-      likedProperties: Array.isArray(session.liked) ? [...session.liked] : null,
-      shownProperties: session.shownSet ? Array.from(session.shownSet) : null
-    };
-    session.leadSnapshotAt = snapshotAt;
-    console.log(`📸 [Sprint III] Lead snapshot создан для сессии ${session.sessionId?.slice(-8) || 'unknown'}`);
-  }
-  
-  session.handoffDone = true;
-  session.handoffAt = Date.now();
-  console.log(`✅ [Sprint III] Handoff установлен для сессии ${session.sessionId?.slice(-8) || 'unknown'} (reason: ${reason})`);
-  return true;
-};
-
-// 🆕 Sprint III: централизованная функция установки completion (завершение диалога после handoff)
-const triggerCompletion = (session, reason = 'post_handoff_cycle_complete') => {
-  if (!session) {
-    console.warn('⚠️ [Sprint III] triggerCompletion вызван без session');
-    return false;
-  }
-  
-  // Completion возможен только после handoff
-  if (!session.handoffDone) {
-    console.warn(`⚠️ [Sprint III] Completion невозможен до handoff (сессия ${session.sessionId?.slice(-8) || 'unknown'})`);
-    return false;
-  }
-  
-  // Идемпотентность: если completion уже установлен, не перезаписываем
-  if (session.completionDone) {
-    console.log(`ℹ️ [Sprint III] Completion уже выполнен для сессии ${session.sessionId?.slice(-8) || 'unknown'}`);
-    return false;
-  }
-  
-  session.completionDone = true;
-  session.completionAt = Date.now();
-  session.completionReason = reason;
-  console.log(`✅ [Sprint III] Completion установлен для сессии ${session.sessionId?.slice(-8) || 'unknown'} (reason: ${reason})`);
-  return true;
 };
 
 // ✅ Экспорт всех нужных функций
@@ -3293,138 +1134,25 @@ async function handleInteraction(req, res) {
     if (!action || !sessionId) return res.status(400).json({ error: 'action и sessionId обязательны' });
     const session = sessions.get(sessionId);
     if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
-    const clientDebugEnabled = isClientDebugEnabled(req);
-    const withDebug = (payload) => {
-      if (clientDebugEnabled !== true) return payload;
-      return {
-        ...payload,
-        debug: {
-          deploy: getDeployShortOrNull(),
-          sid: String(sessionId || '').slice(-8) || 'unknown',
-          ts: Date.now(),
-          action: String(action),
-          ui: {
-            focus: session.currentFocusCard?.cardId || null,
-            lastShown: session.lastShown?.cardId || null,
-            slider: session.sliderContext?.active === true ? 1 : 0
-          }
-        }
-      };
-    };
-    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
-    if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-      session.debugTrace = { items: [] };
-    }
-    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — 100% UI action coverage (single write)
-    session.debugTrace.items.push({
-      type: 'ui_action',
-      at: Date.now(),
-      payload: { action }
-    });
+    const withDebug = createInteractionDebugWrapper({ req, session, sessionId, action });
+    recordInteractionDebugTrace(session, action);
 
-    // Обеспечим список кандидатов в сессии
-    if (!Array.isArray(session.lastCandidates) || !session.lastCandidates.length) {
-      const { ranked } = await getRankedProperties(session.insights);
-      const hasHard = hasHardFilters(session.insights);
-      // Если по hard-filter нет совпадений — пул остаётся пустым
-      const pool = ranked.length ? ranked : (hasHard ? [] : await getAllNormalizedProperties());
-      session.lastCandidates = pool.map(p => p.id);
-      session.candidateIndex = 0;
-    } else if (session.lastCandidates.length < 2 && !hasHardFilters(session.insights)) {
-      // Гарантируем минимум 2 кандидата, расширив до всей базы (без дубликатов)
-      const set = new Set(session.lastCandidates);
-      const all = await getAllNormalizedProperties();
-      for (const p of all) { if (!set.has(p.id)) set.add(p.id); }
-      session.lastCandidates = Array.from(set);
-      if (!Number.isInteger(session.candidateIndex)) session.candidateIndex = 0;
-    }
-    const { totalMatches, strictMatches, relaxedMatches } = await getRankedProperties(session.insights);
+    await ensureInteractionCandidates(session);
+    const { totalMatches, strictMatches, relaxedMatches } = await getInteractionMatchCounts(session);
+    const counts = { totalMatches, strictMatches, relaxedMatches };
 
     if (action === 'show') {
-      // Первый показ выбранной карточки: только карточка/ID, без backend-комментария
-      const list = session.lastCandidates || [];
-      const hardFilteredMode = hasHardFilters(session.insights);
-      // Если фронт прислал variantId — используем его, иначе возьмём текущий индекс/первый
-      let id = variantId;
-      if (!id) {
-        if (hardFilteredMode && list.length === 0) {
-          return res.json(withDebug({ ok: true, cardId: null, card: null, totalMatches, strictMatches, relaxedMatches, role: session.role }));
-        }
-        const all = await getAllNormalizedProperties();
-        id = list[Number.isInteger(session.candidateIndex) ? session.candidateIndex : 0] || (all[0] && all[0].id);
-      }
-      const all = await getAllNormalizedProperties();
-      const p = all.find(x => x.id === id) || all[0];
-      if (!p) return res.status(404).json({ error: 'Карточка не найдена' });
-      // Обновим индекс и отметим показанным
-      session.candidateIndex = list.indexOf(id);
-      if (!session.shownSet) session.shownSet = new Set();
-      session.shownSet.add(p.id);
-      const scored = annotatePropertyWithScores(p, session.insights || {});
-      const card = formatCardForClient(req, scored);
-      return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
+      const result = await buildShowInteractionPayload({ req, session, variantId, counts });
+      return res.status(result.status || 200).json(withDebug(result.payload));
     }
 
     if (action === 'next') {
-      // Перейти к следующему подходящему объекту
-      const list = session.lastCandidates || [];
-      const len = list.length;
-      if (!len) {
-        if (hasHardFilters(session.insights)) {
-          return res.json(withDebug({ ok: true, cardId: null, card: null, totalMatches, strictMatches, relaxedMatches, role: session.role }));
-        }
-        // крайний случай: вернём первый из базы
-        const all = await getAllNormalizedProperties();
-        const p = all[0];
-        if (!p) return res.status(404).json({ error: 'Карточка не найдена' });
-        const scored = annotatePropertyWithScores(p, session.insights || {});
-        const card = formatCardForClient(req, scored);
-        return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
-      }
-      // Если фронт прислал текущий variantId, делаем шаг относительно него
-      let idx = list.indexOf(variantId);
-      if (idx === -1) {
-        idx = Number.isInteger(session.candidateIndex) ? session.candidateIndex : 0;
-      }
-      // Подготовим набор уже показанных в текущем показе
-      if (!session.shownSet) session.shownSet = new Set();
-      // Найдём следующий id, которого ещё не было показано в текущем показе
-      let steps = 0;
-      let nextIndex = (idx + 1) % len;
-      let id = list[nextIndex];
-      while (steps < len && session.shownSet.has(id)) {
-        nextIndex = (nextIndex + 1) % len;
-        id = list[nextIndex];
-        steps++;
-      }
-      // Если все кандидаты уже показаны — расширим пул лучшими по инсайтам и возьмём первый новый
-      if (steps >= len) {
-        const extended = (await findBestProperties(session.insights, 100)).map(p => p.id);
-        const unseen = extended.find(cid => !session.shownSet.has(cid));
-        if (unseen) {
-          id = unseen;
-          // добавим в пул для будущих переключений
-          const set = new Set(list);
-          set.add(id);
-          session.lastCandidates = Array.from(set);
-        }
-      }
-      session.candidateIndex = list.indexOf(id);
-      const all2 = await getAllNormalizedProperties();
-      const p = all2.find(x => x.id === id) || all2[0];
-      session.shownSet.add(p.id);
-      const scored = annotatePropertyWithScores(p, session.insights || {});
-      const card = formatCardForClient(req, scored);
-      return res.json(withDebug({ ok: true, cardId: p.id, card, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
+      const result = await buildNextInteractionPayload({ req, session, variantId, counts });
+      return res.status(result.status || 200).json(withDebug(result.payload));
     }
 
     if (action === 'like') {
-      // Сохраним лайк для аналитики (минимально)
-      session.liked = session.liked || [];
-      if (variantId) session.liked.push(variantId);
-      const count = session.liked.length;
-      const msg = `Супер, сохранил! Могу предложить записаться на просмотр или показать ещё варианты. Что выберем? (понравилось: ${count})`;
-      return res.json(withDebug({ ok: true, assistantMessage: msg, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
+      return res.json(withDebug(buildLikeInteractionPayload({ session, variantId, counts })));
     }
 
     // RMv3 / Sprint 1 / Task 1: факт выбора карточки пользователем (UI "Выбрать") — server-first
@@ -3433,26 +1161,8 @@ async function handleInteraction(req, res) {
     // - не меняет role/stage
     // - не трогает LLM
     if (action === 'select') {
-      const cardId = normalizeCardIdValue(variantId);
-      if (!cardId) {
-        return res.status(400).json({ error: 'variantId обязателен для select' });
-      }
-      if (!session.selectedCard) {
-        session.selectedCard = { cardId: null, selectedAt: null };
-      }
-      const now = Date.now();
-      session.selectedCard.cardId = cardId;
-      session.selectedCard.selectedAt = now;
-      // RMv3 / Sprint 2 / Task 2.1: фиксируем факт "handoff активирован/показан" на сервере
-      if (!session.handoff) {
-        session.handoff = { active: false, shownAt: null, cardId: null, canceled: false, canceledAt: null };
-      }
-      session.handoff.active = true;
-      session.handoff.shownAt = now;
-      session.handoff.cardId = session.selectedCard.cardId;
-      // при новом handoff сбрасываем cancel-факт (если был)
-      session.handoff.canceled = false;
-      session.handoff.canceledAt = null;
+      const result = applySelectInteractionState(session, variantId);
+      if (result.ok !== true) return res.status(result.status || 400).json({ error: result.error || 'bad request' });
       return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
     }
 
@@ -3462,157 +1172,49 @@ async function handleInteraction(req, res) {
     // - не вызывает LLM
     // - не трогает lead-flow
     if (action === 'handoff_cancel') {
-      const now = Date.now();
-      if (!session.handoff) {
-        session.handoff = { active: false, shownAt: null, cardId: null, canceled: false, canceledAt: null };
-      }
-      session.handoff.active = false;
-      session.handoff.canceled = true;
-      session.handoff.canceledAt = now;
-      // Полная отмена выбора: сбрасываем выбранную карточку и cardId в handoff
-      if (!session.selectedCard) {
-        session.selectedCard = { cardId: null, selectedAt: null };
-      }
-      session.selectedCard.cardId = null;
-      session.selectedCard.selectedAt = null;
-      session.handoff.cardId = null;
+      applyHandoffCancelInteractionState(session);
       return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
     }
 
     // 🆕 Sprint I: подтверждение факта рендера карточки в UI
     if (action === 'ui_card_rendered') {
-      if (!variantId) {
-        return res.status(400).json({ error: 'variantId обязателен для ui_card_rendered' });
-      }
-      // Фиксируем карточку как показанную в server state
-      if (!session.shownSet) session.shownSet = new Set();
-      session.shownSet.add(variantId);
-      
-      // 🆕 Sprint IV: обновляем lastShown при ui_card_rendered (отдельно от currentFocusCard)
-      if (!session.lastShown) {
-        session.lastShown = { cardId: null, updatedAt: null };
-      }
-      session.lastShown.cardId = variantId;
-      session.lastShown.updatedAt = Date.now();
-      
-      // 🆕 Sprint III: переход role по событию ui_card_rendered
-      transitionRole(session, 'ui_card_rendered');
-      
-      // 🆕 Sprint II / Block A: наполняем allowedFactsSnapshot фактами показанной карточки
-      try {
-        const all = await getAllNormalizedProperties();
-        const cardData = all.find(p => p.id === variantId);
-        
-        if (cardData) {
-          // Формируем snapshot строго по ALLOWED_FACTS_SCHEMA
-          const snapshot = {};
-          
-          // Извлекаем факты согласно schema
-          ALLOWED_FACTS_SCHEMA.forEach(field => {
-            if (field === 'cardId') {
-              snapshot.cardId = variantId;
-            } else if (field === 'hasImage') {
-              // Специальная обработка для hasImage (вычисляемый факт)
-              snapshot.hasImage = !!(cardData.images && Array.isArray(cardData.images) && cardData.images.length > 0);
-            } else {
-              // Прямое извлечение полей из cardData
-              snapshot[field] = cardData[field] || null;
-            }
-          });
-          
-          session.allowedFactsSnapshot = snapshot;
-          console.log(`✅ [Sprint II] allowedFactsSnapshot наполнен фактами карточки ${variantId} по schema (сессия ${sessionId.slice(-8)})`);
-        } else {
-          console.warn(`⚠️ [Sprint II] Карточка ${variantId} не найдена для наполнения snapshot`);
-        }
-      } catch (e) {
-        console.error(`❌ [Sprint II] Ошибка при наполнении allowedFactsSnapshot:`, e);
-      }
-      
-      console.log(`✅ [Sprint I] Карточка ${variantId} зафиксирована как показанная в UI (сессия ${sessionId.slice(-8)})`);
+      const result = await applyCardRenderedInteractionState({
+        session,
+        sessionId,
+        variantId,
+        getAllNormalizedProperties,
+        logger: console
+      });
+      if (result.ok !== true) return res.status(result.status || 400).json({ error: result.error || 'bad request' });
       return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // 🆕 Sprint IV: обработка события ui_slider_started для фиксации активности slider
     if (action === 'ui_slider_started') {
-      if (!session.sliderContext) {
-        session.sliderContext = { active: false, updatedAt: null };
-      }
-      session.sliderContext.active = true;
-      session.sliderContext.updatedAt = Date.now();
-      console.log(`📱 [Sprint IV] Slider стал активным (сессия ${sessionId.slice(-8)})`);
+      applySliderStartedInteractionState(session, sessionId, console);
       return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
     }
 
     // 🆕 Sprint III: обработка события ui_slider_ended для перехода role
     // 🆕 Sprint IV: также обновляем sliderContext при завершении slider
     if (action === 'ui_slider_ended') {
-      // 🆕 Sprint III: переход role по событию ui_slider_ended
-      transitionRole(session, 'ui_slider_ended');
-      
-      // 🆕 Sprint IV: обновляем sliderContext
-      if (!session.sliderContext) {
-        session.sliderContext = { active: false, updatedAt: null };
-      }
-      session.sliderContext.active = false;
-      session.sliderContext.updatedAt = Date.now();
-      console.log(`📱 [Sprint IV] Slider стал неактивным (сессия ${sessionId.slice(-8)})`);
-      
+      applySliderEndedInteractionState(session, sessionId, console);
       return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role })); // 🆕 Sprint I: server-side role
     }
 
     // 🆕 Sprint IV: обработка события ui_focus_changed для фиксации текущей карточки в фокусе
     if (action === 'ui_focus_changed') {
-      const cardId = normalizeCardIdValue(req?.body?.cardId);
-      
-      if (!cardId) {
-        console.warn(`⚠️ [Sprint IV] ui_focus_changed с невалидным cardId (сессия ${sessionId.slice(-8)})`);
-        return res.status(400).json({ error: 'cardId is required and must be a non-empty string' });
-      }
-      
-      if (!session.currentFocusCard) {
-        session.currentFocusCard = { cardId: null, updatedAt: null };
-      }
-      
-      session.currentFocusCard.cardId = cardId;
-      session.currentFocusCard.updatedAt = Date.now();
-      
-      // 🆕 Sprint IV: обновляем lastFocusSnapshot при ui_focus_changed (отдельно от lastShown и allowedFactsSnapshot)
-      session.lastFocusSnapshot = {
-        cardId: cardId,
-        updatedAt: Date.now()
-      };
-      
-      console.log(`🎯 [Sprint IV] Focus изменён на карточку ${cardId} (сессия ${sessionId.slice(-8)})`);
+      const result = applyFocusChangedInteractionState(session, req?.body?.cardId, sessionId, console);
+      if (result.ok !== true) return res.status(result.status || 400).json({ error: result.error || 'bad request' });
       return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
     }
 
     // 🆕 Sprint VII / Task #1: Unknown UI Action Capture (diagnostics only)
     // Неизвестный action не должен ломать выполнение и не должен вызывать side-effects.
-    if (!session.unknownUiActions || !Array.isArray(session.unknownUiActions.items)) {
-      session.unknownUiActions = { count: 0, items: [] };
-    }
-    session.unknownUiActions.count += 1;
-    session.unknownUiActions.items.push({
-      action: String(action),
-      payload: req.body ? { ...req.body } : null,
-      detectedAt: Date.now()
-    });
+    applyUnknownInteractionState(session, action, req.body);
     return res.json(withDebug({ ok: true, totalMatches, strictMatches, relaxedMatches, role: session.role }));
   } catch (e) {
     console.error('interaction error:', e);
     res.status(500).json({ error: 'internal' });
   }
 }
-const resolveViewerAccessForDebug = async (req) => {
-  try {
-    const identity = readTelegramIdentityFromRequest(req);
-    const verifiedTgUserId = identity?.verified?.ok ? String(identity.verified.tgUserId || '').trim() : '';
-    if (!verifiedTgUserId) {
-      return { accessRole: 'user', isAdmin: false, isSuperAdmin: false, isOwner: false };
-    }
-    return await resolveViewerAccessByTgId(verifiedTgUserId);
-  } catch {
-    return { accessRole: 'user', isAdmin: false, isSuperAdmin: false, isOwner: false };
-  }
-};
