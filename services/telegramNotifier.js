@@ -164,6 +164,11 @@ export function buildLeadTelegramMessage(lead) {
     if (source === 'guest_want_bot_trial') lines.push('🧪 Канал: 7-дневный тест');
     else if (source === 'guest_want_bot_consult') lines.push('🗣️ Канал: консультация');
     else lines.push('📩 Канал: хочу такого бота');
+  } else if (source.startsWith('guest_want_sell')) {
+    lines.push('🏠🏠🏠 ЗАЯВКА: ХОЧУ ПРОДАТЬ НЕДВИЖИМОСТЬ 🏠🏠🏠');
+    if (source === 'guest_want_sell_submit') lines.push('🏠 Канал: кнопка "Хочу продати"');
+    else if (source === 'guest_want_sell_estimate') lines.push('💰 Канал: кнопка "Оцінити вартість"');
+    else lines.push('📩 Канал: хочу продать');
   } else if (source === 'tg_property_card') {
     lines.push(`🔥 ИНТЕРЕС К ОБЪЕКТУ: ${propertyId || '-'}`);
   } else if (source === 'tg_header_main') {
