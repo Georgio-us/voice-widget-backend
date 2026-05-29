@@ -1,6 +1,4 @@
 import { OpenAI } from 'openai';
-// DB repository (Postgres)
-import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
 import {
   getAllNormalizedProperties,
   getRankedProperties
@@ -14,12 +12,9 @@ import {
 } from '../services/chatIntentPolicy.js';
 import {
   buildLlmContextPack,
-  buildShapedFactsPackForLLM,
   logCtx
 } from '../services/llmContextPack.js';
 import { INSIGHT_FIELDS } from '../services/insightsProfilePolicy.js';
-// Session-level logging: логирование целого диалога по одной строке на сессию
-import { appendMessage } from '../services/sessionLogger.js';
 import {
   getUiLanguage,
   normalizeUiLanguage
@@ -71,23 +66,24 @@ import {
 } from '../services/audioRequestBootstrapService.js';
 import { resolveAudioInput } from '../services/audioInputService.js';
 import {
+  logAudioAssistantTurn,
+  logAudioUserTurn
+} from '../services/audioConversationLoggingService.js';
+import { buildAudioResponsePayload } from '../services/audioResponsePayloadService.js';
+import {
   REF_FALLBACK_CONFIDENCE_THRESHOLD,
   classifyReferenceIntentFallbackLLM,
   detectReferenceIntent,
   shouldUseReferenceFallback
 } from '../services/audioReferenceIntentService.js';
 import { extractAssistantAndMeta } from '../services/audioAssistantMetaParser.js';
-import { formatCardForClient } from '../services/audioCardFormatter.js';
 import { callOpenAIWithRetry } from '../services/openAiRetryService.js';
 import {
   DEPLOY_TAG_SHORT,
-  clip,
   extractSpokeCardId,
-  getDeployShortOrNull,
   getLatestMatchRuleId,
   isClientDebugEnabled,
-  logBuildOnce,
-  normalizeForClientDebug
+  logBuildOnce
 } from '../services/audioDebugUtils.js';
 const DISABLE_SERVER_UI = String(process.env.DISABLE_SERVER_UI || '').trim() === '1';
 const BOT_CLIENT_ID = String(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID || 'demo').trim() || 'demo';
@@ -582,55 +578,7 @@ const transcribeAndRespond = async (req, res) => {
     // 🆕 Sprint III: переход role по событию user_message
     transitionRole(session, 'user_message');
 
-    // Логируем сообщение пользователя (event-level logging - существующая телеметрия)
-    const audioDurationMs = req.file ? null : null; // TODO: можно добавить извлечение длительности из аудио
-    
-    logEvent({
-      sessionId,
-      eventType: EventTypes.USER_MESSAGE,
-      userIp,
-      userAgent,
-      source: 'backend',
-      payload: buildPayload({
-        inputType: inputTypeForLog,
-        text: transcription,
-        textLength: transcription.length,
-        audioDurationMs,
-        stage: session.stage,
-        clientProfile: {
-          language: session.clientProfile.language,
-          location: session.clientProfile.location,
-          budgetMin: session.clientProfile.budgetMin,
-          budgetMax: session.clientProfile.budgetMax,
-          purpose: session.clientProfile.purpose,
-          propertyType: session.clientProfile.propertyType,
-          urgency: session.clientProfile.urgency
-        },
-        insights: session.insights,
-        cardsCount: session.shownSet ? session.shownSet.size : 0
-      })
-    }).catch(err => {
-      console.error('❌ Failed to log user_message event:', err);
-    });
-
-    // Session-level logging: добавляем сообщение пользователя в session_logs
-    appendMessage({
-      sessionId,
-      role: 'user',
-      message: {
-        inputType: inputTypeForLog,
-        text: transcription, // текст всегда есть (либо из транскрипции, либо прямой ввод)
-        ...(req.file ? { transcription: transcription } : {}), // для аудио дублируем в transcription
-        meta: {
-          stage: session.stage,
-          insights: session.insights
-        }
-      },
-      userAgent,
-      userIp
-    }).catch(err => {
-      console.error('❌ Failed to append user message to session log:', err);
-    });
+    logAudioUserTurn({ req, session, sessionId, transcription, inputTypeForLog, userIp, userAgent });
 
     // const totalProps = properties.length; // устарело – переезд на БД
     const detectedLangFromText = (() => {
@@ -759,79 +707,20 @@ const transcribeAndRespond = async (req, res) => {
 
     const totalTime = Date.now() - startTime;
 
-    // Логируем успешный ответ ассистента
-    const messageId = `${sessionId}_${Date.now()}`;
-    // inputTypeForLog уже объявлен в начале функции
-    
-    // Подготавливаем данные о карточках для логирования (только ключевые поля)
-    const cardsForLog = Array.isArray(cards) && cards.length > 0
-      ? cards.map(card => ({
-          id: card.id,
-          city: card.city || null,
-          district: card.district || null,
-          priceEUR: card.priceEUR || null,
-          rooms: card.rooms || null
-        }))
-      : [];
-    
-    // Короткий отрывок сообщения (первые 200 символов)
-    const messageText = botResponse ? botResponse.substring(0, 200) : null;
-    
-    logEvent({
+    const { cardsForLog } = logAudioAssistantTurn({
       sessionId,
-      eventType: EventTypes.ASSISTANT_REPLY,
-      userIp,
-      userAgent,
-      source: 'backend',
-      payload: buildPayload({
-        messageId,
-        messageText,
-        hasCards: cards.length > 0,
-        cards: cardsForLog,
-        inputType: inputTypeForLog,
-        tokens: {
-          prompt: promptTokens,
-          completion: completionTokens,
-          total: totalTokens
-        },
-        timing: {
-          transcription: transcriptionTime,
-          gpt: gptTime,
-          total: totalTime
-        },
-        stage: session.stage,
-        insights: session.insights
-      })
-    }).catch(err => {
-      console.error('❌ Failed to log assistant_reply event:', err);
-    });
-
-    // Session-level logging: добавляем ответ ассистента в session_logs
-    appendMessage({
-      sessionId,
-      role: 'assistant',
-      message: {
-        text: botResponse,
-        cards: cardsForLog,
-        tokens: {
-          prompt: promptTokens,
-          completion: completionTokens,
-          total: totalTokens
-        },
-        timing: {
-          transcription: transcriptionTime,
-          gpt: gptTime,
-          total: totalTime
-        },
-        meta: {
-          stage: session.stage,
-          insights: session.insights
-        }
-      },
+      session,
+      botResponse,
+      cards,
+      inputTypeForLog,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      transcriptionTime,
+      gptTime,
+      totalTime,
       userAgent,
       userIp
-    }).catch(err => {
-      console.error('❌ Failed to append assistant message to session log:', err);
     });
 
     // 🆕 Sprint 2 / Task 11: one summary per user turn (only if fallback was considered)
@@ -875,98 +764,39 @@ const transcribeAndRespond = async (req, res) => {
     const viewerAccess = await resolveViewerAccessForDebug(req);
     const isSuperAdminViewer = viewerAccess?.isSuperAdmin === true;
 
-    const responsePayload = {
-      response: botResponse,
-      transcription,
+    const responsePayload = buildAudioResponsePayload({
+      req,
+      session,
       sessionId,
-      messageCount: session.messages.length,
+      botResponse,
+      transcription,
       inputType,
-      clientProfile: session.clientProfile,
-      stage: session.stage,
-      role: session.role, // 🆕 Sprint I: server-side role
-      insights: session.insights, // 🆕 Теперь содержит все 9 параметров
-      extractionStatus: {
-        metaPresent: extractionReport.metaPresent === true,
-        parseError: extractionReport.parseError === true,
-        validationError: extractionReport.validationError === true,
-        updatesApplied: extractionReport.updatesApplied === true,
-        fallbackUsed: extractionReport.fallbackUsed === true,
-        invalidFields: extractionInvalidFields,
-        demoCatalogContext: demoCatalogContext?.meta || null,
-        demoPromptFlavor: demoPromptFlavorContext?.meta || null
-      },
+      inputTypeForLog,
+      extractionReport,
+      extractionInvalidFields,
+      demoCatalogContext,
+      demoPromptFlavorContext,
       totalMatches,
       strictMatches,
       relaxedMatches,
-      topCandidates: ranked.slice(0, 20).map((p) => formatCardForClient(req, p)),
-      // ui пропускается, если undefined; cards может быть пустым массивом
-      cards: DISABLE_SERVER_UI ? [] : cards,
-      ui: DISABLE_SERVER_UI ? undefined : ui,
-      tokens: {
-        prompt: promptTokens,
-        completion: completionTokens,
-        total: totalTokens
-      },
-      timing: {
-        transcription: transcriptionTime,
-        gpt: gptTime,
-        total: totalTime
-      }
-    };
-
-    if (!isSuperAdminViewer) {
-      delete responsePayload.extractionStatus;
-      delete responsePayload.topCandidates;
-      delete responsePayload.tokens;
-      delete responsePayload.timing;
-    }
-
-    // Patch (outside roadmap): Browser-visible compact debug (only under exact gate)
-    if (clientDebugEnabled === true && isSuperAdminViewer) {
-      const matchRuleId = getLatestMatchRuleId(session);
-      const pack = llmContextPackForMainCall || buildLlmContextPack(session, sessionId, 'main');
-      const factsIds = Array.isArray(pack?.facts?.factsCardIds) ? pack.facts.factsCardIds.filter(Boolean) : [];
-      const allowedFactsSnapshot = pack?.facts?.allowedFactsSnapshot ?? null;
-      const allowedFacts = (allowedFactsSnapshot && typeof allowedFactsSnapshot === 'object' && Object.keys(allowedFactsSnapshot).length > 0) ? 1 : 0;
-
-      responsePayload.debug = {
-        deploy: getDeployShortOrNull(),
-        sid: String(sessionId || '').slice(-8) || 'unknown',
-        ts: Date.now(),
-        input: {
-          type: inputTypeForLog,
-          raw: clip(transcription, 80),
-          norm: clip(normalizeForClientDebug(transcription), 80)
-        },
-        ref: {
-          type: session.referenceIntent?.type ?? null,
-          rule: matchRuleId
-        },
-        ui: {
-          focus: session.currentFocusCard?.cardId || null,
-          lastShown: session.lastShown?.cardId || null,
-          lastFocus: session.lastFocusSnapshot?.cardId || null,
-          slider: session.sliderContext?.active === true ? 1 : 0
-        },
-        bind: {
-          has: bindHas ? 1 : 0,
-          cardId: bindCardId,
-          basis: session.singleReferenceBinding?.basis ?? null
-        },
-        facts: {
-          ids: factsIds,
-          allowed: allowedFacts,
-          count: factsIds.length
-        },
-        spoke: {
-          cardId: spoke.cardId,
-          confidence: spoke.confidence
-        },
-        mismatch: {
-          bindVsSpoke: mismatchBindVsSpoke
-        }
-      };
-    }
+      ranked,
+      cards,
+      ui,
+      disableServerUi: DISABLE_SERVER_UI,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      transcriptionTime,
+      gptTime,
+      totalTime,
+      isSuperAdminViewer,
+      clientDebugEnabled,
+      llmContextPackForMainCall,
+      bindHas,
+      bindCardId,
+      spoke,
+      mismatchBindVsSpoke
+    });
 
     res.json(responsePayload);
 
