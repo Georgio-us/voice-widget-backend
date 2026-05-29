@@ -818,7 +818,7 @@ const transcribeAndRespond = async (req, res) => {
     if (extractionReport.updatesApplied === true) {
       const suffix = targetLang === 'ru'
         ? "\n\nНажми «Объекты найдены» 👆, чтобы просмотреть подборку"
-        : "\n\nТисни «Об'єкт знайдено» 👆, щоб переглянути підбірку";
+        : "\n\nТисни «Об'єкти знайдено» 👆, щоб переглянути підбірку";
       botResponse += suffix;
     }
 
