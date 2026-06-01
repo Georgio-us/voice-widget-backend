@@ -54,6 +54,19 @@ const uploadImages = (req, res, next) => {
   });
 };
 
+const uploadBroadcastImage = (req, res, next) => {
+  upload.single('image')(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      return res.status(400).json({ ok: false, error: 'UPLOAD_VALIDATION_ERROR', code: err.code });
+    }
+    if (String(err?.message || '') === 'UNSUPPORTED_IMAGE_MIME') {
+      return res.status(400).json({ ok: false, error: 'UNSUPPORTED_IMAGE_MIME' });
+    }
+    return next(err);
+  });
+};
+
 const requireAdmin = async (req, res, next) => {
   try {
     const { tgUserId } = resolveTgUserIdForAccess(req);
@@ -462,21 +475,51 @@ router.delete('/properties/:externalId', requireAdmin, async (req, res) => {
 });
 
 
-router.post('/broadcast', requireAdmin, async (req, res) => {
+router.post('/broadcast', uploadBroadcastImage, requireAdmin, async (req, res) => {
   try {
     const { targetUserIds, messageText, ctaText, photoUrl } = req.body;
+    const parsedTargetUserIds = (() => {
+      if (Array.isArray(targetUserIds)) return targetUserIds;
+      const raw = String(targetUserIds || '').trim();
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {}
+      return raw.split(',').map((item) => item.trim()).filter(Boolean);
+    })();
     
-    if (!Array.isArray(targetUserIds) || targetUserIds.length === 0) {
+    if (!Array.isArray(parsedTargetUserIds) || parsedTargetUserIds.length === 0) {
       return res.status(400).json({ ok: false, error: 'TARGET_USERS_REQUIRED' });
     }
     if (!messageText) {
       return res.status(400).json({ ok: false, error: 'MESSAGE_TEXT_REQUIRED' });
     }
 
+    let broadcastPhotoUrl = String(photoUrl || '').trim() || null;
+    if (req.file) {
+      if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
+      const cfg = requireR2Config();
+      const s3 = buildS3Client(cfg);
+      logImageSizes([req.file], 'broadcast');
+      const now = Date.now();
+      const key = `clients/${SERVICE_CLIENT_ID}/broadcasts/${now}_${Math.random().toString(36).slice(2, 10)}.webp`;
+      const body = await normalizeImageBuffer(req.file.buffer);
+      await s3.send(new PutObjectCommand({
+        Bucket: cfg.bucket,
+        Key: key,
+        Body: body,
+        ContentType: 'image/webp',
+        CacheControl: 'public, max-age=31536000, immutable'
+      }));
+      const normalizedBase = String(cfg.publicBaseUrl).replace(/\/+$/, '');
+      broadcastPhotoUrl = `${normalizedBase}/${key}`;
+    }
+
     const results = await sendTargetedBroadcast({
-      userIds: targetUserIds,
+      userIds: parsedTargetUserIds,
       messageText,
-      photoUrl,
+      photoUrl: broadcastPhotoUrl,
       ctaText
     });
 
