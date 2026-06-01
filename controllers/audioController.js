@@ -6,10 +6,7 @@ import {
 import {
   normalizeCardIdValue
 } from '../services/audioPropertySearchUtils.js';
-import {
-  detectCardIntent,
-  detectExplicitChoiceMarker
-} from '../services/chatIntentPolicy.js';
+import { detectCardIntent } from '../services/chatIntentPolicy.js';
 import {
   buildLlmContextPack,
   logCtx
@@ -70,14 +67,12 @@ import {
   logAudioUserTurn
 } from '../services/audioConversationLoggingService.js';
 import { buildAudioResponsePayload } from '../services/audioResponsePayloadService.js';
+import { shouldUseReferenceFallback } from '../services/audioReferenceIntentService.js';
 import {
-  REF_FALLBACK_CONFIDENCE_THRESHOLD,
-  classifyReferenceIntentFallbackLLM,
-  detectReferenceIntent,
-  shouldUseReferenceFallback
-} from '../services/audioReferenceIntentService.js';
+  logReferenceFallbackSummary,
+  runAudioReferencePipeline
+} from '../services/audioReferencePipelineService.js';
 import { extractAssistantAndMeta } from '../services/audioAssistantMetaParser.js';
-import { callOpenAIWithRetry } from '../services/openAiRetryService.js';
 import {
   DEPLOY_TAG_SHORT,
   extractSpokeCardId,
@@ -123,20 +118,6 @@ const transcribeAndRespond = async (req, res) => {
       session.debugTrace = { items: [] };
     }
 
-    // 🆕 Sprint 2 / Task 11: per-turn fallback observability summary (local, not stored in session)
-    const refFallbackSummary = {
-      gateChecked: false,
-      gateEligible: false,
-      gateBlockedByBoundary: false,
-      called: false,
-      outputType: null,
-      confidence: 0,
-      threshold: REF_FALLBACK_CONFIDENCE_THRESHOLD,
-      decision: 'not_called',
-      finalEffect: null,
-      clampApplied: false
-    };
-
     const {
       transcription,
       transcriptionTime,
@@ -146,435 +127,18 @@ const transcribeAndRespond = async (req, res) => {
 
     addMessageToSession(sessionId, 'user', transcription);
     updateAudioSessionInsightsProgress(session, transcription);
-    
-    // 🆕 Sprint V: детекция reference intent в сообщении пользователя (без интерпретации)
-    // 🔧 Hotfix: Reference Detector Stabilization (Roadmap v2)
-    const refDetectResult = detectReferenceIntent(transcription);
-    session.referenceIntent = refDetectResult ? {
-      type: refDetectResult.type,
-      detectedAt: refDetectResult.detectedAt,
-      source: refDetectResult.source
-    } : null;
-    
-    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only) — расширенный payload для reference_detected
-    if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-      session.debugTrace = { items: [] };
-    }
-    const rawSnippet = transcription ? transcription.slice(0, 40) : '';
-    // Вычисляем normalized независимо от результата детектора (для диагностики)
-    const normalizedForTrace = transcription
-      ? String(transcription).toLowerCase().replace(/ё/g, 'е').replace(/[^a-z0-9а-я\s]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40)
-      : '';
-    session.debugTrace.items.push({
-      type: 'reference_detected',
-      at: Date.now(),
-      payload: {
-        referenceType: refDetectResult?.type || null,
-        matchRuleId: refDetectResult?.matchRuleId || null,
-        rawTextSnippet: rawSnippet,
-        normalizedTextSnippet: normalizedForTrace,
-        inputType: inputTypeForLog,
-        language: session.clientProfile?.language || null
-      }
-    });
-    
-    // 🔧 Hotfix: временный server log для reference_detected
-    const shortSid = sessionId ? sessionId.slice(-8) : 'unknown';
-    const focusCardId = session.currentFocusCard?.cardId || null;
-    const ambiguousFlag = session.referenceAmbiguity?.isAmbiguous === true;
-    const clarificationActive = session.clarificationBoundaryActive === true;
-    console.log(`[REF] sid=${shortSid} input=${inputTypeForLog} lang=${session.clientProfile?.language || 'null'} raw="${rawSnippet}" norm="${normalizedForTrace}" intent=${refDetectResult?.type || 'null'} rule=${refDetectResult?.matchRuleId || 'null'} amb=${ambiguousFlag} clar=${clarificationActive} focus=${focusCardId}`);
 
-    // 🆕 Sprint 2 / Task 2: fallback LLM классификатор referenceIntent (server-first merge)
-    // Fallback вызывается только если:
-    // - детектор не сработал (session.referenceIntent === null)
-    // - gate shouldUseReferenceFallback(session, transcription) === true
-    let fallbackAppliedForPipeline = false;
-    let fallbackAppliedReferenceType = null;
+    const { refFallbackSummary } = await runAudioReferencePipeline({
+      session,
+      sessionId,
+      transcription,
+      inputTypeForLog,
+      openai
+    });
+
     // Cache LLM context pack used for [CTX] (so client debug facts match that turn)
     let llmContextPackForMainCall = null;
-    if (session.referenceIntent == null) {
-      // gate is checked only when referenceIntent is null (same condition as before)
-      refFallbackSummary.gateChecked = true;
-      refFallbackSummary.gateBlockedByBoundary =
-        session?.referenceAmbiguity?.isAmbiguous === true ||
-        session?.clarificationRequired?.isRequired === true ||
-        session?.clarificationBoundaryActive === true;
 
-      const gateEligible = shouldUseReferenceFallback(session, transcription) === true;
-      refFallbackSummary.gateEligible = gateEligible;
-
-      if (gateEligible === true) {
-        const lang = session.clientProfile?.language || null;
-        refFallbackSummary.called = true;
-
-        const out = await classifyReferenceIntentFallbackLLM({
-          openai,
-          text: transcription,
-          language: lang,
-          retryOpenAI: (fn) => callOpenAIWithRetry(fn, 2, 'REF-Fallback-Classifier')
-        });
-
-        const thr = REF_FALLBACK_CONFIDENCE_THRESHOLD;
-        const referenceType = out?.referenceType ?? null;
-        const confidence = (typeof out?.confidence === 'number' && Number.isFinite(out.confidence) && out.confidence >= 0 && out.confidence <= 1)
-          ? out.confidence
-          : 0;
-        const reasonTag = out?.reasonTag ?? null;
-        const isValidType = referenceType === 'single' || referenceType === 'multi' || referenceType === 'unknown';
-        const isConfident = isValidType && confidence >= thr;
-        const decision = isValidType
-          ? (isConfident ? 'applied' : 'ignored_low_confidence')
-          : 'ignored_invalid_output';
-
-        // summary fields (observability only)
-        refFallbackSummary.outputType = referenceType;
-        refFallbackSummary.confidence = confidence;
-        refFallbackSummary.threshold = thr;
-        refFallbackSummary.decision = decision;
-
-        // server-first merge: применяем только при валидном типе и достаточной уверенности
-        if (decision === 'applied') {
-          session.referenceIntent = {
-            type: referenceType,
-            detectedAt: Date.now(),
-            source: 'fallback_llm'
-          };
-          fallbackAppliedForPipeline = true;
-          fallbackAppliedReferenceType = referenceType;
-        }
-
-        // diagnostics: debugTrace + server log (только когда fallback реально вызван)
-        if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-          session.debugTrace = { items: [] };
-        }
-        session.debugTrace.items.push({
-          type: 'reference_fallback',
-          at: Date.now(),
-          payload: {
-            rawTextSnippet: rawSnippet,
-            normalizedTextSnippet: normalizedForTrace,
-            language: lang,
-            gateEligible: true,
-            decision,
-            threshold: thr,
-            confidence,
-            referenceType,
-            reasonTag: reasonTag ?? null,
-            output: {
-              referenceType,
-              confidence,
-              reasonTag: reasonTag ?? null
-            }
-          }
-        });
-
-        const safeRaw = rawSnippet.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-        const safeNorm = normalizedForTrace.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-        console.log(`[REF_FALLBACK] sid=${shortSid} lang=${lang || 'null'} raw="${safeRaw}" norm="${safeNorm}" out=${referenceType || 'null'} conf=${confidence} thr=${thr} decision=${decision} reason=${reasonTag || 'null'}`);
-      } else {
-        // gate checked but not eligible -> no classifier call
-        refFallbackSummary.decision = 'not_called';
-      }
-    }
-    
-    // 🆕 Sprint V: детекция ambiguity для reference (детерминированное правило, без интерпретации)
-    if (!session.referenceAmbiguity) {
-      session.referenceAmbiguity = {
-        isAmbiguous: false,
-        reason: null,
-        detectedAt: null,
-        source: 'server_contract'
-      };
-    }
-    
-    if (session.referenceIntent === null) {
-      // Reference не найден → неоднозначности нет
-      session.referenceAmbiguity.isAmbiguous = false;
-      session.referenceAmbiguity.reason = null;
-      session.referenceAmbiguity.detectedAt = null;
-    } else if (session.referenceIntent.type === 'multi') {
-      // Multi reference → неоднозначен
-      session.referenceAmbiguity.isAmbiguous = true;
-      session.referenceAmbiguity.reason = 'multi_reference';
-      session.referenceAmbiguity.detectedAt = Date.now();
-    } else if (session.referenceIntent.type === 'unknown') {
-      // Unknown reference → неоднозначен
-      session.referenceAmbiguity.isAmbiguous = true;
-      session.referenceAmbiguity.reason = 'unknown_reference';
-      session.referenceAmbiguity.detectedAt = Date.now();
-    } else if (session.referenceIntent.type === 'single') {
-      // Single reference → не неоднозначен (но объект всё равно не выбран)
-      session.referenceAmbiguity.isAmbiguous = false;
-      session.referenceAmbiguity.reason = null;
-      session.referenceAmbiguity.detectedAt = null;
-    }
-    
-    // 🆕 Sprint V: установка clarificationRequired на основе referenceAmbiguity (детерминированное правило)
-    if (!session.clarificationRequired) {
-      session.clarificationRequired = {
-        isRequired: false,
-        reason: null,
-        detectedAt: null,
-        source: 'server_contract'
-      };
-    }
-    
-    if (session.referenceAmbiguity.isAmbiguous === true) {
-      // Reference неоднозначен → требуется уточнение
-      session.clarificationRequired.isRequired = true;
-      session.clarificationRequired.reason = session.referenceAmbiguity.reason;
-      session.clarificationRequired.detectedAt = Date.now();
-    } else {
-      // Reference не неоднозначен → уточнение не требуется
-      session.clarificationRequired.isRequired = false;
-      session.clarificationRequired.reason = null;
-      session.clarificationRequired.detectedAt = null;
-    }
-    
-    // 🆕 Sprint V: single-reference binding proposal (предложение cardId из currentFocusCard, только если условия выполнены)
-    if (!session.singleReferenceBinding) {
-      session.singleReferenceBinding = {
-        hasProposal: false,
-        proposedCardId: null,
-        source: 'server_contract',
-        detectedAt: null,
-        basis: null
-      };
-    }
-    
-    // Правило: proposal только если single reference, не требуется clarification, и есть currentFocusCard
-    if (session.referenceIntent?.type === 'single' && 
-        session.clarificationRequired.isRequired === false &&
-        session.currentFocusCard?.cardId) {
-      session.singleReferenceBinding.hasProposal = true;
-      session.singleReferenceBinding.proposedCardId = session.currentFocusCard.cardId;
-      session.singleReferenceBinding.basis = 'currentFocusCard';
-      session.singleReferenceBinding.detectedAt = Date.now();
-    } else {
-      // Условия не выполнены → proposal отсутствует
-      session.singleReferenceBinding.hasProposal = false;
-      session.singleReferenceBinding.proposedCardId = null;
-      session.singleReferenceBinding.basis = null;
-      session.singleReferenceBinding.detectedAt = null;
-    }
-    
-    // 🆕 Sprint V: clarification boundary active (диагностическое поле: активна ли граница уточнения)
-    // Если clarificationRequired.isRequired === true, система находится в состоянии clarification_pending
-    // и не имеет права использовать proposal / binding / продвигать сценарий
-    const prevClarificationBoundaryActive = session.clarificationBoundaryActive === true;
-    session.clarificationBoundaryActive = session.clarificationRequired.isRequired === true;
-    // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
-    if (prevClarificationBoundaryActive !== true && session.clarificationBoundaryActive === true) {
-      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-        session.debugTrace = { items: [] };
-      }
-      session.debugTrace.items.push({
-        type: 'clarification_boundary',
-        at: Date.now(),
-        payload: { reason: session.clarificationRequired?.reason || null }
-      });
-    }
-
-    // 🆕 Sprint VI / Task #4: No-Guessing Invariant (server guard, derived state + enforcement)
-    // Правило: пока clarificationBoundaryActive === true, запрещено использовать reference/proposal/choice downstream.
-    if (!session.noGuessingInvariant) {
-      session.noGuessingInvariant = { active: false, reason: null, enforcedAt: null };
-    }
-    if (session.clarificationBoundaryActive === true) {
-      session.noGuessingInvariant.active = true;
-      session.noGuessingInvariant.reason = 'clarification_required';
-      session.noGuessingInvariant.enforcedAt = Date.now();
-    } else {
-      // derived state: если boundary не активна — инвариант не активен
-      session.noGuessingInvariant.active = false;
-      session.noGuessingInvariant.reason = null;
-      session.noGuessingInvariant.enforcedAt = null;
-    }
-
-    // Enforcement (поверх существующих блоков, без переписывания логики):
-    // - пока noGuessingInvariant.active === true: proposal должен быть отключён (hasProposal=false)
-    //   это также блокирует фиксацию explicit choice в текущем проходе (условие explicit choice требует hasProposal=true)
-    if (session.noGuessingInvariant.active === true) {
-      // Safe reset: не создаём новый объект и не трогаем поля кроме hasProposal/proposedCardId
-      if (session.singleReferenceBinding) {
-        session.singleReferenceBinding.hasProposal = false;
-        session.singleReferenceBinding.proposedCardId = null;
-      }
-    }
-
-    // 🆕 Sprint VI / Task #1: Candidate Shortlist append (server-side, observation only)
-    // Разрешённый источник (ТОЛЬКО): single-reference binding proposal (focus_proposal)
-    // Условия:
-    // - session.singleReferenceBinding.hasProposal === true
-    // - clarificationBoundaryActive === false
-    // Правила:
-    // - идемпотентно (один cardId — один раз)
-    // - только append (без удаления/очистки)
-    // - без связи с legacy like / shownSet / lastShown
-    if (!session.candidateShortlist || !Array.isArray(session.candidateShortlist.items)) {
-      session.candidateShortlist = { items: [] };
-    }
-
-    const proposedCardIdForShortlist = session.singleReferenceBinding?.hasProposal === true
-      ? session.singleReferenceBinding?.proposedCardId
-      : null;
-
-    if (session.clarificationBoundaryActive === false && proposedCardIdForShortlist) {
-      const alreadyAdded = session.candidateShortlist.items.some(it => it && it.cardId === proposedCardIdForShortlist);
-      if (!alreadyAdded) {
-        session.candidateShortlist.items.push({
-          cardId: proposedCardIdForShortlist,
-          source: 'focus_proposal',
-          detectedAt: Date.now()
-        });
-      }
-    }
-
-    // 🆕 Sprint VI / Task #2: Explicit Choice Event (infrastructure only)
-    // Устанавливается ТОЛЬКО при одновременном выполнении условий:
-    // - singleReferenceBinding.hasProposal === true
-    // - clarificationBoundaryActive === false
-    // - есть proposedCardId
-    // - текст содержит строгий whitelist-маркер явного выбора
-    // Если хотя бы одно условие не выполнено → explicitChoiceEvent НЕ устанавливается.
-    if (!session.explicitChoiceEvent) {
-      session.explicitChoiceEvent = { isConfirmed: false, cardId: null, detectedAt: null, source: 'user_message' };
-    }
-    if (session.explicitChoiceEvent.isConfirmed !== true) {
-      const eligibleForExplicitChoice =
-        session.clarificationBoundaryActive === false &&
-        session.singleReferenceBinding?.hasProposal === true &&
-        Boolean(session.singleReferenceBinding?.proposedCardId);
-
-      if (eligibleForExplicitChoice && detectExplicitChoiceMarker(transcription)) {
-        session.explicitChoiceEvent.isConfirmed = true;
-        session.explicitChoiceEvent.cardId = session.singleReferenceBinding.proposedCardId;
-        session.explicitChoiceEvent.detectedAt = Date.now();
-        session.explicitChoiceEvent.source = 'user_message';
-        // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
-        if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-          session.debugTrace = { items: [] };
-        }
-        session.debugTrace.items.push({
-          type: 'explicit_choice',
-          at: Date.now(),
-          payload: { cardId: session.explicitChoiceEvent.cardId || null }
-        });
-      }
-    }
-
-    // 🆕 Sprint VI Micro Task: reflect explicitChoiceEvent into candidateShortlist (as separate source)
-    // Условия (все одновременно):
-    // - explicitChoiceEvent.isConfirmed === true
-    // - explicitChoiceEvent.cardId truthy
-    // - noGuessingInvariant.active !== true
-    // - идемпотентно по (cardId, source='explicit_choice_event')
-    if (
-      session.explicitChoiceEvent?.isConfirmed === true &&
-      Boolean(session.explicitChoiceEvent?.cardId) === true &&
-      session.noGuessingInvariant?.active !== true
-    ) {
-      const alreadyAddedExplicitChoice = session.candidateShortlist?.items?.some(
-        (it) => it && it.cardId === session.explicitChoiceEvent.cardId && it.source === 'explicit_choice_event'
-      );
-      if (!alreadyAddedExplicitChoice) {
-        session.candidateShortlist.items.push({
-          cardId: session.explicitChoiceEvent.cardId,
-          source: 'explicit_choice_event',
-          detectedAt: session.explicitChoiceEvent.detectedAt || Date.now()
-        });
-      }
-    }
-
-    // 🆕 Sprint VI / Task #3: Choice Confirmation Boundary (infrastructure only)
-    // Write-path: после обработки explicitChoiceEvent.
-    // Если explicitChoiceEvent.isConfirmed === true → активируем boundary (один раз, без auto-reset).
-    // Если explicitChoiceEvent не подтверждён → boundary не активируется (и не сбрасывается).
-    if (!session.choiceConfirmationBoundary) {
-      session.choiceConfirmationBoundary = { active: false, chosenCardId: null, detectedAt: null, source: null };
-    }
-    if (session.choiceConfirmationBoundary.active !== true && session.explicitChoiceEvent?.isConfirmed === true && Boolean(session.explicitChoiceEvent?.cardId) && session.noGuessingInvariant?.active !== true) {
-      session.choiceConfirmationBoundary.active = true;
-      session.choiceConfirmationBoundary.chosenCardId = session.explicitChoiceEvent.cardId || null;
-      session.choiceConfirmationBoundary.detectedAt = session.explicitChoiceEvent.detectedAt || null;
-      session.choiceConfirmationBoundary.source = 'explicit_choice_event';
-      // 🆕 Sprint VII / Task #2: Debug Trace (diagnostics only)
-      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-        session.debugTrace = { items: [] };
-      }
-      session.debugTrace.items.push({
-        type: 'choice_boundary',
-        at: Date.now(),
-        payload: { cardId: session.choiceConfirmationBoundary.chosenCardId || null }
-      });
-    }
-
-    // 🆕 Sprint 2 / Task 4: ensure fallback-applied intent enters the same reference pipeline
-    // Логируем только при decision=applied (fallbackAppliedForPipeline=true) и только после того,
-    // как server pipeline (ambiguity/clarification/binding/shortlist/choiceBoundary) уже отработал.
-    if (fallbackAppliedForPipeline === true) {
-      const amb = session.referenceAmbiguity?.isAmbiguous === true;
-      const clarReq = session.clarificationRequired?.isRequired === true;
-      const clarBoundary = session.clarificationBoundaryActive === true;
-      const hasProposalBeforeClamp = session.singleReferenceBinding?.hasProposal === true;
-      const finalEffect = (amb === true || clarReq === true || clarBoundary === true)
-        ? 'clarification'
-        : (hasProposalBeforeClamp === true ? 'binding' : 'clarification');
-
-      // Sprint 2 / Task 7 micro-fix: server-first clamp after fallback pipeline
-      // Если итоговый эффект — clarification, то не оставляем "эффекты выбора" (binding/choice).
-      const clampApplied = finalEffect === 'clarification';
-      if (clampApplied === true) {
-        // Снять proposal (не трогаем остальные поля singleReferenceBinding)
-        if (session.singleReferenceBinding) {
-          session.singleReferenceBinding.hasProposal = false;
-          session.singleReferenceBinding.proposedCardId = null;
-        }
-        // Снять "подтверждение выбора"
-        if (session.explicitChoiceEvent) {
-          session.explicitChoiceEvent.isConfirmed = false;
-          if ('cardId' in session.explicitChoiceEvent) {
-            session.explicitChoiceEvent.cardId = null;
-          }
-        }
-        // Снять boundary выбора
-        if (session.choiceConfirmationBoundary) {
-          session.choiceConfirmationBoundary.active = false;
-          if ('chosenCardId' in session.choiceConfirmationBoundary) {
-            session.choiceConfirmationBoundary.chosenCardId = null;
-          }
-        }
-      }
-
-      // Диагностика: после clamp (чтобы отражать финальное состояние)
-      const hasProposal = session.singleReferenceBinding?.hasProposal === true;
-      const proposedCardId = session.singleReferenceBinding?.proposedCardId || null;
-      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-        session.debugTrace = { items: [] };
-      }
-      session.debugTrace.items.push({
-        type: 'reference_pipeline_after_fallback',
-        at: Date.now(),
-        payload: {
-          decision: 'applied',
-          referenceType: fallbackAppliedReferenceType || null,
-          ambiguous: amb,
-          clarificationRequired: clarReq,
-          clarificationBoundaryActive: clarBoundary,
-          hasProposal,
-          proposedCardId,
-          finalEffect,
-          clampApplied
-        }
-      });
-      console.log(`[REF_FALLBACK_PIPELINE] sid=${shortSid} ref=${fallbackAppliedReferenceType || 'null'} amb=${amb ? 1 : 0} clarReq=${clarReq ? 1 : 0} clarBoundary=${clarBoundary ? 1 : 0} bind=${hasProposal ? 1 : 0} bindCard=${proposedCardId || 'null'} finalEffect=${finalEffect} clamp=${clampApplied ? 1 : 0}`);
-
-      // Sprint 2 / Task 11: summary final outcome after pipeline (observability only)
-      refFallbackSummary.finalEffect = finalEffect;
-      refFallbackSummary.clampApplied = clampApplied === true;
-    }
-    
     // 🆕 Sprint III: переход role по событию user_message
     transitionRole(session, 'user_message');
 
@@ -723,41 +287,7 @@ const transcribeAndRespond = async (req, res) => {
       userIp
     });
 
-    // 🆕 Sprint 2 / Task 11: one summary per user turn (only if fallback was considered)
-    if (refFallbackSummary.gateChecked === true || refFallbackSummary.called === true) {
-      if (!session.debugTrace || !Array.isArray(session.debugTrace.items)) {
-        session.debugTrace = { items: [] };
-      }
-      session.debugTrace.items.push({
-        type: 'reference_fallback_summary',
-        at: Date.now(),
-        payload: {
-          gateChecked: refFallbackSummary.gateChecked === true,
-          gateEligible: refFallbackSummary.gateEligible === true,
-          gateBlockedByBoundary: refFallbackSummary.gateBlockedByBoundary === true,
-          called: refFallbackSummary.called === true,
-          outputType: refFallbackSummary.outputType ?? null,
-          confidence: typeof refFallbackSummary.confidence === 'number' ? refFallbackSummary.confidence : 0,
-          threshold: typeof refFallbackSummary.threshold === 'number' ? refFallbackSummary.threshold : REF_FALLBACK_CONFIDENCE_THRESHOLD,
-          decision: refFallbackSummary.decision,
-          finalEffect: refFallbackSummary.finalEffect ?? null,
-          clampApplied: refFallbackSummary.clampApplied === true
-        }
-      });
-      console.log(
-        `[REF_FALLBACK_SUMMARY] sid=${shortSid}` +
-        ` gateChecked=${refFallbackSummary.gateChecked ? 1 : 0}` +
-        ` eligible=${refFallbackSummary.gateEligible ? 1 : 0}` +
-        ` blockedByBoundary=${refFallbackSummary.gateBlockedByBoundary ? 1 : 0}` +
-        ` called=${refFallbackSummary.called ? 1 : 0}` +
-        ` out=${refFallbackSummary.outputType || 'null'}` +
-        ` conf=${typeof refFallbackSummary.confidence === 'number' ? refFallbackSummary.confidence : 0}` +
-        ` thr=${typeof refFallbackSummary.threshold === 'number' ? refFallbackSummary.threshold : REF_FALLBACK_CONFIDENCE_THRESHOLD}` +
-        ` decision=${refFallbackSummary.decision}` +
-        ` finalEffect=${refFallbackSummary.finalEffect || 'null'}` +
-        ` clamp=${refFallbackSummary.clampApplied ? 1 : 0}`
-      );
-    }
+    logReferenceFallbackSummary({ session, sessionId, refFallbackSummary });
 
     const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights);
 

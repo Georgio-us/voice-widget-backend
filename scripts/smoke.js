@@ -60,6 +60,7 @@ check('Syntax: services/audioPromptBuilder.js', () => nodeCheck('services/audioP
 check('Syntax: services/audioPropertySearchService.js', () => nodeCheck('services/audioPropertySearchService.js'));
 check('Syntax: services/audioPropertySearchUtils.js', () => nodeCheck('services/audioPropertySearchUtils.js'));
 check('Syntax: services/audioReferenceIntentService.js', () => nodeCheck('services/audioReferenceIntentService.js'));
+check('Syntax: services/audioReferencePipelineService.js', () => nodeCheck('services/audioReferencePipelineService.js'));
 check('Syntax: services/audioRequestBootstrapService.js', () => nodeCheck('services/audioRequestBootstrapService.js'));
 check('Syntax: services/audioResponsePayloadService.js', () => nodeCheck('services/audioResponsePayloadService.js'));
 check('Syntax: services/audioSessionActivityFinalizer.js', () => nodeCheck('services/audioSessionActivityFinalizer.js'));
