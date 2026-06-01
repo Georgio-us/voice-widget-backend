@@ -16,6 +16,8 @@ import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { getAdminClientsList, getAdminSessionDigest, getAdminStatsSummary } from '../services/adminStatsService.js';
 import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
 
+import { sendTargetedBroadcast } from '../services/telegramBot.js';
+
 const router = express.Router();
 
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
@@ -455,6 +457,32 @@ router.delete('/properties/:externalId', requireAdmin, async (req, res) => {
     return res.json({ ok: true, removedExternalId: externalId });
   } catch (error) {
     console.error('❌ DELETE /api/admin/properties/:externalId error:', error);
+    return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
+
+
+router.post('/broadcast', requireAdmin, async (req, res) => {
+  try {
+    const { targetUserIds, messageText, ctaText, photoUrl } = req.body;
+    
+    if (!Array.isArray(targetUserIds) || targetUserIds.length === 0) {
+      return res.status(400).json({ ok: false, error: 'TARGET_USERS_REQUIRED' });
+    }
+    if (!messageText) {
+      return res.status(400).json({ ok: false, error: 'MESSAGE_TEXT_REQUIRED' });
+    }
+
+    const results = await sendTargetedBroadcast({
+      userIds: targetUserIds,
+      messageText,
+      photoUrl,
+      ctaText
+    });
+
+    return res.json({ ok: true, results });
+  } catch (error) {
+    console.error('❌ POST /api/admin/broadcast error:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
 });

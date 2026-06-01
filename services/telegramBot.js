@@ -857,3 +857,56 @@ export async function telegramWebhookExpressHandler(req, res) {
     return undefined;
   }
 }
+
+export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ctaText }) {
+  if (!botInstance) {
+    throw new Error('TELEGRAM_BOT_NOT_INITIALIZED');
+  }
+  const miniAppUrl = String(process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL).trim();
+  
+  const results = {
+    total: userIds.length,
+    success: 0,
+    failed: 0,
+    errors: []
+  };
+
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  for (const userId of userIds) {
+    try {
+      const extra = {
+        parse_mode: 'HTML'
+      };
+
+      // Если есть CTA-кнопка
+      if (ctaText && miniAppUrl) {
+        extra.reply_markup = {
+          inline_keyboard: [[
+            { text: ctaText, web_app: { url: miniAppUrl } }
+          ]]
+        };
+      }
+
+      if (photoUrl) {
+        await botInstance.telegram.sendPhoto(userId, photoUrl, {
+          caption: messageText,
+          ...extra
+        });
+      } else {
+        await botInstance.telegram.sendMessage(userId, messageText, extra);
+      }
+
+      results.success++;
+      
+      // Задержка 100мс между отправками для соблюдения лимитов Telegram (~30 сообщ/сек)
+      await delay(100);
+    } catch (err) {
+      console.error(`Failed to broadcast to userId: ${userId}`, err.message);
+      results.failed++;
+      results.errors.push({ userId, error: err.message });
+    }
+  }
+
+  return results;
+}
