@@ -6,6 +6,7 @@ import { getAllProperties } from '../services/propertiesRepository.js';
 import { executeCanonicalQueryV1 } from '../services/canonicalQueryV1.js';
 import { BASE_SYSTEM_PROMPT } from '../services/personality.js';
 import { logEvent, EventTypes, buildPayload } from '../services/eventLogger.js';
+import { extractKnownUrbanizations, knownUrbanizationAliases } from '../services/knownUrbanizations.js';
 // Session-level logging: логирование целого диалога по одной строке на сессию
 import { appendMessage } from '../services/sessionLogger.js';
 import { sendSessionActivityStartToTelegram, updateSessionActivityFinalToTelegram } from '../services/telegramNotifier.js';
@@ -522,6 +523,13 @@ const mapRowToProperty = (row) => {
     city: row.location_city || null,
     district: row.location_district || null,
     neighborhood: row.location_neighborhood || null,
+    urbanizations: extractKnownUrbanizations(
+      row.location_neighborhood,
+      row.location_address,
+      row.title,
+      rawObj?.locationDetail,
+      rawObj?.url
+    ),
     priceEUR: row.price_amount != null ? Number(row.price_amount) : null,
     price_per_m2: row.price_per_m2 != null ? Number(row.price_per_m2) : null,
     rooms: row.specs_rooms != null ? Number(row.specs_rooms) : null,
@@ -826,9 +834,12 @@ const buildLocationLexicon = (rows = []) => {
   };
 
   rows.forEach((row) => {
-    add(row?.location_city);
-    add(row?.location_district);
-    add(row?.location_neighborhood);
+    add(row?.city || row?.location_city);
+    add(row?.district || row?.location_district);
+    add(row?.neighborhood || row?.location_neighborhood);
+    if (Array.isArray(row?.urbanizations)) {
+      row.urbanizations.forEach((value) => add(value));
+    }
     const raw = row?.raw && typeof row.raw === 'object' ? row.raw : null;
     add(raw?.town);
     add(raw?.province);
@@ -852,7 +863,7 @@ const buildLocationLexicon = (rows = []) => {
     ['ла зения', 'La Zenia'],
     ['коста бланка', 'Costa Blanca'], ['коста брава', 'Costa Brava'], ['коста дель соль', 'Costa del Sol']
   ];
-  aliases.forEach(([k, v]) => add(k, v));
+  [...aliases, ...knownUrbanizationAliases()].forEach(([k, v]) => add(k, v));
 
   return Array.from(out.entries())
     .map(([key, canonical]) => ({ key, canonical }))

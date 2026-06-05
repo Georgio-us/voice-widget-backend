@@ -1,3 +1,5 @@
+import { extractKnownUrbanizations, knownUrbanizationAliases } from './knownUrbanizations.js';
+
 const toText = (v) => String(v ?? '').trim();
 
 const normalizeText = (v) =>
@@ -232,7 +234,8 @@ const LOCATION_ALIASES = new Map([
   ['costa cálida', 'costa calida'],
   ['коста калида', 'costa calida'],
   ['коста брава', 'costa brava'],
-  ['коста дель соль', 'costa del sol']
+  ['коста дель соль', 'costa del sol'],
+  ...knownUrbanizationAliases().map(([key, value]) => [key, normalizeText(value)])
 ]);
 
 const normalizeLocationToken = (value) => {
@@ -299,7 +302,9 @@ const SUPPORTED_GEO_TOKENS = new Set([
   'la nucia', 'moraira', 'algorfa montemar',
   // Costa Calida
   'los alcazares', 'san pedro del pinatar', 'san javier', 'torre pacheco',
-  'santiago de ribeira', 'mar menor', 'murcia'
+  'santiago de ribeira', 'mar menor', 'murcia',
+  // Controlled urbanization allowlist from feed title/url/address/locationDetail.
+  ...knownUrbanizationAliases().map(([token]) => token)
 ]);
 
 const LIMITED_GEO_TOKENS = new Set(['valencia']);
@@ -321,7 +326,8 @@ const MICRO_LOCATION_HINTS = [
   'lomas de cabo roig',
   'finestrat',
   'blue lagoon',
-  'los altos'
+  'los altos',
+  ...knownUrbanizationAliases().map(([token]) => token)
 ];
 
 const COAST_TO_CITIES = new Map([
@@ -888,7 +894,16 @@ const candidateOrientation = (candidate) => normalizeOrientation(candidate?.orie
 
 const matchLocation = (candidate, loc) => {
   if (!loc?.normalized) return true;
-  const hay = normalizeText(`${candidate?.city || ''} ${candidate?.district || ''} ${candidate?.neighborhood || ''}`);
+  const urbanizations = Array.isArray(candidate?.urbanizations)
+    ? candidate.urbanizations.join(' ')
+    : '';
+  const fallbackUrbanizations = extractKnownUrbanizations(
+    candidate?.neighborhood,
+    candidate?.address,
+    candidate?.title,
+    candidate?.url
+  ).join(' ');
+  const hay = normalizeText(`${candidate?.city || ''} ${candidate?.district || ''} ${candidate?.neighborhood || ''} ${urbanizations} ${fallbackUrbanizations}`);
   return !!hay && hay.includes(loc.normalized);
 };
 
