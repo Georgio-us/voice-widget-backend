@@ -20,7 +20,7 @@ const normalizeNameExpr = (paramIndex) =>
  */
 export async function listResidentialComplexes(clientId, { q = '', limit = 50, lang = 'ru' } = {}) {
   const safeClientId = resolveClientId(clientId);
-  const lim = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const lim = Math.min(Math.max(Number(limit) || 50, 1), 5000);
   const needle = String(q || '').trim().slice(0, 120);
 
   const extractDisplayName = (row) => {
