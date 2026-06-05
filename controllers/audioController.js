@@ -715,27 +715,33 @@ const getUiLanguage = (session) => {
 
 // Вариативный динамический комментарий под карточкой (для /interaction)
 const generateCardComment = (lang, p) => {
+  const areaLabel = (p) => {
+    const urbanization = Array.isArray(p?.urbanizations) && p.urbanizations.length
+      ? String(p.urbanizations[0] || '').trim()
+      : '';
+    return [urbanization || p?.city, urbanization ? p?.city : p?.district].filter(Boolean).join(', ');
+  };
   const fallbackByLang = {
     ru: 'Как вам?',
     en: 'How do you like it?',
     es: 'Que te parece?'
   };
   const ru = [
-    (p) => `Как вам район: ${p.city}, ${p.district}?`,
+    (p) => `Как вам район: ${areaLabel(p)}?`,
     (p) => `Комнат: ${p.rooms} — ${p.priceEUR} €. Что думаете?`,
     (p) => `По району и цене — удачное сочетание. Как вам?`,
     (p) => `В этом бюджете выглядит здраво. Оцените, пожалуйста.`,
     (p) => `Посмотрите вариант и скажите впечатления.`
   ];
   const en = [
-    (p) => `How do you like the area: ${p.city}, ${p.district}?`,
+    (p) => `How do you like the area: ${areaLabel(p)}?`,
     (p) => `${p.rooms} rooms for ${p.priceEUR} EUR. What do you think?`,
     (p) => `Great balance of area and price. How does it feel to you?`,
     (p) => `Looks solid for this budget. What is your impression?`,
     (p) => `Take a look and share your thoughts.`
   ];
   const es = [
-    (p) => `Que te parece la zona: ${p.city}, ${p.district}?`,
+    (p) => `Que te parece la zona: ${areaLabel(p)}?`,
     (p) => `${p.rooms} habitaciones por ${p.priceEUR} EUR. Que opinas?`,
     (p) => `Buena combinacion de zona y precio. Como lo ves?`,
     (p) => `Se ve bien para este presupuesto. Cual es tu impresion?`,
