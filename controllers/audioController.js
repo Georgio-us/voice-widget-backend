@@ -651,6 +651,7 @@ const formatCardForClient = (req, p) => {
     city: p.city ?? p?.location?.city ?? null,
     district: p.district ?? p?.location?.district ?? null,
     neighborhood: p.neighborhood ?? p?.location?.neighborhood ?? null,
+    urbanizations: Array.isArray(p.urbanizations) ? p.urbanizations : [],
     province: p.district ?? p?.location?.district ?? null,
     // Правые поля (основные цифры)
     price: (p.priceEUR != null ? `${p.priceEUR} €` : (p?.price?.amount != null ? `${p.price.amount} €` : null)),
