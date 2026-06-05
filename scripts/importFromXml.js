@@ -6,6 +6,12 @@ import { pool } from '../services/db.js';
 const DEFAULT_FEED_URL = 'https://estylespain.com/xml/xml-mediaelx.php?f=69e7b52b6c411';
 const FEED_URL = process.argv[2] || process.env.XML_FEED_URL || DEFAULT_FEED_URL;
 const CLIENT_ID = process.env.IMPORT_CLIENT_ID || process.env.APP_CLIENT_ID || 'demo';
+const DRY_RUN = ['1', 'true', 'yes'].includes(String(process.env.XML_IMPORT_DRY_RUN || '').trim().toLowerCase());
+const SYNC_DEACTIVATE = ['1', 'true', 'yes'].includes(String(process.env.XML_SYNC_DEACTIVATE || '').trim().toLowerCase());
+const SYNC_MIN_COUNT = (() => {
+  const n = Number.parseInt(String(process.env.XML_SYNC_MIN_COUNT || '500'), 10);
+  return Number.isFinite(n) && n > 0 ? n : 500;
+})();
 const LIMIT = (() => {
   const v = process.env.XML_IMPORT_LIMIT || '';
   const n = Number.parseInt(v, 10);
@@ -167,8 +173,8 @@ const buildExternalId = (propertyXml) => {
   return value ? value.toUpperCase() : null;
 };
 
-async function ensureUniqueIndex() {
-  await pool.query(`
+async function ensureUniqueIndex(db = pool) {
+  await db.query(`
     DO $$
     BEGIN
       IF NOT EXISTS (
@@ -184,9 +190,9 @@ async function ensureUniqueIndex() {
   `);
 }
 
-async function upsertProperty(record) {
+async function upsertProperty(record, db = pool) {
   const now = new Date();
-  await pool.query(
+  await db.query(
     `
     INSERT INTO properties (
       client_id,
@@ -305,13 +311,107 @@ async function upsertProperty(record) {
   );
 }
 
+function buildRecord(block) {
+  const externalId = buildExternalId(block);
+  if (!externalId) return null;
+
+  const typeNode = extractTag(block, 'type');
+  const titleNode = extractTag(block, 'title');
+  const descNode = extractTag(block, 'desc');
+  const surfaceNode = extractTag(block, 'surface_area');
+  const urlNode = extractTag(block, 'url');
+  const tags = extractTagLabels(block);
+  const tagsI18n = extractTagLabelsI18n(block, ['ru', 'en', 'es']);
+
+  const priceFreqRaw = toText(extractTag(block, 'price_freq'));
+  const operation = normalizeOperation(priceFreqRaw);
+
+  return {
+    externalId,
+    operation,
+    propertyType: propertyTypeFromTypeNode(typeNode),
+    city: toText(extractTag(block, 'town')),
+    province: toText(extractTag(block, 'province')),
+    locationDetail: toText(extractTag(block, 'location_detail')),
+    address: toText(extractTag(extractTag(block, 'location') || '', 'address')),
+    beds: toInt4(extractTag(block, 'beds')),
+    baths: toInt4(extractTag(block, 'baths')),
+    areaBuilt: toInt4(extractTag(surfaceNode || '', 'built')),
+    areaPlot: toInt4(extractTag(surfaceNode || '', 'plot')),
+    areaTerrace: toInt4(extractTag(surfaceNode || '', 'terrace')),
+    floor: toInt4(extractTag(block, 'floor')),
+    hasParking: Boolean(toText(pickAnyLang(extractTag(block, 'parking')))),
+    hasPool: Boolean(toText(pickAnyLang(extractTag(block, 'pool')))),
+    isNewBuild: Boolean(toText(extractTag(block, 'new_build'))),
+    priceAmount: toInt4(extractTag(block, 'price')),
+    priceCurrency: toText(extractTag(block, 'currency')) || 'EUR',
+    title: pickLang(titleNode, ['ru', 'en', 'es']),
+    description: pickLang(descNode, ['ru', 'en', 'es']),
+    yearBuild: toInt4(extractTag(block, 'year_build')),
+    images: extractImages(block),
+    tags,
+    raw: {
+      source: 'xml-mediaelx',
+      feedUrl: FEED_URL,
+      importedAt: new Date().toISOString(),
+      id: toText(extractTag(block, 'id')),
+      ref: toText(extractTag(block, 'ref')),
+      priceFreq: priceFreqRaw,
+      descriptionI18n: extractLangMap(descNode, ['ru', 'en', 'es']),
+      yearBuild: toInt4(extractTag(block, 'year_build')),
+      terrace: toInt4(extractTag(surfaceNode || '', 'terrace')),
+      orientation: extractLocalizedText(block, 'orientation'),
+      distanceBeach: toNumber(extractTag(block, 'distance_beach')),
+      distanceBeachMed: extractDistanceMed(block, 'distance_beach'),
+      distanceAirport: toNumber(extractTag(block, 'distance_airport')),
+      distanceAirportMed: extractDistanceMed(block, 'distance_airport'),
+      distanceGolf: toNumber(extractTag(block, 'distance_golf')),
+      distanceGolfMed: extractDistanceMed(block, 'distance_golf'),
+      distanceAmenities: toNumber(extractTag(block, 'distance_amenities')),
+      distanceAmenitiesMed: extractDistanceMed(block, 'distance_amenities'),
+      tagsI18n,
+      tags,
+      url: pickLang(urlNode, ['en', 'es', 'ru'])
+    }
+  };
+}
+
+async function getSyncPreview(records) {
+  if (!process.env.DATABASE_URL) return null;
+  const feedIds = records.map((record) => record.externalId);
+  const { rows } = await pool.query(
+    `
+    SELECT external_id, is_active
+    FROM properties
+    WHERE client_id = $1
+    `,
+    [CLIENT_ID]
+  );
+  const feedSet = new Set(feedIds);
+  const dbSet = new Set(rows.map((row) => String(row.external_id || '').trim().toUpperCase()).filter(Boolean));
+  const activeRows = rows.filter((row) => row.is_active === true);
+  const activeMissing = activeRows
+    .map((row) => String(row.external_id || '').trim().toUpperCase())
+    .filter((id) => id && !feedSet.has(id));
+  const newInFeed = feedIds.filter((id) => !dbSet.has(id));
+  return {
+    dbTotalForClient: rows.length,
+    dbActiveForClient: activeRows.length,
+    newInFeedCount: newInFeed.length,
+    wouldDeactivateCount: activeMissing.length,
+    newInFeedSample: newInFeed.slice(0, 20),
+    wouldDeactivateSample: activeMissing.slice(0, 20)
+  };
+}
+
 async function run() {
   console.log('🚀 XML import started');
   console.log('ℹ️ feed_url =', FEED_URL);
   console.log('ℹ️ client_id =', CLIENT_ID);
+  console.log('ℹ️ dry_run =', DRY_RUN ? 'yes' : 'no');
+  console.log('ℹ️ sync_deactivate =', SYNC_DEACTIVATE ? 'yes' : 'no');
+  console.log('ℹ️ sync_min_count =', SYNC_MIN_COUNT);
   if (LIMIT) console.log('ℹ️ limit =', LIMIT);
-
-  await ensureUniqueIndex();
 
   const response = await fetch(FEED_URL);
   if (!response.ok) {
@@ -324,82 +424,91 @@ async function run() {
   console.log(`ℹ️ found properties = ${propertyBlocks.length}`);
   console.log(`ℹ️ processing = ${total}`);
 
-  let processed = 0;
   let skipped = 0;
-  let rentCount = 0;
-  let saleCount = 0;
+  const records = [];
 
   for (const block of propertyBlocks.slice(0, total)) {
-    const externalId = buildExternalId(block);
-    if (!externalId) {
+    const record = buildRecord(block);
+    if (!record) {
       skipped += 1;
       continue;
     }
+    records.push(record);
+  }
 
-    const typeNode = extractTag(block, 'type');
-    const titleNode = extractTag(block, 'title');
-    const descNode = extractTag(block, 'desc');
-    const surfaceNode = extractTag(block, 'surface_area');
-    const urlNode = extractTag(block, 'url');
-    const tags = extractTagLabels(block);
-    const tagsI18n = extractTagLabelsI18n(block, ['ru', 'en', 'es']);
+  const operationStats = records.reduce((acc, record) => {
+    if (record.operation === 'rent') acc.rent += 1;
+    else acc.sale += 1;
+    return acc;
+  }, { sale: 0, rent: 0 });
+  const uniqueExternalIds = new Set(records.map((record) => record.externalId));
 
-    const priceFreqRaw = toText(extractTag(block, 'price_freq'));
-    const operation = normalizeOperation(priceFreqRaw);
-    if (operation === 'rent') rentCount += 1;
-    else saleCount += 1;
+  if (uniqueExternalIds.size !== records.length) {
+    throw new Error(`Duplicate external_id values in feed: records=${records.length}, unique=${uniqueExternalIds.size}`);
+  }
 
-    const record = {
-      externalId,
-      operation,
-      propertyType: propertyTypeFromTypeNode(typeNode),
-      city: toText(extractTag(block, 'town')),
-      province: toText(extractTag(block, 'province')),
-      locationDetail: toText(extractTag(block, 'location_detail')),
-      address: toText(extractTag(extractTag(block, 'location') || '', 'address')),
-      beds: toInt4(extractTag(block, 'beds')),
-      baths: toInt4(extractTag(block, 'baths')),
-      areaBuilt: toInt4(extractTag(surfaceNode || '', 'built')),
-      areaPlot: toInt4(extractTag(surfaceNode || '', 'plot')),
-      areaTerrace: toInt4(extractTag(surfaceNode || '', 'terrace')),
-      floor: toInt4(extractTag(block, 'floor')),
-      hasParking: Boolean(toText(pickAnyLang(extractTag(block, 'parking')))),
-      hasPool: Boolean(toText(pickAnyLang(extractTag(block, 'pool')))),
-      isNewBuild: Boolean(toText(extractTag(block, 'new_build'))),
-      priceAmount: toInt4(extractTag(block, 'price')),
-      priceCurrency: toText(extractTag(block, 'currency')) || 'EUR',
-      title: pickLang(titleNode, ['ru', 'en', 'es']),
-      description: pickLang(descNode, ['ru', 'en', 'es']),
-      yearBuild: toInt4(extractTag(block, 'year_build')),
-      images: extractImages(block),
-      tags,
-      raw: {
-        source: 'xml-mediaelx',
-        feedUrl: FEED_URL,
-        importedAt: new Date().toISOString(),
-        id: toText(extractTag(block, 'id')),
-        ref: toText(extractTag(block, 'ref')),
-        priceFreq: priceFreqRaw,
-        descriptionI18n: extractLangMap(descNode, ['ru', 'en', 'es']),
-        yearBuild: toInt4(extractTag(block, 'year_build')),
-        terrace: toInt4(extractTag(surfaceNode || '', 'terrace')),
-        orientation: extractLocalizedText(block, 'orientation'),
-        distanceBeach: toNumber(extractTag(block, 'distance_beach')),
-        distanceBeachMed: extractDistanceMed(block, 'distance_beach'),
-        distanceAirport: toNumber(extractTag(block, 'distance_airport')),
-        distanceAirportMed: extractDistanceMed(block, 'distance_airport'),
-        distanceGolf: toNumber(extractTag(block, 'distance_golf')),
-        distanceGolfMed: extractDistanceMed(block, 'distance_golf'),
-        distanceAmenities: toNumber(extractTag(block, 'distance_amenities')),
-        distanceAmenitiesMed: extractDistanceMed(block, 'distance_amenities'),
-        tagsI18n,
-        tags,
-        url: pickLang(urlNode, ['en', 'es', 'ru'])
-      }
-    };
+  if (records.length < SYNC_MIN_COUNT) {
+    throw new Error(`Feed sanity check failed: parsed ${records.length}, minimum is ${SYNC_MIN_COUNT}`);
+  }
 
-    await upsertProperty(record);
-    processed += 1;
+  if (SYNC_DEACTIVATE && LIMIT) {
+    throw new Error('Refusing XML_SYNC_DEACTIVATE with XML_IMPORT_LIMIT; full feed is required for safe deactivation');
+  }
+
+  const preview = await getSyncPreview(records).catch((err) => ({
+    error: `preview_failed: ${err.message}`
+  }));
+
+  if (DRY_RUN) {
+    console.log('✅ XML import dry-run completed');
+    console.log(
+      JSON.stringify(
+        {
+          clientId: CLIENT_ID,
+          feedUrl: FEED_URL,
+          found: propertyBlocks.length,
+          parsed: records.length,
+          skipped,
+          operationStats,
+          syncDeactivate: SYNC_DEACTIVATE,
+          preview
+        },
+        null,
+        2
+      )
+    );
+    return;
+  }
+
+  await ensureUniqueIndex();
+
+  const client = await pool.connect();
+  let deactivated = 0;
+  try {
+    await client.query('BEGIN');
+    for (const record of records) {
+      await upsertProperty(record, client);
+    }
+    if (SYNC_DEACTIVATE) {
+      const ids = records.map((record) => record.externalId);
+      const result = await client.query(
+        `
+        UPDATE properties
+        SET is_active = false, updated_at = NOW()
+        WHERE client_id = $1
+          AND is_active = true
+          AND NOT (external_id = ANY($2::text[]))
+        `,
+        [CLIENT_ID, ids]
+      );
+      deactivated = result.rowCount || 0;
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
 
   console.log('✅ XML import completed');
@@ -409,9 +518,12 @@ async function run() {
         clientId: CLIENT_ID,
         feedUrl: FEED_URL,
         found: propertyBlocks.length,
-        processed,
+        processed: records.length,
         skipped,
-        operationStats: { sale: saleCount, rent: rentCount }
+        operationStats,
+        syncDeactivate: SYNC_DEACTIVATE,
+        deactivated,
+        preview
       },
       null,
       2
