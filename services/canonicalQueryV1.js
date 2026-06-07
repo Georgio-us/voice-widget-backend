@@ -717,20 +717,26 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
         .filter(Boolean)
     )
   );
+  const joinedKnownLocation = rawLocationsList.length > 1
+    ? normalizeLocationToken(rawLocationsList.join(' '))
+    : '';
+  const effectiveRawLocationsList = joinedKnownLocation && SUPPORTED_GEO_TOKENS.has(joinedKnownLocation)
+    ? [joinedKnownLocation]
+    : rawLocationsList;
   const extractionLocationSource = rawLocationsList.length > 0
-    ? rawLocationsList.join(' и ')
+    ? effectiveRawLocationsList.join(' и ')
     : sourceInsights.location;
   locationExtraction = {
     source: rawLocationsList.length > 0 ? 'locationsRaw' : 'location',
     raw: extractionLocationSource || null,
-    locationsRaw: rawLocationsList.length > 0 ? rawLocationsList : null
+    locationsRaw: effectiveRawLocationsList.length > 0 ? effectiveRawLocationsList : null
   };
 
   if (extractionLocationSource) {
     locationSemantics = parseLocationSemantics(extractionLocationSource);
     geo = resolveGeoStatus({ locationExtraction, locationSemantics });
-    const mixedLocation = rawLocationsList.length > 1
-      ? parseMixedSupportedLocationTokens(rawLocationsList)
+    const mixedLocation = effectiveRawLocationsList.length > 1
+      ? parseMixedSupportedLocationTokens(effectiveRawLocationsList)
       : null;
     if (mixedLocation && mixedLocation.cities.length > 0) {
       locationSemantics = {
@@ -768,8 +774,8 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
           null;
         // If user provided explicit multi-location tokens but none were recognized,
         // do not fallback to a free-text location filter.
-        if ((rawLocationsList.length > 0 && !chosenLocationToken) || locationSemantics?.unresolvedMulti === true) {
-          droppedFields.push({ field: 'location', reason: 'unknown_location_tokens', value: rawLocationsList });
+        if ((effectiveRawLocationsList.length > 0 && !chosenLocationToken) || locationSemantics?.unresolvedMulti === true) {
+          droppedFields.push({ field: 'location', reason: 'unknown_location_tokens', value: effectiveRawLocationsList });
         } else if (geo?.status === 'unsupported') {
           droppedFields.push({ field: 'location', reason: 'unsupported_location_catalog_fallback', value: extractionLocationSource });
         } else if (geo?.status === 'broad') {
