@@ -8,6 +8,30 @@ const KNOWN_URBANIZATIONS = [
       /ла[\s-]*энтрад[аеиы]?/i,
       /ла[\s-]*ентрад[аеиы]?/i
     ]
+  },
+  {
+    canonical: 'La Recoleta',
+    aliases: ['la recoleta', 'ла recoleta', 'ла реколета', 'ла-реколета'],
+    patterns: [
+      /\bla\s*recoleta\b/i,
+      /ла[\s-]*реколет[аеиы]?/i
+    ]
+  },
+  {
+    canonical: 'Panorama Park',
+    aliases: ['panorama park', 'панорама парк', 'панорама-парк'],
+    patterns: [
+      /\bpanorama\s*park\b/i,
+      /панорам[аы]?[\s-]*парк/i
+    ]
+  },
+  {
+    canonical: 'Parque Recoleta',
+    aliases: ['parque recoleta', 'парк recoleta', 'парке реколета', 'парк реколета'],
+    patterns: [
+      /\bparque\s*recoleta\b/i,
+      /парк[е]?[\s-]*реколет[аеиы]?/i
+    ]
   }
 ];
 
