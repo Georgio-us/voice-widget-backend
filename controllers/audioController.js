@@ -2591,6 +2591,15 @@ const sanitizeUnsupportedCoverageClaim = (text = '', execution = null) => {
       .test(locRaw);
   if (!hasOffCatalogMention) return raw;
 
+  const fallbackAvailabilitySafe = raw.replace(
+    /в этих направлениях сейчас нет доступных объектов в нашем каталоге\.?\s*/gi,
+    'В доступных направлениях каталога есть варианты, их можно посмотреть ниже. '
+  ).replace(
+    /в этом направлении сейчас нет доступных объектов в каталоге\.?\s*/gi,
+    'В доступных направлениях каталога есть варианты, их можно посмотреть ниже. '
+  );
+  if (fallbackAvailabilitySafe !== raw) return fallbackAvailabilitySafe;
+
   const hasWrongAvailabilityClaim =
     /(в\s+[^.]{0,80}(мадрид|barcelona|барселон|malaga|малаг|costa del sol|коста дель соль|costa brava|коста брава|costa dorada|коста дорад)[^.]{0,80}(доступн|есть\s+объект|объекты\s+есть))/i
       .test(raw);
