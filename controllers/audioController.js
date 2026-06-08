@@ -2518,18 +2518,43 @@ const sanitizeNoInventoryClaim = (text = '', execution = null) => {
   const matchedCount = Number.isInteger(execution?.matchedCount) ? execution.matchedCount : null;
   const geoStatus = execution?.geo?.status || null;
   if (!(matchedCount > 0)) return raw;
-  if (!(geoStatus === 'supported' || geoStatus === null)) return raw;
+  const isSupportedGeo = geoStatus === 'supported' || geoStatus === 'limited' || geoStatus === null;
+  const isFallbackGeo = geoStatus === 'unsupported' || geoStatus === 'broad';
 
   const noInventoryPatterns = [
     /в этом направлении сейчас нет доступных объектов в каталоге/i,
+    /в этих направлениях сейчас нет доступных объектов в нашем каталоге/i,
     /нет доступных объектов/i,
     /нет объектов/i,
-    /не могу предложить варианты/i
+    /не могу предложить варианты/i,
+    /не входит в наш активный каталог/i,
+    /не входит в текущий каталог/i
   ];
   if (!noInventoryPatterns.some((re) => re.test(raw))) return raw;
 
+  if (isFallbackGeo) {
+    return raw.replace(
+      /в этих направлениях сейчас нет доступных объектов в нашем каталоге\.?\s*/i,
+      'В доступных направлениях каталога есть варианты, их можно посмотреть ниже. '
+    ).replace(
+      /нет доступных объектов/i,
+      'есть доступные варианты'
+    );
+  }
+
+  if (!isSupportedGeo) return raw;
+
   return raw.replace(
     /в этом направлении сейчас нет доступных объектов в каталоге\.?\s*/i,
+    'В этом направлении есть доступные объекты в текущем каталоге. '
+  ).replace(
+    /в этих направлениях сейчас нет доступных объектов в нашем каталоге\.?\s*/i,
+    'В этом направлении есть доступные объекты в текущем каталоге. '
+  ).replace(
+    /[^.?!]{0,140}не входит в наш активный каталог\.?\s*/i,
+    'В этом направлении есть доступные объекты в текущем каталоге. '
+  ).replace(
+    /[^.?!]{0,140}не входит в текущий каталог\.?\s*/i,
     'В этом направлении есть доступные объекты в текущем каталоге. '
   ).replace(
     /нет доступных объектов/i,
