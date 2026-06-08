@@ -946,7 +946,16 @@ export const buildCanonicalQueryV1 = (insights = {}, options = {}) => {
   if (Number.isFinite(distanceAirportKmMax) && distanceAirportKmMax > 0) canonicalPatch.distanceAirportKmMax = Number(distanceAirportKmMax);
   else missingFields.push('distanceAirportKmMax');
 
-  const features = mergeFeatures(canonicalPatch.features, sourceInsights.features, inferred.features);
+  const sourceFeaturesForMerge = (() => {
+    const locationToken = String(locationSemantics?.location || locationSemantics?.city || '').toLowerCase();
+    if (locationSemantics?.activeCatalog === true && locationToken.includes('costa')) {
+      return Array.isArray(sourceInsights.features)
+        ? sourceInsights.features.filter((feature) => normalizeFeatureSlug(feature) !== 'near_sea')
+        : (normalizeFeatureSlug(sourceInsights.features) === 'near_sea' ? null : sourceInsights.features);
+    }
+    return sourceInsights.features;
+  })();
+  const features = mergeFeatures(canonicalPatch.features, sourceFeaturesForMerge, inferred.features);
   if (features.length) canonicalPatch.features = features;
   else missingFields.push('features');
 
