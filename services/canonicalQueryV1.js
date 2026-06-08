@@ -261,6 +261,42 @@ const normalizeLocation = (v) => {
   };
 };
 
+const locationTokenVariants = (value) => {
+  const base = normalizeLocationToken(value);
+  if (!base) return [];
+  return Array.from(new Set([
+    base,
+    base.replace(/-/g, ' ').replace(/\s+/g, ' ').trim(),
+    base.replace(/\s+/g, '-').trim()
+  ].filter(Boolean)));
+};
+
+const isCatalogNoiseLocationToken = (token) => {
+  if (!token || token.length < 3) return true;
+  if (GENERIC_LOCATION_TOKENS.has(token)) return true;
+  return new Set(['center', 'centre', 'centro', 'lel']).has(token);
+};
+
+const buildActiveGeoCatalog = (properties = []) => {
+  const tokens = new Set();
+  const add = (value) => {
+    for (const token of locationTokenVariants(value)) {
+      if (!isCatalogNoiseLocationToken(token)) tokens.add(token);
+    }
+  };
+
+  for (const p of Array.isArray(properties) ? properties : []) {
+    add(p?.city || p?.location_city);
+    add(p?.district || p?.location_district);
+    add(p?.neighborhood || p?.location_neighborhood);
+    if (Array.isArray(p?.urbanizations)) {
+      p.urbanizations.forEach((value) => add(value));
+    }
+  }
+
+  return { tokens };
+};
+
 const LOCATION_PROVINCES = new Set(['alicante', 'murcia', 'valencia']);
 const GENERIC_LOCATION_TOKENS = new Set([
   'урбанизация',
@@ -359,9 +395,10 @@ const COAST_TO_CITIES = new Map([
   ]]
 ]);
 
-const parseLocationSemantics = (rawValue) => {
+const parseLocationSemantics = (rawValue, activeGeoCatalog = null) => {
   const raw = toText(rawValue);
   const normalized = normalizeLocationToken(raw);
+  const activeTokens = activeGeoCatalog?.tokens instanceof Set ? activeGeoCatalog.tokens : null;
   const out = {
     raw: raw || null,
     normalized: normalized || null,
@@ -375,6 +412,13 @@ const parseLocationSemantics = (rawValue) => {
 
   if (GENERIC_LOCATION_TOKENS.has(normalized)) {
     out.unresolvedGeneric = true;
+    return out;
+  }
+
+  const activeVariant = locationTokenVariants(normalized).find((token) => activeTokens?.has(token));
+  if (activeVariant) {
+    out.location = activeVariant;
+    out.activeCatalog = true;
     return out;
   }
 
@@ -393,6 +437,11 @@ const parseLocationSemantics = (rawValue) => {
     const cities = [];
     const provinces = new Set();
     for (const token of tokens) {
+      const activeToken = locationTokenVariants(token).find((variant) => activeTokens?.has(variant));
+      if (activeToken) {
+        cities.push(activeToken);
+        continue;
+      }
       if (CITY_TO_PROVINCE.has(token)) {
         cities.push(token);
         provinces.add(CITY_TO_PROVINCE.get(token));
@@ -444,15 +493,23 @@ const parseLocationSemantics = (rawValue) => {
   return out;
 };
 
-const parseMixedSupportedLocationTokens = (tokens = []) => {
+const parseMixedSupportedLocationTokens = (tokens = [], activeGeoCatalog = null) => {
   const cities = [];
+  const locations = [];
   const unsupported = [];
   const limited = [];
   const provinces = new Set();
+  const activeTokens = activeGeoCatalog?.tokens instanceof Set ? activeGeoCatalog.tokens : null;
 
   for (const token of Array.isArray(tokens) ? tokens : []) {
     const normalized = normalizeLocationToken(token);
     if (!normalized) continue;
+
+    const activeToken = locationTokenVariants(normalized).find((variant) => activeTokens?.has(variant));
+    if (activeToken) {
+      locations.push(activeToken);
+      continue;
+    }
 
     if (UNSUPPORTED_GEO_TOKENS.has(normalized)) {
       unsupported.push(normalized);
@@ -475,13 +532,14 @@ const parseMixedSupportedLocationTokens = (tokens = []) => {
 
   return {
     cities: Array.from(new Set(cities)),
+    locations: Array.from(new Set(locations)),
     unsupported: Array.from(new Set(unsupported)),
     limited: Array.from(new Set(limited)),
     province: provinces.size === 1 ? Array.from(provinces)[0] : null
   };
 };
 
-const resolveGeoStatus = ({ locationExtraction, locationSemantics }) => {
+const resolveGeoStatus = ({ locationExtraction, locationSemantics, activeGeoCatalog = null }) => {
   if (typeof locationSemantics?.coastCatalog === 'string' && Array.isArray(locationSemantics?.cities) && locationSemantics.cities.length > 0) {
     return {
       status: 'supported',
@@ -509,22 +567,27 @@ const resolveGeoStatus = ({ locationExtraction, locationSemantics }) => {
   const allTokens = Array.from(new Set([...(tokens || []), directToken].filter(Boolean)));
   if (allTokens.length === 0) return { status: null, reason: null, tokens: [] };
 
+  const activeTokens = activeGeoCatalog?.tokens instanceof Set ? activeGeoCatalog.tokens : null;
+  const hasActiveCatalog = allTokens.some((t) => locationTokenVariants(t).some((variant) => activeTokens?.has(variant)));
   const hasSupported = allTokens.some((t) => SUPPORTED_GEO_TOKENS.has(t));
   const hasLimited = allTokens.some((t) => LIMITED_GEO_TOKENS.has(t));
   const hasUnsupported = allTokens.some((t) => UNSUPPORTED_GEO_TOKENS.has(t));
   const hasBroad = allTokens.some((t) => BROAD_GEO_TOKENS.has(t));
 
-  if (hasBroad && !hasSupported && !hasLimited) {
+  if (hasBroad && !hasActiveCatalog && !hasSupported && !hasLimited) {
     return { status: 'broad', reason: 'broad_catalog_geo', tokens: allTokens };
   }
-  if (hasUnsupported && !hasSupported && !hasLimited) {
+  if (hasUnsupported && !hasActiveCatalog && !hasSupported && !hasLimited) {
     return { status: 'unsupported', reason: 'off_catalog_geo', tokens: allTokens };
   }
-  if (hasLimited && !hasSupported) {
+  if (hasLimited && !hasActiveCatalog && !hasSupported) {
     return { status: 'limited', reason: 'limited_geo', tokens: allTokens };
   }
-  if (hasSupported && hasUnsupported) {
+  if ((hasActiveCatalog || hasSupported) && hasUnsupported) {
     return { status: 'supported', reason: 'mixed_geo_with_off_catalog', tokens: allTokens };
+  }
+  if (hasActiveCatalog) {
+    return { status: 'supported', reason: 'active_feed_catalog', tokens: allTokens };
   }
   if (hasSupported) {
     return { status: 'supported', reason: 'in_feed_catalog', tokens: allTokens };
@@ -641,7 +704,8 @@ const mergeFeatures = (...parts) => {
   return Array.from(set);
 };
 
-export const buildCanonicalQueryV1 = (insights = {}) => {
+export const buildCanonicalQueryV1 = (insights = {}, options = {}) => {
+  const activeGeoCatalog = options?.activeGeoCatalog || null;
   const textCtx = `${insights?.details || ''} ${insights?.preferences || ''}`.trim();
   const inferred = extractFromText(textCtx);
 
@@ -724,8 +788,14 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
         normalizeLocationToken(rawLocationsList.filter((token) => !['la', 'el', 'the'].includes(token)).join(' '))
       ]
     : [];
-  const joinedKnownLocation = joinedLocationCandidates.find((token) => token && SUPPORTED_GEO_TOKENS.has(token)) || '';
-  const effectiveRawLocationsList = joinedKnownLocation && SUPPORTED_GEO_TOKENS.has(joinedKnownLocation)
+  const joinedKnownLocation = joinedLocationCandidates.find((token) =>
+    token &&
+    (
+      SUPPORTED_GEO_TOKENS.has(token) ||
+      locationTokenVariants(token).some((variant) => activeGeoCatalog?.tokens?.has?.(variant))
+    )
+  ) || '';
+  const effectiveRawLocationsList = joinedKnownLocation
     ? [joinedKnownLocation]
     : rawLocationsList;
   const extractionLocationSource = rawLocationsList.length > 0
@@ -738,16 +808,17 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
   };
 
   if (extractionLocationSource) {
-    locationSemantics = parseLocationSemantics(extractionLocationSource);
-    geo = resolveGeoStatus({ locationExtraction, locationSemantics });
+    locationSemantics = parseLocationSemantics(extractionLocationSource, activeGeoCatalog);
+    geo = resolveGeoStatus({ locationExtraction, locationSemantics, activeGeoCatalog });
     const mixedLocation = effectiveRawLocationsList.length > 1
-      ? parseMixedSupportedLocationTokens(effectiveRawLocationsList)
+      ? parseMixedSupportedLocationTokens(effectiveRawLocationsList, activeGeoCatalog)
       : null;
-    if (mixedLocation && mixedLocation.cities.length > 0) {
+    if (mixedLocation && (mixedLocation.cities.length > 0 || mixedLocation.locations.length > 0)) {
       locationSemantics = {
         ...locationSemantics,
         cities: mixedLocation.cities,
         city: mixedLocation.cities.length === 1 ? mixedLocation.cities[0] : null,
+        location: mixedLocation.locations.length === 1 ? mixedLocation.locations[0] : locationSemantics.location,
         province: mixedLocation.province,
         unsupported: mixedLocation.unsupported,
         limited: mixedLocation.limited,
@@ -915,7 +986,8 @@ const matchLocation = (candidate, loc) => {
     candidate?.url
   ).join(' ');
   const hay = normalizeText(`${candidate?.city || ''} ${candidate?.district || ''} ${candidate?.neighborhood || ''} ${urbanizations} ${fallbackUrbanizations}`);
-  return !!hay && hay.includes(loc.normalized);
+  const needles = locationTokenVariants(loc.normalized);
+  return !!hay && needles.some((needle) => hay.includes(needle));
 };
 
 const matchCity = (candidate, citySlug) => {
@@ -952,7 +1024,8 @@ const byDeterministicOrder = (a, b) => {
 };
 
 export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit = 10 } = {}) => {
-  const trace = buildCanonicalQueryV1(insights);
+  const activeGeoCatalog = buildActiveGeoCatalog(properties);
+  const trace = buildCanonicalQueryV1(insights, { activeGeoCatalog });
   const pre = trace.preValidationQuery || {};
   const q = { ...trace.postValidationQuery };
 
