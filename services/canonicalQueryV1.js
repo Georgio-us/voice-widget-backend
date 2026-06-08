@@ -717,9 +717,14 @@ export const buildCanonicalQueryV1 = (insights = {}) => {
         .filter(Boolean)
     )
   );
-  const joinedKnownLocation = rawLocationsList.length > 1
-    ? normalizeLocationToken(rawLocationsList.join(' '))
-    : '';
+  const joinedLocationCandidates = rawLocationsList.length > 1
+    ? [
+        normalizeLocationToken(rawLocationsInput.join(' ')),
+        normalizeLocationToken(rawLocationsList.join(' ')),
+        normalizeLocationToken(rawLocationsList.filter((token) => !['la', 'el', 'the'].includes(token)).join(' '))
+      ]
+    : [];
+  const joinedKnownLocation = joinedLocationCandidates.find((token) => token && SUPPORTED_GEO_TOKENS.has(token)) || '';
   const effectiveRawLocationsList = joinedKnownLocation && SUPPORTED_GEO_TOKENS.has(joinedKnownLocation)
     ? [joinedKnownLocation]
     : rawLocationsList;
