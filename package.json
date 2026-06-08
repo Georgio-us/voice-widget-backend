@@ -17,6 +17,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "xml:sync": "IMPORT_CLIENT_ID=${IMPORT_CLIENT_ID:-estyle} XML_SYNC_DEACTIVATE=1 XML_SYNC_MIN_COUNT=${XML_SYNC_MIN_COUNT:-500} node scripts/importFromXml.js",
+    "xml:sync:dry-run": "IMPORT_CLIENT_ID=${IMPORT_CLIENT_ID:-estyle} XML_IMPORT_DRY_RUN=1 XML_SYNC_DEACTIVATE=1 XML_SYNC_MIN_COUNT=${XML_SYNC_MIN_COUNT:-500} node scripts/importFromXml.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
