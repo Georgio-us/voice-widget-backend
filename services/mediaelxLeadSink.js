@@ -127,12 +127,107 @@ function stringifyInsights(insights) {
   return parts.length ? parts.join(' | ') : '-';
 }
 
+function formatMoney(amount, currency = 'EUR') {
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return `${Math.round(n).toLocaleString('ru-RU')} ${currency || 'EUR'}`;
+}
+
+function compactLine(label, value) {
+  const text = value === null || value === undefined ? '' : String(value).trim();
+  return text ? `${label}: ${text}` : null;
+}
+
+function formatLocation(property) {
+  if (!property || typeof property !== 'object') return '';
+  return [
+    property.location_neighborhood,
+    property.location_city,
+    property.location_district
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.findIndex((v) => v.toLowerCase() === value.toLowerCase()) === index)
+    .join(' / ');
+}
+
+function formatPropertyBlock(propertySnapshot, referenceId) {
+  const property = propertySnapshot && typeof propertySnapshot === 'object' ? propertySnapshot : null;
+  if (!property) {
+    return [
+      'ОБЪЕКТ:',
+      `REF: ${String(referenceId || '-').trim() || '-'}`
+    ].join('\n');
+  }
+
+  const raw = property.raw && typeof property.raw === 'object' ? property.raw : {};
+  const lines = [
+    'ОБЪЕКТ:',
+    compactLine('REF', property.external_id || referenceId),
+    compactLine('Название', property.title),
+    compactLine('Локация', formatLocation(property)),
+    compactLine('Цена', formatMoney(property.price_amount, property.price_currency)),
+    compactLine('Операция', property.operation),
+    compactLine('Тип', property.property_type),
+    compactLine('Комнаты', property.specs_rooms),
+    compactLine('Ванные', property.specs_bathrooms),
+    compactLine('Площадь', property.specs_area_m2 ? `${property.specs_area_m2} m²` : ''),
+    compactLine('Участок', property.specs_plot_m2 ? `${property.specs_plot_m2} m²` : ''),
+    compactLine('Паркинг', property.has_parking === true ? 'да' : ''),
+    compactLine('Бассейн', property.has_pool === true ? 'да' : ''),
+    compactLine('URL', raw.url)
+  ].filter(Boolean);
+
+  return lines.join('\n');
+}
+
+function formatContactBlock({ name, phoneCountryCode, phoneNumber, email, preferredContactMethod, language }) {
+  return [
+    'КОНТАКТ:',
+    compactLine('Имя', name),
+    compactLine('Телефон', `${String(phoneCountryCode || '').trim()} ${String(phoneNumber || '').trim()}`.trim()),
+    compactLine('Email', email),
+    compactLine('Предпочтительный способ связи', preferredContactMethod),
+    compactLine('Язык', language)
+  ].filter(Boolean).join('\n');
+}
+
+function formatSessionBlock({ sessionId, lastShownCardId, sessionMetrics }) {
+  const metrics = sessionMetrics && typeof sessionMetrics === 'object' ? sessionMetrics : {};
+  return [
+    'КОНТЕКСТ СЕССИИ:',
+    compactLine('Session ID', sessionId),
+    compactLine('Последний показанный объект', lastShownCardId),
+    compactLine(
+      'Диалог',
+      (metrics.userMessages || metrics.assistantMessages)
+        ? `user=${metrics.userMessages || 0}, assistant=${metrics.assistantMessages || 0}`
+        : ''
+    ),
+    compactLine(
+      'Карточки',
+      (metrics.shownCardsTotal || metrics.shownCardsUnique)
+        ? `shown=${metrics.shownCardsTotal || 0}, unique=${metrics.shownCardsUnique || 0}`
+        : ''
+    )
+  ].filter(Boolean).join('\n');
+}
+
 function formatCommentBlock({
   formTypeLabel,
+  name,
+  phoneCountryCode,
+  phoneNumber,
+  email,
+  language,
   preferredContactMethod,
   referenceId,
+  propertySnapshot,
   aiSummary,
-  userComment
+  userComment,
+  sessionId,
+  sessionMetrics,
+  lastShownCardId
 }) {
   const method = String(preferredContactMethod || 'not_specified');
   const ref = String(referenceId || '-');
@@ -145,11 +240,18 @@ function formatCommentBlock({
     `ТИП ФОРМЫ: ${formTypeLabel}`,
     `СПОСОБ СВЯЗИ: ${method}`,
     `REF ОБЪЕКТА: ${ref}`,
+    '',
+    formatContactBlock({ name, phoneCountryCode, phoneNumber, email, preferredContactMethod, language }),
+    '',
+    formatPropertyBlock(propertySnapshot, referenceId),
+    '',
+    formatSessionBlock({ sessionId, lastShownCardId, sessionMetrics }),
+    '',
     'РЕЗЮМЕ ИИ:',
     summary,
     '---------------------------',
     `СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЯ: ${comment}`
-  ].join('\n');
+  ].filter((line) => line !== null && line !== undefined && String(line).trim() !== '').join('\n');
 }
 
 function mapFormType(source) {
@@ -189,8 +291,11 @@ export async function mirrorLeadToMediaelx({
   comment,
   language,
   propertyId,
+  propertySnapshot,
   insights,
   aiSummary,
+  sessionMetrics,
+  lastShownCardId,
   sessionId
 }) {
   const cfg = getConfig();
@@ -208,10 +313,19 @@ export async function mirrorLeadToMediaelx({
   let inmuebleCons = normalizePropertyId(propertyId);
   const comentarioConsas = formatCommentBlock({
     formTypeLabel,
+    name,
+    phoneCountryCode,
+    phoneNumber,
+    email,
+    language: idiomaCons,
     preferredContactMethod,
     referenceId: propertyId,
+    propertySnapshot,
     aiSummary: summaryText,
-    userComment: comment
+    userComment: comment,
+    sessionId,
+    sessionMetrics,
+    lastShownCardId
   });
 
   const dedupeSql = `

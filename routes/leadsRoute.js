@@ -6,6 +6,7 @@ import { logEvent, EventTypes } from '../services/eventLogger.js';
 import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
 import { mirrorLeadToMediaelx } from '../services/mediaelxLeadSink.js';
 import { buildLeadRichSummaryFromSessionPayload } from '../services/leadSessionEnrichment.js';
+import { getPropertyByExternalId } from '../services/propertiesRepository.js';
 import { pool } from '../services/db.js';
 
 const router = express.Router();
@@ -161,6 +162,7 @@ router.post('/', async (req, res) => {
     let insightsFromSessionLog = null;
     let lastShownCardIdFromSessionLog = null;
     let richSummaryFromSessionLog = null;
+    let sessionMetricsFromSessionLog = null;
     try {
       if (sessionId) {
         const r = await pool.query(
@@ -172,6 +174,7 @@ router.post('/', async (req, res) => {
         insightsFromSessionLog = enriched?.insights || null;
         lastShownCardIdFromSessionLog = enriched?.lastShownCardId || null;
         richSummaryFromSessionLog = enriched?.summaryText || null;
+        sessionMetricsFromSessionLog = enriched?.metrics || null;
       }
     } catch {}
 
@@ -184,6 +187,15 @@ router.post('/', async (req, res) => {
       }
       return null;
     })();
+
+    let propertySnapshotForMirror = null;
+    try {
+      if (resolvedPropertyIdForMirror) {
+        propertySnapshotForMirror = await getPropertyByExternalId(resolvedPropertyIdForMirror, clientId || undefined);
+      }
+    } catch (propertyErr) {
+      console.warn('[mediaelx] property enrichment lookup failed', propertyErr?.message || propertyErr);
+    }
 
     // Best-effort Telegram notify (не ломает создание лида)
     try {
@@ -222,8 +234,11 @@ router.post('/', async (req, res) => {
         comment: comment || null,
         language: language || 'ru',
         propertyId: resolvedPropertyIdForMirror,
+        propertySnapshot: propertySnapshotForMirror,
         insights: insightsFromSessionLog,
         aiSummary: richSummaryFromSessionLog,
+        sessionMetrics: sessionMetricsFromSessionLog,
+        lastShownCardId: lastShownCardIdFromSessionLog,
         sessionId: sessionId || null
       });
       if (mirrorResult?.deduped) {
