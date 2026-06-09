@@ -233,10 +233,13 @@ function formatCommentBlock({
   const ref = String(referenceId || '-');
   const summary = String(aiSummary || '-');
   const comment = String(userComment || '-');
+  const divider = '---------------------------';
 
   return [
     '[ОТЧЕТ VIA AI]',
-    '---------------------------',
+    divider,
+    '',
+    'ЗАЯВКА:',
     `ТИП ФОРМЫ: ${formTypeLabel}`,
     `СПОСОБ СВЯЗИ: ${method}`,
     `REF ОБЪЕКТА: ${ref}`,
@@ -249,8 +252,11 @@ function formatCommentBlock({
     '',
     'РЕЗЮМЕ ИИ:',
     summary,
-    '---------------------------',
-    `СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЯ: ${comment}`
+    '',
+    'КОММЕНТАРИЙ К ЗАЯВКЕ:',
+    comment,
+    '',
+    divider
   ].filter((line) => line !== null && line !== undefined && String(line).trim() !== '').join('\n');
 }
 
