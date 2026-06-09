@@ -259,7 +259,7 @@ const transcribeAndRespond = async (req, res) => {
 
     // UI extras and cards container
     let cards = [];
-    let { ui } = buildAssistantUiDecision({ transcription, targetLang, extractionReport });
+    let ui = undefined;
     // (удалено) парсинг inline lead из текста и сигналы формы
     // прогресс не используется как гейт выдачи контента
 
@@ -293,10 +293,23 @@ const transcribeAndRespond = async (req, res) => {
     const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights);
     const selectionHintSignature = buildSelectionHintSignature(session.insights);
     const selectionHintChanged = selectionHintSignature !== session.lastAssistantSelectionHintSignature;
-    if (extractionReport.updatesApplied === true && selectionHintChanged) {
+    const selectionUpdated = extractionReport.updatesApplied === true && selectionHintChanged;
+    const assistantUiDecision = buildAssistantUiDecision({
+      transcription,
+      targetLang,
+      extractionReport: {
+        ...extractionReport,
+        updatesApplied: selectionUpdated
+      }
+    });
+    ui = {
+      ...(assistantUiDecision.ui || {}),
+      ...(ui || {})
+    };
+    if (selectionUpdated) {
       session.lastAssistantSelectionHintSignature = selectionHintSignature;
     }
-    if (extractionReport.updatesApplied === true && selectionHintChanged && Number(totalMatches) > 0) {
+    if (selectionUpdated && Number(totalMatches) > 0) {
       const suffix = targetLang === 'ru'
         ? "\n\nНажми «Объекты найдены» 👆, чтобы просмотреть подборку"
         : "\n\nТисни «Об'єкти знайдено» 👆, щоб переглянути підбірку";

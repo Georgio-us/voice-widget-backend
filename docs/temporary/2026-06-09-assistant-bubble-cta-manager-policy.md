@@ -36,6 +36,8 @@ It is not appended when:
 
 The manager button is a separate UI action. We do not manually append a manager instruction to the assistant bubble; the model may mention manager naturally when appropriate.
 
+Manager CTA uses the same "selection actually changed" gate as the assistant selection hint, not the raw meta-applied flag. This prevents repeated old search fields from suppressing a manager CTA on follow-up service questions.
+
 Manager CTA is shown when:
 
 - user directly asks for a manager/contact/callback;
