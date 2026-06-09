@@ -224,13 +224,6 @@ const transcribeAndRespond = async (req, res) => {
       logger: console
     });
 
-    if (extractionReport.updatesApplied === true) {
-      const suffix = targetLang === 'ru'
-        ? "\n\nНажми «Объекты найдены» 👆, чтобы просмотреть подборку"
-        : "\n\nТисни «Об'єкти знайдено» 👆, щоб переглянути підбірку";
-      botResponse += suffix;
-    }
-
     // 🔎 Детектор намерения/вариантов
     const { variants } = detectCardIntent(transcription);
 
@@ -267,6 +260,14 @@ const transcribeAndRespond = async (req, res) => {
 
     // (удалено) проактивные предложения лид-формы
 
+    const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights);
+    if (extractionReport.updatesApplied === true && Number(totalMatches) > 0) {
+      const suffix = targetLang === 'ru'
+        ? "\n\nНажми «Объекты найдены» 👆, чтобы просмотреть подборку"
+        : "\n\nТисни «Об'єкти знайдено» 👆, щоб переглянути підбірку";
+      botResponse += suffix;
+    }
+
     addMessageToSession(sessionId, 'assistant', botResponse);
 
     const totalTime = Date.now() - startTime;
@@ -288,8 +289,6 @@ const transcribeAndRespond = async (req, res) => {
     });
 
     logReferenceFallbackSummary({ session, sessionId, refFallbackSummary });
-
-    const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights);
 
     const viewerAccess = await resolveViewerAccessForDebug(req);
     const isSuperAdminViewer = viewerAccess?.isSuperAdmin === true;
