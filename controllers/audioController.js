@@ -68,6 +68,7 @@ import {
 } from '../services/audioConversationLoggingService.js';
 import { buildAudioResponsePayload } from '../services/audioResponsePayloadService.js';
 import { shouldUseReferenceFallback } from '../services/audioReferenceIntentService.js';
+import { getManagerCtaReason } from '../services/managerCtaPolicy.js';
 import {
   logReferenceFallbackSummary,
   runAudioReferencePipeline
@@ -294,12 +295,13 @@ const transcribeAndRespond = async (req, res) => {
     const selectionHintSignature = buildSelectionHintSignature(session.insights);
     const selectionHintChanged = selectionHintSignature !== session.lastAssistantSelectionHintSignature;
     const selectionUpdated = extractionReport.updatesApplied === true && selectionHintChanged;
+    const managerFollowUpReason = getManagerCtaReason(transcription, { updatesApplied: false });
     const assistantUiDecision = buildAssistantUiDecision({
       transcription,
       targetLang,
       extractionReport: {
         ...extractionReport,
-        updatesApplied: selectionUpdated
+        updatesApplied: managerFollowUpReason ? false : selectionUpdated
       }
     });
     ui = {
@@ -309,7 +311,7 @@ const transcribeAndRespond = async (req, res) => {
     if (selectionUpdated) {
       session.lastAssistantSelectionHintSignature = selectionHintSignature;
     }
-    if (selectionUpdated && Number(totalMatches) > 0) {
+    if (!managerFollowUpReason && selectionUpdated && Number(totalMatches) > 0) {
       const suffix = targetLang === 'ru'
         ? "\n\nНажми «Объекты найдены» 👆, чтобы просмотреть подборку"
         : "\n\nТисни «Об'єкти знайдено» 👆, щоб переглянути підбірку";

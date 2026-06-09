@@ -28,6 +28,7 @@ It is not appended when:
 
 - no selection/search update happened;
 - the model re-applied the same old search fields;
+- the user text is a manager/service follow-up even if the model accidentally changed search fields;
 - no objects were found;
 - the user asked a non-search service question;
 - the assistant is only continuing normal conversation.
@@ -37,6 +38,8 @@ It is not appended when:
 The manager button is a separate UI action. We do not manually append a manager instruction to the assistant bubble; the model may mention manager naturally when appropriate.
 
 Manager CTA uses the same "selection actually changed" gate as the assistant selection hint, not the raw meta-applied flag. This prevents repeated old search fields from suppressing a manager CTA on follow-up service questions.
+
+If the raw user text is a manager/service follow-up, this intent wins over accidental model field rewrites.
 
 Manager CTA is shown when:
 
