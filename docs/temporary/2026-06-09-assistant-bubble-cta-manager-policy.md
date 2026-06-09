@@ -21,11 +21,13 @@ The text hint remains inside the assistant bubble:
 It is appended only when both conditions are true:
 
 1. Search insights were actually applied to the session.
-2. The recalculated selection has more than zero matching objects.
+2. The search-selection signature changed since the last assistant selection hint.
+3. The recalculated selection has more than zero matching objects.
 
 It is not appended when:
 
 - no selection/search update happened;
+- the model re-applied the same old search fields;
 - no objects were found;
 - the user asked a non-search service question;
 - the assistant is only continuing normal conversation.
@@ -54,4 +56,3 @@ Direct manager intent wins. Otherwise, if search was updated, do not show broad 
 
 - `controllers/audioController.js`
 - `services/managerCtaPolicy.js`
-

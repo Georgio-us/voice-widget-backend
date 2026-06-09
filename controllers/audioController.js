@@ -93,6 +93,36 @@ const cleanupOldSessions = () => cleanupExpiredAudioSessions({ sessions });
 setInterval(cleanupOldSessions, 60 * 60 * 1000);
 
 // ====== Вспомогательные функции профиля/META ======
+const SELECTION_HINT_FIELDS = [
+  'operation',
+  'type',
+  'district',
+  'location',
+  'rooms',
+  'budget',
+  'budgetMax',
+  'area',
+  'areaMin',
+  'areaMax',
+  'landArea',
+  'landAreaMin',
+  'landAreaMax',
+  'floor',
+  'floorNotFirst',
+  'floorNotLast',
+  'residentialComplex',
+  'governmentProgram',
+  'eoselia',
+  'evidnovlennia'
+];
+
+const buildSelectionHintSignature = (insights = {}) => JSON.stringify(
+  Object.fromEntries(
+    SELECTION_HINT_FIELDS
+      .map((field) => [field, insights?.[field]])
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+  )
+);
 
 const transcribeAndRespond = async (req, res) => {
   const startTime = Date.now();
@@ -261,7 +291,12 @@ const transcribeAndRespond = async (req, res) => {
     // (удалено) проактивные предложения лид-формы
 
     const { totalMatches, strictMatches, relaxedMatches, ranked } = await getRankedProperties(session.insights);
-    if (extractionReport.updatesApplied === true && Number(totalMatches) > 0) {
+    const selectionHintSignature = buildSelectionHintSignature(session.insights);
+    const selectionHintChanged = selectionHintSignature !== session.lastAssistantSelectionHintSignature;
+    if (extractionReport.updatesApplied === true && selectionHintChanged) {
+      session.lastAssistantSelectionHintSignature = selectionHintSignature;
+    }
+    if (extractionReport.updatesApplied === true && selectionHintChanged && Number(totalMatches) > 0) {
       const suffix = targetLang === 'ru'
         ? "\n\nНажми «Объекты найдены» 👆, чтобы просмотреть подборку"
         : "\n\nТисни «Об'єкти знайдено» 👆, щоб переглянути підбірку";
