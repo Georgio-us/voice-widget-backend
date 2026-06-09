@@ -129,6 +129,12 @@ export function buildLeadTelegramMessage(lead) {
     lines.push('');
   }
 
+  if (lead?.aiSummary) {
+    lines.push('📝 Резюме ИИ для менеджера:');
+    lines.push(clip(lead.aiSummary, 1800));
+    lines.push('');
+  }
+
   // Request block (insights + references)
   const requestLines = [];
   // existing reference from lead payload
@@ -374,4 +380,3 @@ export async function updateSessionActivityFinalToTelegram(params = {}) {
   });
   return { ok: true, skipped: false };
 }
-

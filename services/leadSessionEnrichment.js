@@ -1,3 +1,14 @@
+import { OpenAI } from 'openai';
+
+let openaiClient = null;
+
+function getOpenAIClient() {
+  const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
+  if (!apiKey) return null;
+  if (!openaiClient) openaiClient = new OpenAI({ apiKey });
+  return openaiClient;
+}
+
 function asText(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim();
@@ -64,6 +75,32 @@ function findLastUserIntent(messages = []) {
     if (text) return text;
   }
   return '';
+}
+
+function getMessageText(msg) {
+  return firstNonEmpty(
+    msg?.content,
+    msg?.text,
+    msg?.message,
+    msg?.payload?.text,
+    msg?.payload?.message
+  );
+}
+
+function collectDialogForAiSummary(messages = []) {
+  const dialog = [];
+  for (const msg of messages) {
+    const roleRaw = String(msg?.role || msg?.type || '').toLowerCase();
+    const role = roleRaw === 'assistant' ? 'assistant' : roleRaw === 'user' ? 'user' : '';
+    if (!role) continue;
+    const text = getMessageText(msg);
+    if (!text) continue;
+    dialog.push({
+      role,
+      text: text.length > 900 ? `${text.slice(0, 900)}...` : text
+    });
+  }
+  return dialog.slice(-28);
 }
 
 function findLastShownCardId(messages = []) {
@@ -172,6 +209,8 @@ function buildReadableSummary({ lang, insights, lastUserIntent, lastShownCardId,
   const rooms = joinList(insights?.rooms);
   const budget = prettyBudget(insights);
   const features = joinList(insights?.features);
+  const preferences = joinList(insights?.preferences);
+  const details = joinList(insights?.details);
 
   if (type) entries.push(`${t.type}: ${type}`);
   if (op) entries.push(`${t.operation}: ${op}`);
@@ -179,6 +218,8 @@ function buildReadableSummary({ lang, insights, lastUserIntent, lastShownCardId,
   if (rooms) entries.push(`${t.rooms}: ${rooms}`);
   if (budget) entries.push(`${t.budget}: ${budget}`);
   if (features) entries.push(`${t.features}: ${features}`);
+  if (preferences && preferences !== features) entries.push(`${t.features}: ${preferences}`);
+  if (details && details !== preferences && details !== features) entries.push(`${t.features}: ${details}`);
 
   const lines = [];
   if (lastUserIntent) lines.push(`${t.lastRequest}: ${lastUserIntent}`);
@@ -225,4 +266,82 @@ export function buildLeadRichSummaryFromSessionPayload(payload, preferredLanguag
       shownCardsUnique: cardsStats.unique
     }
   };
+}
+
+function buildAiSummaryInput({ deterministic, dialog }) {
+  return JSON.stringify({
+    deterministicSnapshot: {
+      insights: deterministic?.insights || null,
+      lastShownCardId: deterministic?.lastShownCardId || null,
+      metrics: deterministic?.metrics || null,
+      fallbackSummary: deterministic?.summaryText || null
+    },
+    dialog
+  }, null, 2);
+}
+
+export async function buildLeadAiSummaryFromSessionPayload(payload, preferredLanguage = null) {
+  const deterministic = buildLeadRichSummaryFromSessionPayload(payload, preferredLanguage);
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  const dialog = collectDialogForAiSummary(messages);
+  const client = getOpenAIClient();
+
+  if (!client || dialog.length === 0) {
+    return {
+      ...deterministic,
+      summaryMode: client ? 'deterministic_empty_dialog' : 'deterministic_no_openai'
+    };
+  }
+
+  try {
+    const model = String(
+      process.env.LEAD_SUMMARY_MODEL ||
+      process.env.OPENAI_SUMMARY_MODEL ||
+      process.env.OPENAI_MODEL ||
+      'gpt-4o-mini'
+    ).trim();
+
+    const completion = await client.chat.completions.create(
+      {
+        model,
+        temperature: 0.2,
+        max_tokens: 420,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'Ты готовишь краткое резюме заявки для менеджера агентства недвижимости.',
+              'Пиши на русском языке, даже если клиент писал на другом языке.',
+              'Не психоанализируй клиента и не давай советов менеджеру по эмоциям.',
+              'Вытащи только практический контекст: что клиент искал, аренда/покупка если ясно, бюджет/финансовый контекст, локации, тип объекта, важные пожелания, что уже произошло в диалоге, какой следующий шаг.',
+              'Не выдумывай факты. Если данных нет, так и напиши.',
+              'Формат: 4-8 коротких пунктов без markdown-таблиц.'
+            ].join(' ')
+          },
+          {
+            role: 'user',
+            content: buildAiSummaryInput({ deterministic, dialog })
+          }
+        ]
+      },
+      { timeout: 8000 }
+    );
+
+    const summaryText = asText(completion?.choices?.[0]?.message?.content);
+    if (!summaryText) {
+      return { ...deterministic, summaryMode: 'deterministic_empty_ai' };
+    }
+
+    return {
+      ...deterministic,
+      summaryText,
+      summaryMode: 'ai'
+    };
+  } catch (err) {
+    console.warn('[lead-summary] AI summary failed, using deterministic fallback', err?.message || err);
+    return {
+      ...deterministic,
+      summaryMode: 'deterministic_ai_failed'
+    };
+  }
 }

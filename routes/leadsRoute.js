@@ -5,7 +5,7 @@ import { createLead } from '../services/leadsRepository.js';
 import { logEvent, EventTypes } from '../services/eventLogger.js';
 import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
 import { mirrorLeadToMediaelx } from '../services/mediaelxLeadSink.js';
-import { buildLeadRichSummaryFromSessionPayload } from '../services/leadSessionEnrichment.js';
+import { buildLeadAiSummaryFromSessionPayload } from '../services/leadSessionEnrichment.js';
 import { getPropertyByExternalId } from '../services/propertiesRepository.js';
 import { pool } from '../services/db.js';
 
@@ -112,7 +112,8 @@ router.post('/', async (req, res) => {
           consent: true,
           comment: comment || null,
           insights: null,
-          lastShownCardId: null
+          lastShownCardId: null,
+          aiSummary: null
         });
       } catch (tgErr) {
         console.warn('[telegram] viral lead notify failed', tgErr?.message || tgErr);
@@ -170,7 +171,7 @@ router.post('/', async (req, res) => {
           [sessionId]
         );
         const payload = r?.rows?.[0]?.payload || null;
-        const enriched = buildLeadRichSummaryFromSessionPayload(payload, language || 'ru');
+        const enriched = await buildLeadAiSummaryFromSessionPayload(payload, language || 'ru');
         insightsFromSessionLog = enriched?.insights || null;
         lastShownCardIdFromSessionLog = enriched?.lastShownCardId || null;
         richSummaryFromSessionLog = enriched?.summaryText || null;
@@ -214,7 +215,8 @@ router.post('/', async (req, res) => {
         consent,
         comment,
         insights: insightsFromSessionLog,
-        lastShownCardId: lastShownCardIdFromSessionLog
+        lastShownCardId: lastShownCardIdFromSessionLog,
+        aiSummary: richSummaryFromSessionLog
       });
     } catch (tgErr) {
       // Токен НЕ логируем; ошибка не должна ломать ответ
