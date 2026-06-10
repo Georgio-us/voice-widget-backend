@@ -858,11 +858,12 @@ export async function telegramWebhookExpressHandler(req, res) {
   }
 }
 
-export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ctaText }) {
+export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ctaText, ctaUrl }) {
   if (!botInstance) {
     throw new Error('TELEGRAM_BOT_NOT_INITIALIZED');
   }
   const miniAppUrl = String(process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL).trim();
+  const buttonUrl = String(ctaUrl || miniAppUrl || '').trim();
   
   const results = {
     total: userIds.length,
@@ -880,10 +881,10 @@ export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ct
       };
 
       // Если есть CTA-кнопка
-      if (ctaText && miniAppUrl) {
+      if (ctaText && buttonUrl) {
         extra.reply_markup = {
           inline_keyboard: [[
-            { text: ctaText, web_app: { url: miniAppUrl } }
+            { text: ctaText, web_app: { url: buttonUrl } }
           ]]
         };
       }

@@ -21,6 +21,7 @@ import { sendTargetedBroadcast } from '../services/telegramBot.js';
 const router = express.Router();
 
 const SERVICE_CLIENT_ID = String(process.env.CLIENT_ID || '').trim();
+const FRONTEND_URL = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
 const STATS_TIMEZONE = String(process.env.STATS_TIMEZONE || process.env.TZ || 'Europe/Kyiv').trim() || 'Europe/Kyiv';
 const MAX_IMAGES = 10;
 const IMAGE_WARN_SIZE_MB = (() => {
@@ -65,6 +66,36 @@ const uploadBroadcastImage = (req, res, next) => {
     }
     return next(err);
   });
+};
+
+const parseBroadcastArrayField = (value) => {
+  if (Array.isArray(value)) return value;
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return raw.split(',').map((item) => item.trim()).filter(Boolean);
+};
+
+const normalizeBroadcastPropertyId = (value) => String(value || '')
+  .trim()
+  .replace(/[^a-zA-Z0-9_-]/g, '')
+  .toUpperCase();
+
+const isSafeBroadcastCtaUrl = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw || !FRONTEND_URL) return false;
+  try {
+    const url = new URL(raw);
+    const base = new URL(FRONTEND_URL);
+    if (url.origin !== base.origin) return false;
+    if (url.pathname === '/' || /^\/s\/p\/[^/]+$/i.test(url.pathname) || /^\/s\/s\/[^/]+$/i.test(url.pathname)) return true;
+    return false;
+  } catch {
+    return false;
+  }
 };
 
 const requireAdmin = async (req, res, next) => {
@@ -477,24 +508,27 @@ router.delete('/properties/:externalId', requireAdmin, async (req, res) => {
 
 router.post('/broadcast', uploadBroadcastImage, requireAdmin, async (req, res) => {
   try {
-    const { targetUserIds, messageText, ctaText, photoUrl } = req.body;
-    const parsedTargetUserIds = (() => {
-      if (Array.isArray(targetUserIds)) return targetUserIds;
-      const raw = String(targetUserIds || '').trim();
-      if (!raw) return [];
-      try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      } catch {}
-      return raw.split(',').map((item) => item.trim()).filter(Boolean);
-    })();
+    const { targetUserIds, messageText, ctaText, photoUrl, ctaUrl, selectedPropertyIds } = req.body;
+    const parsedTargetUserIds = parseBroadcastArrayField(targetUserIds);
+    const parsedPropertyIds = Array.from(new Set(parseBroadcastArrayField(selectedPropertyIds)
+      .map(normalizeBroadcastPropertyId)
+      .filter(Boolean)));
     
     if (!Array.isArray(parsedTargetUserIds) || parsedTargetUserIds.length === 0) {
       return res.status(400).json({ ok: false, error: 'TARGET_USERS_REQUIRED' });
     }
-    if (!messageText) {
+    if (!String(messageText || '').trim()) {
       return res.status(400).json({ ok: false, error: 'MESSAGE_TEXT_REQUIRED' });
     }
+    if (!String(ctaText || '').trim()) {
+      return res.status(400).json({ ok: false, error: 'CTA_TEXT_REQUIRED' });
+    }
+    if (parsedPropertyIds.length > 10) {
+      return res.status(400).json({ ok: false, error: 'TOO_MANY_BROADCAST_PROPERTIES_MAX_10' });
+    }
+    const safeCtaUrl = isSafeBroadcastCtaUrl(ctaUrl)
+      ? String(ctaUrl || '').trim()
+      : (FRONTEND_URL || null);
 
     let broadcastPhotoUrl = String(photoUrl || '').trim() || null;
     if (req.file) {
@@ -518,9 +552,10 @@ router.post('/broadcast', uploadBroadcastImage, requireAdmin, async (req, res) =
 
     const results = await sendTargetedBroadcast({
       userIds: parsedTargetUserIds,
-      messageText,
+      messageText: String(messageText || '').trim(),
       photoUrl: broadcastPhotoUrl,
-      ctaText
+      ctaText: String(ctaText || '').trim(),
+      ctaUrl: safeCtaUrl
     });
 
     return res.json({ ok: true, results });
