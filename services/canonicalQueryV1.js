@@ -209,6 +209,7 @@ const LOCATION_ALIASES = new Map([
   ['орихуэла коста', 'orihuela costa'],
   ['ориуэла коста', 'orihuela costa'],
   ['пунта прима', 'punta prima'],
+  ['лос альтос', 'los altos'],
   ['вилламартин', 'villamartin'],
   ['вильямартин', 'villamartin'],
   ['ла зения', 'la zenia'],

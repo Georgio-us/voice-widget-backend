@@ -866,6 +866,7 @@ const buildLocationLexicon = (rows = []) => {
     ['орихуэла коста', 'Orihuela-Costa'], ['ориуэла коста', 'Orihuela-Costa'],
     ['лос алькасарес', 'Los Alcazares'],
     ['пунта прима', 'Punta Prima'],
+    ['лос альтос', 'Los Altos'],
     ['вильямартин', 'Villamartin'], ['вилламартин', 'Villamartin'],
     ['ла зения', 'La Zenia'],
     ['коста бланка', 'Costa Blanca'], ['коста брава', 'Costa Brava'], ['коста дель соль', 'Costa del Sol']
@@ -1446,6 +1447,7 @@ const EXTRACTION_LOCATION_ALIASES = new Map([
   ['орихуэла', 'Orihuela'],
   ['ориуэла', 'Orihuela'],
   ['пунта прима', 'Punta Prima'],
+  ['лос альтос', 'Los Altos'],
   ['вильямартин', 'Villamartin'],
   ['вилламартин', 'Villamartin'],
   ['ла зения', 'La Zenia'],
