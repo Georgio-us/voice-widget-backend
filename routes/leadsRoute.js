@@ -3,7 +3,7 @@
 import express from 'express';
 import { createLead } from '../services/leadsRepository.js';
 import { logEvent, EventTypes } from '../services/eventLogger.js';
-import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
+import { notifyEstyleLeadToTelegram, notifyLeadToTelegram } from '../services/telegramNotifier.js';
 import { mirrorLeadToMediaelx } from '../services/mediaelxLeadSink.js';
 import { buildLeadAiSummaryFromSessionPayload } from '../services/leadSessionEnrichment.js';
 import { getPropertyByExternalId } from '../services/propertiesRepository.js';
@@ -199,28 +199,37 @@ router.post('/', async (req, res) => {
     }
 
     // Best-effort Telegram notify (не ломает создание лида)
+    const leadNotificationPayload = {
+      leadId: result.id,
+      createdAt: result.created_at,
+      sessionId: sessionId || null,
+      source,
+      name,
+      phoneCountryCode,
+      phoneNumber,
+      email,
+      preferredContactMethod,
+      language: language || 'ru',
+      propertyId: propertyId || null,
+      consent,
+      comment,
+      insights: insightsFromSessionLog,
+      lastShownCardId: lastShownCardIdFromSessionLog,
+      aiSummary: richSummaryFromSessionLog
+    };
+
     try {
-      await notifyLeadToTelegram({
-        leadId: result.id,
-        createdAt: result.created_at,
-        sessionId: sessionId || null,
-        source,
-        name,
-        phoneCountryCode,
-        phoneNumber,
-        email,
-        preferredContactMethod,
-        language: language || 'ru',
-        propertyId: propertyId || null,
-        consent,
-        comment,
-        insights: insightsFromSessionLog,
-        lastShownCardId: lastShownCardIdFromSessionLog,
-        aiSummary: richSummaryFromSessionLog
-      });
+      await notifyLeadToTelegram(leadNotificationPayload);
     } catch (tgErr) {
       // Токен НЕ логируем; ошибка не должна ломать ответ
       console.warn('[telegram] lead notify failed', tgErr?.message || tgErr);
+    }
+
+    // Estyle client-facing lead-only channel: same message format, no activity/debug/viral events.
+    try {
+      await notifyEstyleLeadToTelegram(leadNotificationPayload);
+    } catch (estyleTgErr) {
+      console.warn('[telegram] estyle lead notify failed', estyleTgErr?.message || estyleTgErr);
     }
 
     let mediaelxStatus = null;

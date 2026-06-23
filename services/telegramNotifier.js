@@ -78,6 +78,11 @@ const formatLanguageLabel = (lang) => {
   return map[v] || v;
 };
 
+const parseChatIds = (value) => String(value || '')
+  .split(/[,;\n]+/)
+  .map((v) => v.trim())
+  .filter(Boolean);
+
 const pickInsightLines = (insights) => {
   if (!insights || typeof insights !== 'object' || Array.isArray(insights)) return [];
   const lines = [];
@@ -172,13 +177,7 @@ export function buildLeadTelegramMessage(lead) {
   return lines.join('\n').trim();
 }
 
-export async function notifyLeadToTelegram(lead) {
-  const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
-  const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
-  if (!token || !chatId) return { ok: false, skipped: true };
-
-  const text = buildLeadTelegramMessage(lead);
-
+async function sendTelegramText({ token, chatId, text }) {
   // Node 18+ has fetch, but keep a clear error if missing.
   if (typeof fetch !== 'function') {
     throw new Error('global fetch is not available (requires Node 18+)');
@@ -214,6 +213,46 @@ export async function notifyLeadToTelegram(lead) {
   } finally {
     clearTimeout(t);
   }
+}
+
+async function notifyLeadToTelegramDestination({ token, chatIds, lead }) {
+  const cleanToken = String(token || '').trim();
+  const ids = parseChatIds(chatIds);
+  if (!cleanToken || ids.length === 0) return { ok: false, skipped: true };
+
+  const text = buildLeadTelegramMessage(lead);
+  const results = [];
+  for (const chatId of ids) {
+    try {
+      const result = await sendTelegramText({ token: cleanToken, chatId, text });
+      results.push({ chatId, ok: result?.ok === true });
+    } catch (err) {
+      results.push({ chatId, ok: false, error: err?.message || 'unknown' });
+    }
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length > 0) {
+    throw new Error(`Telegram lead notify failed for ${failed.length}/${results.length} chat(s): ${failed.map((r) => r.error).filter(Boolean).join('; ')}`);
+  }
+
+  return { ok: true, skipped: false, sent: results.length };
+}
+
+export async function notifyLeadToTelegram(lead) {
+  return notifyLeadToTelegramDestination({
+    token: process.env.TELEGRAM_BOT_TOKEN,
+    chatIds: process.env.TELEGRAM_CHAT_ID,
+    lead
+  });
+}
+
+export async function notifyEstyleLeadToTelegram(lead) {
+  return notifyLeadToTelegramDestination({
+    token: process.env.ESTYLE_LEADS_TELEGRAM_BOT_TOKEN || process.env.ESTYLE_TELEGRAM_BOT_TOKEN,
+    chatIds: process.env.ESTYLE_LEADS_TELEGRAM_CHAT_IDS || process.env.ESTYLE_TELEGRAM_CHAT_IDS || process.env.ESTYLE_LEADS_TELEGRAM_CHAT_ID,
+    lead
+  });
 }
 
 // ------------------------------------------------------------
