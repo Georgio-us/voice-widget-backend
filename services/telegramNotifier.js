@@ -249,8 +249,8 @@ export async function notifyLeadToTelegram(lead) {
 
 export async function notifyEstyleLeadToTelegram(lead) {
   return notifyLeadToTelegramDestination({
-    token: process.env.ESTYLE_LEADS_TELEGRAM_BOT_TOKEN || process.env.ESTYLE_TELEGRAM_BOT_TOKEN,
-    chatIds: process.env.ESTYLE_LEADS_TELEGRAM_CHAT_IDS || process.env.ESTYLE_TELEGRAM_CHAT_IDS || process.env.ESTYLE_LEADS_TELEGRAM_CHAT_ID,
+    token: process.env.ESTYLE_LEADS_TELEGRAM_BOT_TOKEN,
+    chatIds: process.env.ESTYLE_LEADS_TELEGRAM_CHAT_IDS,
     lead
   });
 }
