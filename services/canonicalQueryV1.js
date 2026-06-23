@@ -817,6 +817,7 @@ export const buildCanonicalQueryV1 = (insights = {}, options = {}) => {
       locationSemantics = {
         ...locationSemantics,
         cities: mixedLocation.cities,
+        locations: mixedLocation.locations,
         city: mixedLocation.cities.length === 1 ? mixedLocation.cities[0] : null,
         location: mixedLocation.locations.length === 1 ? mixedLocation.locations[0] : locationSemantics.location,
         province: mixedLocation.province,
@@ -842,6 +843,14 @@ export const buildCanonicalQueryV1 = (insights = {}, options = {}) => {
       if (cityList.length > 0) {
         canonicalPatch.cities = cityList;
         if (locationSemantics?.province) canonicalPatch.province = locationSemantics.province;
+      } else if (
+        locationSemantics?.mixedSupported === true &&
+        Array.isArray(locationSemantics?.locations) &&
+        locationSemantics.locations.length > 1
+      ) {
+        canonicalPatch.locations = locationSemantics.locations
+          .map((token) => normalizeLocation(token))
+          .filter((loc) => loc?.normalized);
       } else {
         const chosenLocationToken =
           locationSemantics?.city ||
@@ -1054,6 +1063,8 @@ export const executeCanonicalQueryV1 = ({ insights = {}, properties = [], limit 
     if (Array.isArray(query.cities) && query.cities.length) {
       const citySet = new Set(query.cities.map((c) => normalizeLocationToken(c)).filter(Boolean));
       if (citySet.size > 0) filtered = filtered.filter((p) => citySet.has(normalizeLocationToken(p?.city || p?.location_city || '')));
+    } else if (Array.isArray(query.locations) && query.locations.length) {
+      filtered = filtered.filter((p) => query.locations.some((loc) => matchLocation(p, loc)));
     } else if (query.location) {
       filtered = filtered.filter((p) => matchLocation(p, query.location));
     }
