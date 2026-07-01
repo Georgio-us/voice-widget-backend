@@ -139,8 +139,10 @@ const mapDomstarItem = (item, { url = DOMSTAR_FEED_URL, clientId = DOMSTAR_CLIEN
   const governmentProgram = hasGovernmentProgram(options);
   const images = getImages(item);
   const media = images.map((imageUrl) => ({ type: 'image', url: imageUrl }));
-  const areaM2 = toNumber(item?.area_total);
-  const landAreaSotka = toNumber(item?.area_land);
+  const rawAreaTotal = toNumber(item?.area_total);
+  const rawAreaLand = toNumber(item?.area_land);
+  const areaM2 = propertyType === 'land' ? null : rawAreaTotal;
+  const landAreaSotka = propertyType === 'land' ? (rawAreaLand ?? rawAreaTotal) : rawAreaLand;
   const rooms = toInt(item?.room_count);
   const floor = toInt(item?.floor);
   const buildingFloors = toInt(item?.total_floors);
