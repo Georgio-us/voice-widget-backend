@@ -15,6 +15,7 @@ import {
 import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { getAdminClientsList, getAdminSessionDigest, getAdminStatsSummary } from '../services/adminStatsService.js';
 import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
+import { parseAndImportDomstarXml } from '../services/domstarXmlImportService.js';
 
 import { sendTargetedBroadcast } from '../services/telegramBot.js';
 
@@ -212,6 +213,20 @@ router.get('/clients/list', requireAdmin, async (req, res) => {
     }
     console.error('❌ GET /api/admin/clients/list error:', error);
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
+  }
+});
+
+router.post('/import/domstar-xml', requireAdmin, async (req, res) => {
+  try {
+    if (!SERVICE_CLIENT_ID) return res.status(500).json({ ok: false, error: 'CLIENT_ID_ENV_REQUIRED' });
+    if (SERVICE_CLIENT_ID !== 'domstar') {
+      return res.status(409).json({ ok: false, error: 'DOMSTAR_IMPORT_CLIENT_ONLY' });
+    }
+    const stats = await parseAndImportDomstarXml({ clientId: SERVICE_CLIENT_ID });
+    return res.json({ ok: true, stats });
+  } catch (error) {
+    console.error('❌ POST /api/admin/import/domstar-xml error:', error);
+    return res.status(500).json({ ok: false, error: 'DOMSTAR_XML_IMPORT_FAILED', details: error?.message || String(error) });
   }
 });
 
