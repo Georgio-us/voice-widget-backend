@@ -72,10 +72,12 @@ export async function createLead({
     ? String(preferredContactMethod).trim()
     : null;
   const normalizedSource = String(source || '').trim().toLowerCase();
+  const inputExtra = (extra && typeof extra === 'object' && !Array.isArray(extra)) ? extra : {};
+  const broadcastTelegramUserId = String(inputExtra?.tgUserId || '').trim();
   const telegramContactOk =
     ((normalizedSource === 'tg_mini_app' || normalizedSource === 'tg_header_main' || normalizedSource === 'tg_property_card') ||
       String(normalizedPreferredContactMethod || '').toLowerCase() === 'telegram') &&
-    telegramUsernameTrimmed.length > 0;
+    (telegramUsernameTrimmed.length > 0 || (normalizedSource === 'telegram_broadcast_interest' && /^\d{5,20}$/.test(broadcastTelegramUserId)));
   if (phoneNumberTrimmed.length === 0 && emailTrimmed.length === 0 && !telegramContactOk) {
     throw new Error('at least one contact (phone, email or telegram) must be provided');
   }
@@ -91,7 +93,7 @@ export async function createLead({
   const normalizedPropertyId = propertyId && String(propertyId).trim().length > 0
     ? String(propertyId).trim()
     : null;
-  const extraPayload = (extra && typeof extra === 'object' && !Array.isArray(extra)) ? { ...extra } : {};
+  const extraPayload = { ...inputExtra };
   if (telegramContactOk) {
     extraPayload.telegramUsername = telegramUsernameTrimmed.startsWith('@')
       ? telegramUsernameTrimmed

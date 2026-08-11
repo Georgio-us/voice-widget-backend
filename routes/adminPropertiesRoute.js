@@ -523,7 +523,7 @@ router.delete('/properties/:externalId', requireAdmin, async (req, res) => {
 
 router.post('/broadcast', uploadBroadcastImage, requireAdmin, async (req, res) => {
   try {
-    const { targetUserIds, messageText, ctaText, photoUrl, ctaUrl, selectedPropertyIds } = req.body;
+    const { targetUserIds, messageText, ctaText, photoUrl, ctaUrl, selectedPropertyIds, ctaMode } = req.body;
     const parsedTargetUserIds = parseBroadcastArrayField(targetUserIds);
     const parsedPropertyIds = Array.from(new Set(parseBroadcastArrayField(selectedPropertyIds)
       .map(normalizeBroadcastPropertyId)
@@ -544,6 +544,7 @@ router.post('/broadcast', uploadBroadcastImage, requireAdmin, async (req, res) =
     const safeCtaUrl = isSafeBroadcastCtaUrl(ctaUrl)
       ? String(ctaUrl || '').trim()
       : (FRONTEND_URL || null);
+    const normalizedCtaMode = String(ctaMode || '').trim().toLowerCase() === 'interest' ? 'interest' : 'link';
 
     let broadcastPhotoUrl = String(photoUrl || '').trim() || null;
     if (req.file) {
@@ -570,7 +571,8 @@ router.post('/broadcast', uploadBroadcastImage, requireAdmin, async (req, res) =
       messageText: String(messageText || '').trim(),
       photoUrl: broadcastPhotoUrl,
       ctaText: String(ctaText || '').trim(),
-      ctaUrl: safeCtaUrl
+      ctaUrl: safeCtaUrl,
+      ctaMode: normalizedCtaMode
     });
 
     return res.json({ ok: true, results });

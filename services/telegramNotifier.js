@@ -173,6 +173,8 @@ export function buildLeadTelegramMessage(lead) {
     lines.push(`🔥 ИНТЕРЕС К ОБЪЕКТУ: ${propertyId || '-'}`);
   } else if (source === 'tg_header_main') {
     lines.push('📞 ОБЩАЯ КОНСУЛЬТАЦИЯ (из хедера)');
+  } else if (source === 'telegram_broadcast_interest') {
+    lines.push('✨ ИНТЕРЕС К РАССЫЛКЕ');
   } else {
     lines.push('🆕 Новая заявка с виджета');
   }

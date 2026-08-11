@@ -5,6 +5,9 @@ import { isAdminTgUser } from './olxOAuthService.js';
 import { pool } from './db.js';
 import { notifyNewTelegramUserToTelegram } from './telegramNotifier.js';
 import { notifyNewTelegramUserToProjectTelegram } from './projectTelegramNotifier.js';
+import { createLead } from './leadsRepository.js';
+import { notifyLeadToTelegram } from './telegramNotifier.js';
+import { randomUUID } from 'node:crypto';
 
 const startMessage =
   'Welcome to Odesa Real Estate! I am your AI assistant. How can I help you today?';
@@ -19,6 +22,34 @@ const BOT_CLIENT_ID = String(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID 
 
 let botInstance = null;
 let botTransportMode = null; // 'webhook' | 'polling'
+
+const BROADCAST_INTEREST_PREFIX = 'bi:';
+const BROADCAST_INTEREST_THANK_YOU = 'Спасибо за интерес! Я свяжусь с вами в ближайшее время, чтобы обсудить детали.';
+
+async function ensureBroadcastTrackingTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS telegram_broadcasts (
+      id TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      message_text TEXT NOT NULL,
+      cta_text TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS telegram_broadcast_recipients (
+      broadcast_id TEXT NOT NULL REFERENCES telegram_broadcasts(id) ON DELETE CASCADE,
+      tg_user_id BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      telegram_message_id BIGINT,
+      sent_at TIMESTAMPTZ,
+      interested_at TIMESTAMPTZ,
+      lead_id BIGINT,
+      error_text TEXT,
+      PRIMARY KEY (broadcast_id, tg_user_id)
+    );
+    CREATE INDEX IF NOT EXISTS telegram_broadcast_recipients_status_idx
+      ON telegram_broadcast_recipients (broadcast_id, status);
+  `);
+}
 
 const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const TELEGRAM_WEBHOOK_PATH = '/api/telegram/webhook';
@@ -611,6 +642,82 @@ export async function startTelegramBot() {
     } catch {}
   });
 
+  bot.action(/^bi:([0-9a-f-]{36})$/i, async (ctx) => {
+    const broadcastId = String(ctx.match?.[1] || '').trim();
+    const tgUserId = String(ctx?.from?.id || '').trim();
+    if (!broadcastId || !/^\d{5,20}$/.test(tgUserId)) {
+      try { await ctx.answerCbQuery('Не удалось обработать ответ.'); } catch {}
+      return;
+    }
+
+    try {
+      await ensureBroadcastTrackingTables();
+      const claimed = await pool.query(
+        `
+        UPDATE telegram_broadcast_recipients
+        SET status = 'interested', interested_at = NOW()
+        WHERE broadcast_id = $1 AND tg_user_id = $2 AND interested_at IS NULL
+        RETURNING broadcast_id
+        `,
+        [broadcastId, tgUserId]
+      );
+
+      // A repeated tap should only show the confirmation: never create duplicate leads.
+      if (!claimed.rows?.length) {
+        try { await ctx.answerCbQuery('Ваш интерес уже зафиксирован.', { show_alert: true }); } catch {}
+        return;
+      }
+
+      const campaign = await pool.query(
+        'SELECT message_text, cta_text FROM telegram_broadcasts WHERE id = $1 AND client_id = $2 LIMIT 1',
+        [broadcastId, BOT_CLIENT_ID]
+      );
+      const from = ctx.from || {};
+      const name = [from.first_name, from.last_name].map((value) => String(value || '').trim()).filter(Boolean).join(' ') || from.username || `Telegram ${tgUserId}`;
+      const username = String(from.username || '').trim();
+      const messageText = String(campaign.rows?.[0]?.message_text || '').trim();
+      let lead = null;
+      try {
+        lead = await createLead({
+          sessionId: `broadcast_${broadcastId}`,
+          clientId: BOT_CLIENT_ID,
+          source: 'telegram_broadcast_interest',
+          name,
+          telegramUsername: username || null,
+          preferredContactMethod: 'telegram',
+          comment: messageText ? `Интерес к рассылке: ${messageText.slice(0, 1000)}` : 'Интерес к рассылке',
+          language: String(from.language_code || 'ru').trim() || 'ru',
+          consent: true,
+          extra: { tgUserId, broadcastId }
+        });
+        await pool.query(
+          'UPDATE telegram_broadcast_recipients SET lead_id = $3 WHERE broadcast_id = $1 AND tg_user_id = $2',
+          [broadcastId, tgUserId, lead.id]
+        );
+        await notifyLeadToTelegram({
+          leadId: lead.id,
+          createdAt: lead.created_at,
+          sessionId: `broadcast_${broadcastId}`,
+          source: 'telegram_broadcast_interest',
+          telegramUsername: username || null,
+          tgUserId,
+          name,
+          preferredContactMethod: 'telegram',
+          language: String(from.language_code || 'ru').trim() || 'ru',
+          comment: messageText ? `Интерес к рассылке: ${messageText.slice(0, 1000)}` : 'Интерес к рассылке'
+        });
+      } catch (leadError) {
+        console.warn('[telegram] broadcast interest lead failed:', leadError?.message || leadError);
+      }
+
+      try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch {}
+      try { await ctx.answerCbQuery(BROADCAST_INTEREST_THANK_YOU, { show_alert: true }); } catch {}
+    } catch (error) {
+      console.warn('[telegram] broadcast interest callback failed:', error?.message || error);
+      try { await ctx.answerCbQuery('Не удалось обработать ответ. Попробуйте ещё раз.'); } catch {}
+    }
+  });
+
   bot.on('inline_query', async (ctx) => {
     try {
       console.log('--- INLINE START --- Query:', ctx.inlineQuery?.query);
@@ -858,18 +965,35 @@ export async function telegramWebhookExpressHandler(req, res) {
   }
 }
 
-export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ctaText, ctaUrl }) {
+export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ctaText, ctaUrl, ctaMode = 'link' }) {
   if (!botInstance) {
     throw new Error('TELEGRAM_BOT_NOT_INITIALIZED');
   }
   const miniAppUrl = String(process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL).trim();
   const buttonUrl = String(ctaUrl || miniAppUrl || '').trim();
+  const isInterestCta = String(ctaMode || '').trim().toLowerCase() === 'interest';
+  if (!isInterestCta && !buttonUrl) {
+    throw new Error('BROADCAST_CTA_URL_REQUIRED');
+  }
+  await ensureBroadcastTrackingTables();
+  const broadcastId = randomUUID();
+  await pool.query(
+    'INSERT INTO telegram_broadcasts (id, client_id, message_text, cta_text) VALUES ($1, $2, $3, $4)',
+    [broadcastId, BOT_CLIENT_ID, String(messageText || '').trim(), String(ctaText || '').trim()]
+  );
+  await pool.query(
+    `INSERT INTO telegram_broadcast_recipients (broadcast_id, tg_user_id)
+     SELECT $1, value::bigint FROM unnest($2::text[]) AS value
+     ON CONFLICT (broadcast_id, tg_user_id) DO NOTHING`,
+    [broadcastId, userIds.map((id) => String(id).trim()).filter((id) => /^\d{5,20}$/.test(id))]
+  );
   
   const results = {
     total: userIds.length,
     success: 0,
     failed: 0,
-    errors: []
+    errors: [],
+    broadcastId
   };
 
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -881,24 +1005,33 @@ export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ct
       };
 
       // Если есть CTA-кнопка
-      if (ctaText && buttonUrl) {
+      if (ctaText && (isInterestCta || buttonUrl)) {
         extra.reply_markup = {
           inline_keyboard: [[
-            { text: ctaText, web_app: { url: buttonUrl } }
+            isInterestCta
+              ? { text: ctaText, callback_data: `${BROADCAST_INTEREST_PREFIX}${broadcastId}` }
+              : { text: ctaText, web_app: { url: buttonUrl } }
           ]]
         };
       }
 
+      let sent;
       if (photoUrl) {
-        await botInstance.telegram.sendPhoto(userId, photoUrl, {
+        sent = await botInstance.telegram.sendPhoto(userId, photoUrl, {
           caption: messageText,
           ...extra
         });
       } else {
-        await botInstance.telegram.sendMessage(userId, messageText, extra);
+        sent = await botInstance.telegram.sendMessage(userId, messageText, extra);
       }
 
       results.success++;
+      await pool.query(
+        `UPDATE telegram_broadcast_recipients
+         SET status = 'sent', sent_at = NOW(), telegram_message_id = $3, error_text = NULL
+         WHERE broadcast_id = $1 AND tg_user_id = $2`,
+        [broadcastId, String(userId), Number.isFinite(Number(sent?.message_id)) ? Number(sent.message_id) : null]
+      );
       
       // Задержка 100мс между отправками для соблюдения лимитов Telegram (~30 сообщ/сек)
       await delay(100);
@@ -906,6 +1039,12 @@ export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ct
       console.error(`Failed to broadcast to userId: ${userId}`, err.message);
       results.failed++;
       results.errors.push({ userId, error: err.message });
+      await pool.query(
+        `UPDATE telegram_broadcast_recipients
+         SET status = 'failed', error_text = $3
+         WHERE broadcast_id = $1 AND tg_user_id = $2`,
+        [broadcastId, String(userId), String(err?.message || 'SEND_FAILED').slice(0, 1000)]
+      ).catch(() => {});
     }
   }
 
