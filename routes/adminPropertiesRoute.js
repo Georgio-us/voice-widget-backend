@@ -16,6 +16,9 @@ import { resolveViewerAccessByTgId } from '../services/viewerAccessService.js';
 import { getAdminClientsList, getAdminSessionDigest, getAdminStatsSummary } from '../services/adminStatsService.js';
 import { resolveTgUserIdForAccess, toHttpAuthError } from '../services/telegramInitDataService.js';
 import { parseAndImportDomstarXml } from '../services/domstarXmlImportService.js';
+import { pool } from '../services/db.js';
+import { createLead } from '../services/leadsRepository.js';
+import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
 
 import { sendTargetedBroadcast } from '../services/telegramBot.js';
 
@@ -98,6 +101,40 @@ const isSafeBroadcastCtaUrl = (value) => {
     return false;
   }
 };
+
+router.post('/broadcast/:broadcastId/interest', async (req, res) => {
+  try {
+    const broadcastId = String(req.params?.broadcastId || '').trim();
+    if (!/^[0-9a-f-]{36}$/i.test(broadcastId)) return res.status(400).json({ ok: false, error: 'INVALID_BROADCAST_ID' });
+    const { tgUserId, identity } = resolveTgUserIdForAccess(req);
+    if (!/^\d{5,20}$/.test(String(tgUserId || ''))) return res.status(401).json({ ok: false, error: 'TELEGRAM_ID_REQUIRED' });
+    const claimed = await pool.query(
+      `UPDATE telegram_broadcast_recipients SET status = 'interested', interested_at = NOW()
+       WHERE broadcast_id = $1 AND tg_user_id = $2 AND interested_at IS NULL RETURNING broadcast_id`,
+      [broadcastId, tgUserId]
+    );
+    if (!claimed.rows?.length) return res.json({ ok: true, duplicate: true });
+    const user = identity?.verified?.user || {};
+    const campaign = await pool.query('SELECT message_text FROM telegram_broadcasts WHERE id = $1 AND client_id = $2 LIMIT 1', [broadcastId, SERVICE_CLIENT_ID || 'demo']);
+    const name = [user.first_name, user.last_name].map((v) => String(v || '').trim()).filter(Boolean).join(' ') || user.username || `Telegram ${tgUserId}`;
+    const username = String(user.username || '').trim();
+    const messageText = String(campaign.rows?.[0]?.message_text || '').trim();
+    const lead = await createLead({
+      sessionId: `broadcast_${broadcastId}`, clientId: SERVICE_CLIENT_ID || 'demo', source: 'telegram_broadcast_interest',
+      name, telegramUsername: username || null, preferredContactMethod: 'telegram',
+      comment: messageText ? `Интерес к рассылке: ${messageText.slice(0, 1000)}` : 'Интерес к рассылке',
+      language: String(user.language_code || 'ru'), consent: true, extra: { tgUserId: String(tgUserId), broadcastId }
+    });
+    await pool.query('UPDATE telegram_broadcast_recipients SET lead_id = $3 WHERE broadcast_id = $1 AND tg_user_id = $2', [broadcastId, tgUserId, lead.id]);
+    await notifyLeadToTelegram({ leadId: lead.id, createdAt: lead.created_at, sessionId: `broadcast_${broadcastId}`, source: 'telegram_broadcast_interest', telegramUsername: username || null, tgUserId, name, preferredContactMethod: 'telegram', language: String(user.language_code || 'ru'), comment: messageText ? `Интерес к рассылке: ${messageText.slice(0, 1000)}` : 'Интерес к рассылке' }).catch(() => {});
+    return res.json({ ok: true, duplicate: false });
+  } catch (error) {
+    const authError = toHttpAuthError(error);
+    if (authError) return res.status(authError.status).json(authError.body);
+    console.error('POST broadcast interest failed:', error);
+    return res.status(500).json({ ok: false, error: 'BROADCAST_INTEREST_FAILED' });
+  }
+});
 
 const requireAdmin = async (req, res, next) => {
   try {

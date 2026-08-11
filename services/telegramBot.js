@@ -710,7 +710,6 @@ export async function startTelegramBot() {
         console.warn('[telegram] broadcast interest lead failed:', leadError?.message || leadError);
       }
 
-      try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch {}
       try { await ctx.answerCbQuery(BROADCAST_INTEREST_THANK_YOU, { show_alert: true }); } catch {}
     } catch (error) {
       console.warn('[telegram] broadcast interest callback failed:', error?.message || error);
@@ -981,6 +980,17 @@ export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ct
     'INSERT INTO telegram_broadcasts (id, client_id, message_text, cta_text) VALUES ($1, $2, $3, $4)',
     [broadcastId, BOT_CLIENT_ID, String(messageText || '').trim(), String(ctaText || '').trim()]
   );
+  const interestUrl = (() => {
+    if (!isInterestCta) return buttonUrl;
+    try {
+      const url = new URL(buttonUrl);
+      url.searchParams.set('broadcastInterest', broadcastId);
+      return url.toString();
+    } catch {
+      const separator = buttonUrl.includes('?') ? '&' : '?';
+      return `${buttonUrl}${separator}broadcastInterest=${encodeURIComponent(broadcastId)}`;
+    }
+  })();
   await pool.query(
     `INSERT INTO telegram_broadcast_recipients (broadcast_id, tg_user_id)
      SELECT $1, value::bigint FROM unnest($2::text[]) AS value
@@ -1008,9 +1018,7 @@ export async function sendTargetedBroadcast({ userIds, messageText, photoUrl, ct
       if (ctaText && (isInterestCta || buttonUrl)) {
         extra.reply_markup = {
           inline_keyboard: [[
-            isInterestCta
-              ? { text: ctaText, callback_data: `${BROADCAST_INTEREST_PREFIX}${broadcastId}` }
-              : { text: ctaText, web_app: { url: buttonUrl } }
+            { text: ctaText, web_app: { url: isInterestCta ? interestUrl : buttonUrl } }
           ]]
         };
       }
