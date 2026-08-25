@@ -265,7 +265,8 @@ export async function notifyLeadToTelegram(lead) {
   const alerts = await getAdminAlertsConfig();
   if (!alerts.leads) return { ok: false, skipped: true, reason: 'alerts_leads_off' };
 
-  const text = buildLeadTelegramMessage(lead);
+  const customText = String(lead?.notificationText || '').trim();
+  const text = customText || buildLeadTelegramMessage(lead);
 
   // Node 18+ has fetch, but keep a clear error if missing.
   if (typeof fetch !== 'function') {
