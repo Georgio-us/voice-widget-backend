@@ -1,5 +1,5 @@
 import express from 'express';
-import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
+import { notifyMetaLeadToOwnerTelegram } from '../services/projectTelegramNotifier.js';
 
 const router = express.Router();
 
@@ -49,8 +49,8 @@ const buildMetaLeadTelegramMessage = ({ name, phoneNumber, createdAt, meta = {} 
 };
 
 // Google Sheets bridge for Meta instant-form leads.
-// Deliberately does not create a lead_requests record and does not notify
-// project recipients: it sends exactly one alert through TELEGRAM_CHAT_ID.
+// Deliberately does not create a lead_requests record and sends exactly one
+// alert through the client's interactive bot to OWNER_TG_ID.
 router.post('/google-sheets', async (req, res) => {
   const clientId = text(req.body?.clientId, 80);
   const configuredClientId = text(process.env.BOT_CLIENT_ID || process.env.CLIENT_ID, 80);
@@ -74,7 +74,7 @@ router.post('/google-sheets', async (req, res) => {
   }
 
   try {
-    const result = await notifyLeadToTelegram({
+    const result = await notifyMetaLeadToOwnerTelegram({
       source: 'meta_google_sheets',
       name,
       phoneNumber,
