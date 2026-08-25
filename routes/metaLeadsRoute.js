@@ -7,6 +7,24 @@ const text = (value, limit = 4000) => String(value ?? '').trim().slice(0, limit)
 
 const metaValue = (meta, key) => text(meta?.[key], 500);
 
+const readCommentField = (comment, label) => {
+  const prefix = `${label}:`;
+  const line = String(comment || '')
+    .split(/\r?\n/)
+    .find((value) => String(value).trim().startsWith(prefix));
+  return line ? String(line).trim().slice(prefix.length).trim() : '';
+};
+
+const readMetaFromComment = (comment) => ({
+  leadId: readCommentField(comment, 'Meta Lead ID'),
+  campaignName: readCommentField(comment, 'Кампания'),
+  adsetName: readCommentField(comment, 'Ad set'),
+  adName: readCommentField(comment, 'Объявление'),
+  formName: readCommentField(comment, 'Форма'),
+  purchasePlan: readCommentField(comment, 'Когда планирует покупку'),
+  installments: readCommentField(comment, 'Нужна рассрочка')
+});
+
 const buildMetaLeadTelegramMessage = ({ name, phoneNumber, createdAt, meta = {} }) => {
   const lines = ['🏠✨ НОВАЯ ЗАЯВКА ИЗ META', ''];
   const add = (label, value) => {
@@ -58,7 +76,10 @@ router.post('/google-sheets', async (req, res) => {
   const phoneNumber = text(req.body?.phoneNumber, 100).replace(/^p:/i, '').trim();
   const comment = text(req.body?.comment, 3500);
   const createdAt = text(req.body?.createdAt, 100) || new Date().toISOString();
-  const meta = req.body?.meta && typeof req.body.meta === 'object' ? req.body.meta : {};
+  const suppliedMeta = req.body?.meta && typeof req.body.meta === 'object' ? req.body.meta : {};
+  // Supports the already installed Apps Script, which sends Meta attributes
+  // as labelled lines in comment, and future structured meta payloads.
+  const meta = { ...readMetaFromComment(comment), ...suppliedMeta };
 
   if (!clientId) {
     return res.status(400).json({ ok: false, error: 'clientId is required' });
