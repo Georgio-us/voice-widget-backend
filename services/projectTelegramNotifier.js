@@ -120,7 +120,7 @@ export async function notifyLeadToProjectTelegram(lead) {
     return { ok: false, skipped: true, reason: 'project_notifier_not_configured' };
   }
 
-  const text = buildLeadTelegramMessage(lead);
+  const text = normalize(lead?.notificationText) || buildLeadTelegramMessage(lead);
   const results = [];
 
   for (const chatId of recipients) {
@@ -144,29 +144,6 @@ export async function notifyLeadToProjectTelegram(lead) {
     delivered,
     results
   };
-}
-
-// Client-only Meta lead alert: sends from the client's interactive bot to its
-// owner, without duplicating the alert to the global super-admin channel.
-export async function notifyMetaLeadToOwnerTelegram(lead) {
-  const token = normalize(process.env.TELEGRAM_INTERACTIVE_TOKEN);
-  const chatId = normalize(process.env.OWNER_TG_ID);
-  if (!token || !chatId) {
-    return { ok: false, skipped: true, reason: 'owner_meta_notifier_not_configured' };
-  }
-
-  const alerts = await getAlertsConfigForUser(chatId);
-  if (!alerts.leads) {
-    return { ok: false, skipped: true, reason: 'alerts_leads_off' };
-  }
-
-  const text = normalize(lead?.notificationText) || buildLeadTelegramMessage(lead);
-  try {
-    await sendToRecipient({ token, chatId, text });
-    return { ok: true, skipped: false, delivered: 1, recipient: chatId };
-  } catch (error) {
-    return { ok: false, skipped: false, error: error?.message || 'send_failed' };
-  }
 }
 
 export async function notifyNewTelegramUserToProjectTelegram(payload = {}) {
