@@ -51,7 +51,7 @@ Implemented on VIA:
 - frontend support for opening that opaque selection link in the ordinary VIA Mini App;
 - VIA admin-only endpoints for status, pairing confirmation and disconnect.
 - reliable VIA → CRM event outbox with signed retry delivery;
-- the first active event hook: a new Mini App lead, including its linked CRM selection context when the lead came from a CRM-created VIA selection.
+- active event hooks: opening a CRM-created selection, viewing its first object, and creating a new Mini App lead (including linked CRM selection context).
 
 The database migration has been committed but **has not been applied to Delmar/Postgres yet**. The integration flag is not enabled.
 
@@ -112,13 +112,13 @@ Signature encoding: base64url. Headers: `X-Integration-Connection`, `X-Integrati
 
 Do not describe the following as live functionality yet:
 
-- VIA → CRM event hooks other than `mini_app_lead.created`: `telegram.identity_seen`, `selection.opened`, `property.viewed`, `session.completed_summary`;
+- remaining VIA → CRM event hooks: `telegram.identity_seen`, `session.completed_summary`;
 - mapping any event to CRM contacts, deals, threads, or related contacts;
 - a visual settings screen in the VIA admin panel (backend admin endpoints exist, UI is not made);
 - explicit “Publish CRM object to VIA” flow;
 - applying the migration, adding variables, or turning the feature on for Delmar.
 
-The event outbox now delivers only `mini_app_lead.created`. It uses the agreed HMAC signature and retries failed delivery up to ten times. Meta Google Sheets leads are explicitly excluded. Other customer activity remains off until it has a trustworthy, selection-aware source and has been tested with CRM.
+The event outbox now delivers selection open, first property view, and `mini_app_lead.created`. Browser-originated events require verified Telegram WebApp init data and are converted to server-owned signed envelopes. It uses the agreed HMAC signature and retries failed delivery up to ten times. Meta Google Sheets leads are explicitly excluded. Telegram identity and session summary remain off until their exact source hooks are tested with CRM.
 
 ## 6. Safe Resume Order
 

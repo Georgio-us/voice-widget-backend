@@ -2,13 +2,51 @@ import express from 'express';
 import {
   createEstateCrmSelection,
   getEstateCrmSelectionByToken,
+  getEstateCrmSelectionEventContext,
+  enqueueEstateCrmEvent,
   isEstateCrmIntegrationEnabled,
   listEstateCrmProperties,
   revokeEstateCrmSelection,
   verifyEstateCrmRequest
 } from '../services/estateCrmIntegrationService.js';
+import { readTelegramIdentityFromRequest } from '../services/telegramInitDataService.js';
 
 const router = express.Router();
+
+const clientEventTypes = new Set(['selection.opened', 'property.viewed', 'telegram.identity_seen', 'session.completed_summary']);
+
+// Browser-side VIA events are authenticated with Telegram WebApp init data,
+// then converted into the same server-owned, signed CRM outbox envelope.
+router.post('/v1/client-events', async (req, res) => {
+  try {
+    if (!isEstateCrmIntegrationEnabled()) return res.status(404).json({ code: 'INTEGRATION_DISABLED' });
+    const identity = readTelegramIdentityFromRequest(req);
+    if (!identity?.verified?.ok) return res.status(401).json({ code: identity?.verified?.code || 'TELEGRAM_INITDATA_REQUIRED' });
+    const type = String(req.body?.type || '').trim();
+    if (!clientEventTypes.has(type)) return res.status(400).json({ code: 'CLIENT_EVENT_TYPE_INVALID' });
+    const selection = await getEstateCrmSelectionEventContext(req.body?.selectionId);
+    if (req.body?.selectionId && !selection) return res.status(404).json({ code: 'SELECTION_NOT_FOUND_OR_REVOKED' });
+    const propertyExternalId = String(req.body?.propertyExternalId || '').trim().slice(0, 120);
+    const sessionId = String(req.body?.sessionId || '').trim().slice(0, 120);
+    const summary = String(req.body?.summary || '').trim().slice(0, 1000);
+    await enqueueEstateCrmEvent({
+      type,
+      ...(selection || {}),
+      telegram: {
+        userId: String(identity.verified.tgUserId),
+        ...(identity.verified.user?.username ? { username: String(identity.verified.user.username).slice(0, 120) } : {}),
+        ...(identity.verified.user?.first_name ? { firstName: String(identity.verified.user.first_name).slice(0, 120) } : {}),
+        ...(identity.verified.user?.last_name ? { lastName: String(identity.verified.user.last_name).slice(0, 120) } : {})
+      },
+      ...(propertyExternalId ? { propertyExternalId } : {}),
+      ...(sessionId ? { session: { sessionId, ...(summary ? { summary } : {}) } } : {})
+    });
+    return res.json({ ok: true });
+  } catch (error) {
+    console.warn('[estate-crm] client event enqueue failed:', error?.message || error);
+    return res.status(500).json({ code: 'CLIENT_EVENT_ENQUEUE_FAILED' });
+  }
+});
 
 // This route is deliberately public: the opaque token is the only capability
 // exposed in a client-facing selection link. It never returns CRM contact/deal data.

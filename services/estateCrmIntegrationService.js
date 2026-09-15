@@ -45,6 +45,11 @@ export const signIntegrationRequest = ({ credential, timestamp, connectionId, me
     .update(canonicalSignatureInput({ timestamp, connectionId, method, pathname, search, rawBody }))
     .digest('base64url');
 
+export const isFreshIntegrationTimestamp = (timestamp, now = Date.now()) => {
+  const millis = Number(String(timestamp || '').trim());
+  return Number.isSafeInteger(millis) && millis > 0 && Math.abs(now - millis) <= 5 * 60 * 1000;
+};
+
 export async function getActiveEstateCrmConnection() {
   if (!isEstateCrmIntegrationEnabled() || !tenant()) return null;
   const { rows } = await pool.query(
@@ -59,8 +64,7 @@ export async function verifyEstateCrmRequest(req) {
   const timestamp = text(req.headers['x-integration-timestamp'], 40);
   const signature = text(req.headers['x-integration-signature'], 500);
   if (!connectionId || !timestamp || !signature) return { ok: false, code: 'INTEGRATION_AUTH_REQUIRED' };
-  const millis = Date.parse(timestamp);
-  if (!Number.isFinite(millis) || Math.abs(Date.now() - millis) > 5 * 60 * 1000) return { ok: false, code: 'INTEGRATION_TIMESTAMP_INVALID' };
+  if (!isFreshIntegrationTimestamp(timestamp)) return { ok: false, code: 'INTEGRATION_TIMESTAMP_INVALID' };
   const connection = await getActiveEstateCrmConnection();
   if (!connection || connection.crm_connection_id !== connectionId) return { ok: false, code: 'INTEGRATION_CONNECTION_INVALID' };
   const credential = decrypt(connection.encrypted_shared_credential);
