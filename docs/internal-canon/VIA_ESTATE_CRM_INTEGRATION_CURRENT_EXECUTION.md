@@ -50,6 +50,8 @@ Implemented on VIA:
 - public resolver for an opaque selection token, returning only still-active VIA object IDs;
 - frontend support for opening that opaque selection link in the ordinary VIA Mini App;
 - VIA admin-only endpoints for status, pairing confirmation and disconnect.
+- reliable VIA → CRM event outbox with signed retry delivery;
+- the first active event hook: a new Mini App lead, including its linked CRM selection context when the lead came from a CRM-created VIA selection.
 
 The database migration has been committed but **has not been applied to Delmar/Postgres yet**. The integration flag is not enabled.
 
@@ -110,13 +112,13 @@ Signature encoding: base64url. Headers: `X-Integration-Connection`, `X-Integrati
 
 Do not describe the following as live functionality yet:
 
-- VIA → CRM event delivery: `telegram.identity_seen`, `selection.opened`, `property.viewed`, `mini_app_lead.created`, `session.completed_summary`;
+- VIA → CRM event hooks other than `mini_app_lead.created`: `telegram.identity_seen`, `selection.opened`, `property.viewed`, `session.completed_summary`;
 - mapping any event to CRM contacts, deals, threads, or related contacts;
 - a visual settings screen in the VIA admin panel (backend admin endpoints exist, UI is not made);
 - explicit “Publish CRM object to VIA” flow;
 - applying the migration, adding variables, or turning the feature on for Delmar.
 
-The SQL includes an outbox table reserved for reliable VIA → CRM delivery, but no dispatcher/event hooks have been enabled. This is intentional: do not send partial or duplicate customer activity before the CRM side finishes its event receiver and final object/contact policy.
+The event outbox now delivers only `mini_app_lead.created`. It uses the agreed HMAC signature and retries failed delivery up to ten times. Meta Google Sheets leads are explicitly excluded. Other customer activity remains off until it has a trustworthy, selection-aware source and has been tested with CRM.
 
 ## 6. Safe Resume Order
 
@@ -125,8 +127,9 @@ The SQL includes an outbox table reserved for reliable VIA → CRM delivery, but
 3. Add the three deployment-level variables below, keeping the feature flag `false` initially.
 4. Test pairing in a non-production/test tenant with an administrator on both sides.
 5. Test catalog export → create selection → open link → revoke link.
-6. Only then implement and test the outbound event outbox, starting with Mini App lead creation. Do not route historical Meta Google Sheets leads into this connector.
-7. Add the small VIA admin settings UI and enable Delmar only after the end-to-end test is accepted.
+6. Test delivery and retry of a Mini App lead event. Do not route historical Meta Google Sheets leads into this connector.
+7. Add and test the remaining selection-aware event hooks, then the small VIA admin settings UI.
+8. Enable Delmar only after the end-to-end test is accepted.
 
 ## 7. Required VIA Deployment Variables (Names Only)
 

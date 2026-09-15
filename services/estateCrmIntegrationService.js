@@ -167,6 +167,136 @@ export async function disconnectEstateCrm() {
   return rows[0] || null;
 }
 
+const eventTypes = new Set([
+  'telegram.identity_seen',
+  'selection.opened',
+  'property.viewed',
+  'mini_app_lead.created',
+  'session.completed_summary'
+]);
+
+export async function getEstateCrmSelectionEventContext(selectionId) {
+  const id = text(selectionId, 120);
+  if (!id) return null;
+  const { rows } = await pool.query(
+    `SELECT id, crm_external_selection_id, crm_context_id
+       FROM estate_crm_selections
+      WHERE id = $1 AND client_id = $2 AND status = 'active'`,
+    [id, tenant()]
+  );
+  const row = rows[0] || null;
+  if (!row) return null;
+  return {
+    selectionId: row.id,
+    externalSelectionId: row.crm_external_selection_id,
+    crmContextId: row.crm_context_id
+  };
+}
+
+export async function enqueueEstateCrmEvent({ type, occurredAt = new Date().toISOString(), ...details } = {}) {
+  if (!eventTypes.has(type)) throw new Error('ESTATE_CRM_EVENT_TYPE_INVALID');
+  const connection = await getActiveEstateCrmConnection();
+  if (!connection) return null;
+  const eventId = crypto.randomUUID();
+  const payload = {
+    eventId,
+    connectionId: connection.crm_connection_id,
+    viaTenant: tenant(),
+    type,
+    occurredAt,
+    ...details
+  };
+  await pool.query(
+    `INSERT INTO estate_crm_event_outbox (id, client_id, crm_connection_id, event_type, payload)
+     VALUES ($1,$2,$3,$4,$5::jsonb)`,
+    [eventId, tenant(), connection.crm_connection_id, type, JSON.stringify(payload)]
+  );
+  return eventId;
+}
+
+const retryDelaySeconds = (attempts) => Math.min(15 * 60, Math.max(10, 2 ** Math.min(attempts, 8) * 5));
+
+export async function flushEstateCrmEventOutbox({ limit = 10 } = {}) {
+  if (!isEstateCrmIntegrationEnabled()) return { delivered: 0, failed: 0 };
+  let delivered = 0;
+  let failed = 0;
+  const max = Math.max(1, Math.min(25, Number(limit) || 10));
+  for (let index = 0; index < max; index += 1) {
+    const client = await pool.connect();
+    let row;
+    try {
+      await client.query('BEGIN');
+      const claimed = await client.query(
+        `SELECT * FROM estate_crm_event_outbox
+          WHERE client_id = $1
+            AND ((status IN ('pending', 'failed') AND next_attempt_at <= NOW() AND attempts < 10)
+              OR (status = 'sending' AND updated_at < NOW() - INTERVAL '2 minutes'))
+          ORDER BY created_at
+          FOR UPDATE SKIP LOCKED
+          LIMIT 1`,
+        [tenant()]
+      );
+      row = claimed.rows[0] || null;
+      if (!row) { await client.query('COMMIT'); break; }
+      await client.query(
+        `UPDATE estate_crm_event_outbox
+            SET status='sending', attempts=attempts+1, updated_at=NOW()
+          WHERE id=$1`,
+        [row.id]
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    try {
+      const connection = await getActiveEstateCrmConnection();
+      if (!connection || connection.crm_connection_id !== row.crm_connection_id) throw new Error('ESTATE_CRM_CONNECTION_UNAVAILABLE');
+      const rawBody = JSON.stringify(row.payload);
+      const eventUrl = new URL('/integrations/via/events', connection.crm_api_base_url);
+      const timestamp = String(Date.now());
+      const credential = decrypt(connection.encrypted_shared_credential);
+      const response = await fetch(eventUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Integration-Connection': connection.crm_connection_id,
+          'X-Integration-Timestamp': timestamp,
+          'X-Integration-Signature': signIntegrationRequest({
+            credential, timestamp, connectionId: connection.crm_connection_id,
+            method: 'POST', pathname: eventUrl.pathname, search: eventUrl.search, rawBody
+          })
+        },
+        body: rawBody,
+        signal: AbortSignal.timeout(10_000)
+      });
+      if (!response.ok) throw new Error(`ESTATE_CRM_EVENT_FAILED_${response.status}`);
+      await pool.query(
+        `UPDATE estate_crm_event_outbox SET status='sent', sent_at=NOW(), last_error=NULL, updated_at=NOW() WHERE id=$1`,
+        [row.id]
+      );
+      await pool.query(`UPDATE estate_crm_connections SET last_error=NULL, updated_at=NOW() WHERE client_id=$1`, [tenant()]);
+      delivered += 1;
+    } catch (error) {
+      const message = text(error?.message || 'ESTATE_CRM_EVENT_DELIVERY_FAILED', 500);
+      const attempts = Number(row.attempts || 0) + 1;
+      await pool.query(
+        `UPDATE estate_crm_event_outbox
+            SET status='failed', last_error=$2,
+                next_attempt_at=NOW() + ($3::text || ' seconds')::interval, updated_at=NOW()
+          WHERE id=$1`,
+        [row.id, message, retryDelaySeconds(attempts)]
+      );
+      await pool.query(`UPDATE estate_crm_connections SET last_error=$2, updated_at=NOW() WHERE client_id=$1`, [tenant(), message]);
+      failed += 1;
+    }
+  }
+  return { delivered, failed };
+}
+
 export async function createEstateCrmSelection({ externalSelectionId, crmContextId, propertyExternalIds, idempotencyKey, allowPartial = false }) {
   const ids = Array.from(new Set((Array.isArray(propertyExternalIds) ? propertyExternalIds : []).map((v) => text(v, 120).toUpperCase()).filter(Boolean)));
   if (!ids.length || ids.length > 10) throw new Error('SELECTION_ITEMS_INVALID');

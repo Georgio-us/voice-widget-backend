@@ -7,6 +7,7 @@ import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
 import { notifyLeadToProjectTelegram } from '../services/projectTelegramNotifier.js';
 import { pool } from '../services/db.js';
 import { getPropertyByExternalId } from '../services/propertiesRepository.js';
+import { enqueueEstateCrmEvent, getEstateCrmSelectionEventContext } from '../services/estateCrmIntegrationService.js';
 
 const router = express.Router();
 const isWantBotSource = (value) => String(value || '').trim().toLowerCase().startsWith('guest_want_bot');
@@ -198,6 +199,7 @@ router.post('/', async (req, res) => {
       comment,
       language,
       propertyId,
+      estateCrmSelectionId,
       consent
     } = req.body || {};
     const effectiveClientId =
@@ -398,6 +400,34 @@ router.post('/', async (req, res) => {
     } catch (telemetryErr) {
       // Ошибка логирования не должна ломать ответ
       console.error('❌ Failed to log lead_form_submit event:', telemetryErr);
+    }
+
+    // Optional Estate CRM mirror. This only queues newly created VIA leads;
+    // Meta Google Sheets leads use a separate route and never enter this flow.
+    try {
+      const currentTenant = String(process.env.CLIENT_ID || '').trim();
+      if (currentTenant && effectiveClientId === currentTenant) {
+        const selection = await getEstateCrmSelectionEventContext(estateCrmSelectionId);
+        await enqueueEstateCrmEvent({
+          type: 'mini_app_lead.created',
+          ...(selection || {}),
+          telegram: tgUserIdTrimmed
+            ? { userId: tgUserIdTrimmed, ...(telegramUsernameTrimmed ? { username: telegramUsernameTrimmed } : {}) }
+            : undefined,
+          ...(propertyId ? { propertyExternalId: String(propertyId).trim() } : {}),
+          lead: {
+            viaLeadId: String(result.id),
+            source: String(source || '').trim(),
+            name: String(name || '').trim(),
+            phone: [phoneCountryCode, phoneNumberTrimmed].filter(Boolean).join(' ').trim() || undefined,
+            email: emailTrimmed || undefined,
+            comment: String(comment || '').trim() || undefined
+          }
+        });
+      }
+    } catch (estateCrmError) {
+      // Never block the lead form if CRM is temporarily unavailable.
+      console.warn('[estate-crm] lead event enqueue failed:', estateCrmError?.message || estateCrmError);
     }
 
     // Возвращаем успешный ответ

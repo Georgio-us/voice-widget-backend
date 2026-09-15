@@ -31,6 +31,7 @@ import adminPropertiesRouter from './routes/adminPropertiesRoute.js';
 import adminResidentialComplexesRouter from './routes/adminResidentialComplexesRoute.js';
 import adminSubscriptionsRouter from './routes/adminSubscriptionsRoute.js';
 import { startTelegramBot, stopTelegramBot, telegramWebhookExpressHandler } from './services/telegramBot.js';
+import { flushEstateCrmEventOutbox } from './services/estateCrmIntegrationService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -277,4 +278,12 @@ app.listen(PORT, '0.0.0.0', () => {
   startTelegramBot().catch((error) => {
     console.error('🚨 Не удалось запустить Telegram interactive bot:', error.message);
   });
+
+  // Optional connector worker. It is a no-op until ESTATE_CRM_INTEGRATION_ENABLED=1
+  // and a pairing exists, so normal VIA tenants keep their current behavior.
+  const flushEstateCrmEvents = () => flushEstateCrmEventOutbox().catch((error) => {
+    console.warn('[estate-crm] event outbox flush failed:', error?.message || error);
+  });
+  flushEstateCrmEvents();
+  setInterval(flushEstateCrmEvents, 15_000).unref();
 });
