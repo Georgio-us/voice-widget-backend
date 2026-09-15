@@ -19,6 +19,12 @@ import { parseAndImportDomstarXml } from '../services/domstarXmlImportService.js
 import { pool } from '../services/db.js';
 import { createLead } from '../services/leadsRepository.js';
 import { notifyLeadToTelegram } from '../services/telegramNotifier.js';
+import {
+  claimEstateCrmPairing,
+  disconnectEstateCrm,
+  getEstateCrmIntegrationStatus,
+  isEstateCrmIntegrationEnabled
+} from '../services/estateCrmIntegrationService.js';
 
 import { sendTargetedBroadcast } from '../services/telegramBot.js';
 
@@ -165,6 +171,37 @@ const requireAdmin = async (req, res, next) => {
     return res.status(500).json({ ok: false, error: 'INTERNAL_SERVER_ERROR' });
   }
 };
+
+// Estate CRM is optional and remains invisible to normal VIA clients. These
+// endpoints are intentionally admin-only; the shared credential is never sent
+// back to the browser or stored in a Railway variable per client.
+router.get('/integrations/estate/status', requireAdmin, async (req, res) => {
+  try {
+    return res.json({ ok: true, ...(await getEstateCrmIntegrationStatus()) });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || 'ESTATE_CRM_STATUS_FAILED' });
+  }
+});
+
+router.post('/integrations/estate/pairing/confirm', requireAdmin, async (req, res) => {
+  try {
+    if (!isEstateCrmIntegrationEnabled()) return res.status(409).json({ ok: false, error: 'ESTATE_CRM_INTEGRATION_DISABLED' });
+    const pairingCode = String(req.body?.pairingCode || '').trim();
+    const result = await claimEstateCrmPairing(pairingCode);
+    return res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error?.message || 'ESTATE_CRM_PAIRING_FAILED' });
+  }
+});
+
+router.post('/integrations/estate/disconnect', requireAdmin, async (req, res) => {
+  try {
+    const result = await disconnectEstateCrm();
+    return res.json({ ok: true, disconnected: Boolean(result), disconnectedAt: result?.disabled_at || null });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || 'ESTATE_CRM_DISCONNECT_FAILED' });
+  }
+});
 
 const parseIntSafe = (value) => {
   const n = Number.parseInt(String(value ?? '').trim(), 10);
