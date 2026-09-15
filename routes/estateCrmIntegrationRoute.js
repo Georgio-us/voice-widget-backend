@@ -13,7 +13,7 @@ import { readTelegramIdentityFromRequest } from '../services/telegramInitDataSer
 
 const router = express.Router();
 
-const clientEventTypes = new Set(['selection.opened', 'property.viewed', 'telegram.identity_seen', 'session.completed_summary']);
+const clientEventTypes = new Set(['selection.opened', 'property.viewed', 'telegram.identity_seen']);
 
 // Browser-side VIA events are authenticated with Telegram WebApp init data,
 // then converted into the same server-owned, signed CRM outbox envelope.
@@ -28,7 +28,6 @@ router.post('/v1/client-events', async (req, res) => {
     if (req.body?.selectionId && !selection) return res.status(404).json({ code: 'SELECTION_NOT_FOUND_OR_REVOKED' });
     const propertyExternalId = String(req.body?.propertyExternalId || '').trim().slice(0, 120);
     const sessionId = String(req.body?.sessionId || '').trim().slice(0, 120);
-    const summary = String(req.body?.summary || '').trim().slice(0, 1000);
     await enqueueEstateCrmEvent({
       type,
       ...(selection || {}),
@@ -39,7 +38,7 @@ router.post('/v1/client-events', async (req, res) => {
         ...(identity.verified.user?.last_name ? { lastName: String(identity.verified.user.last_name).slice(0, 120) } : {})
       },
       ...(propertyExternalId ? { propertyExternalId } : {}),
-      ...(sessionId ? { session: { sessionId, ...(summary ? { summary } : {}) } } : {})
+      ...(sessionId ? { session: { sessionId } } : {})
     });
     return res.json({ ok: true });
   } catch (error) {

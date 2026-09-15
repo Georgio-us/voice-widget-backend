@@ -112,13 +112,13 @@ Signature encoding: base64url. Headers: `X-Integration-Connection`, `X-Integrati
 
 Do not describe the following as live functionality yet:
 
-- remaining VIA → CRM event hooks: `telegram.identity_seen`, `session.completed_summary`;
+- remaining VIA → CRM event hook: `session.completed_summary` (must be built from a trusted server-side session summary, not browser input);
 - mapping any event to CRM contacts, deals, threads, or related contacts;
 - a visual settings screen in the VIA admin panel (backend admin endpoints exist, UI is not made);
 - explicit “Publish CRM object to VIA” flow;
 - applying the migration, adding variables, or turning the feature on for Delmar.
 
-The event outbox now delivers selection open, first property view, and `mini_app_lead.created`. Browser-originated events require verified Telegram WebApp init data and are converted to server-owned signed envelopes. It uses the agreed HMAC signature and retries failed delivery up to ten times. Meta Google Sheets leads are explicitly excluded. Telegram identity and session summary remain off until their exact source hooks are tested with CRM.
+The event outbox now delivers selection open, first property view, `telegram.identity_seen`, and `mini_app_lead.created`. Browser-originated events require verified Telegram WebApp init data and are converted to server-owned signed envelopes; browser input can never provide a session summary. It uses the agreed HMAC signature and retries failed delivery up to ten times. Meta Google Sheets leads are explicitly excluded. Session summary remains off until a trusted server-side source is wired and tested with CRM.
 
 ## 6. Safe Resume Order
 
