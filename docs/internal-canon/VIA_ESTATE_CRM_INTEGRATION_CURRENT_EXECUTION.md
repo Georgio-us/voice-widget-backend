@@ -122,17 +122,17 @@ The event outbox now delivers selection open, first property view, `telegram.ide
 ## 6. Safe Resume Order
 
 1. Confirm Estate CRM’s final pairing endpoint, response (`connectionId`, `sharedCredential`), property contract, and event receiver.
-2. Apply `sql/008_estate_crm_integration.sql` only to the target VIA tenant database.
-3. Add the deployment-level variables below, keeping the feature flag `false` initially.
-4. Test pairing in a non-production/test tenant with an administrator on both sides.
+2. Apply `sql/008_estate_crm_integration.sql` only to a non-production/test VIA tenant database first.
+3. Add the deployment-level variables below. Enable `ESTATE_CRM_INTEGRATION_ENABLED=1` only in that test tenant for pairing and QA; keep the Delmar production flag `false`.
+4. Test pairing in the test tenant with an administrator on both sides.
 5. Test catalog export → create selection → open link → revoke link.
 6. Test delivery and retry of a Mini App lead event. Do not route historical Meta Google Sheets leads into this connector.
-7. Test the remaining trusted server-side session-summary hook when its source is wired.
-8. Enable Delmar only after the end-to-end test is accepted.
+7. Treat `session.completed_summary` as a future optional hook; it is not a blocker for the first selection/lead pilot.
+8. Enable Delmar production only after the end-to-end test is accepted.
 
 ## 7. Required VIA Deployment Variables (Names Only)
 
-- `ESTATE_CRM_INTEGRATION_ENABLED=false` initially; change to `true` only after migration and a successful pairing test.
+- `ESTATE_CRM_INTEGRATION_ENABLED=false` for Delmar production; set to `true` only in a test tenant while performing pairing/QA, then enable Delmar after acceptance.
 - `ESTATE_CRM_API_BASE_URL` — the fixed Estate CRM server origin (no trailing `/api`).
 - `ESTATE_CRM_INTEGRATION_ENCRYPTION_KEY` — a strong deployment-held secret used only to encrypt the stored pairing credential.
 - `FRONTEND_URL` — the public VIA Mini App origin. It is already a standard VIA variable and must be set: CRM selection creation returns `503` rather than creating a broken selection if it is absent.
