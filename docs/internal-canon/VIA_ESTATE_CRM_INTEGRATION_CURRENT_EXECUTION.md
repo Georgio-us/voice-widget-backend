@@ -113,8 +113,7 @@ Signature encoding: base64url. Headers: `X-Integration-Connection`, `X-Integrati
 Do not describe the following as live functionality yet:
 
 - remaining VIA → CRM event hook: `session.completed_summary` (must be built from a trusted server-side session summary, not browser input);
-- mapping any event to CRM contacts, deals, threads, or related contacts;
-- a visual settings screen in the VIA admin panel (backend admin endpoints exist, UI is not made);
+- mapping session summaries to CRM contacts, deals, threads, or related contacts;
 - explicit “Publish CRM object to VIA” flow;
 - applying the migration, adding variables, or turning the feature on for Delmar.
 
@@ -124,11 +123,11 @@ The event outbox now delivers selection open, first property view, `telegram.ide
 
 1. Confirm Estate CRM’s final pairing endpoint, response (`connectionId`, `sharedCredential`), property contract, and event receiver.
 2. Apply `sql/008_estate_crm_integration.sql` only to the target VIA tenant database.
-3. Add the three deployment-level variables below, keeping the feature flag `false` initially.
+3. Add the deployment-level variables below, keeping the feature flag `false` initially.
 4. Test pairing in a non-production/test tenant with an administrator on both sides.
 5. Test catalog export → create selection → open link → revoke link.
 6. Test delivery and retry of a Mini App lead event. Do not route historical Meta Google Sheets leads into this connector.
-7. Add and test the remaining selection-aware event hooks, then the small VIA admin settings UI.
+7. Test the remaining trusted server-side session-summary hook when its source is wired.
 8. Enable Delmar only after the end-to-end test is accepted.
 
 ## 7. Required VIA Deployment Variables (Names Only)
@@ -140,7 +139,22 @@ The event outbox now delivers selection open, first property view, `telegram.ide
 
 `CLIENT_ID=delmar` remains the tenant selector for Delmar. No customer-specific CRM credential belongs in Railway Variables.
 
-## 8. Files That Form the VIA Connector
+## 8. Joint QA Checklist
+
+Run this in a test tenant first, with the feature flag still off until the first checks are complete:
+
+1. In CRM, an `ADMIN` creates a pairing code; in the VIA admin panel, press “Estate CRM: подключить” and enter that one-time code. Confirm that the browser never receives the shared credential.
+2. Confirm CRM catalog export returns active VIA objects with their exact IDs, including a mixed-case ID fixture.
+3. From a CRM deal, select one or more VIA IDs. Confirm the same `shareUrl` is returned on a retry with the same `Idempotency-Key`.
+4. Open the link in the Delmar Telegram Mini App. Confirm `selection.opened`, `telegram.identity_seen`, and the first `property.viewed` arrive in CRM once the outbox worker runs.
+5. Submit a Mini App lead from that selection. Confirm `mini_app_lead.created` contains the VIA lead ID and the CRM selection context and is attached to the expected deal/contact.
+6. Temporarily make CRM unavailable. Confirm the VIA lead still succeeds and the event remains pending/failed for retry; restore CRM and confirm delivery.
+7. Revoke the selection in CRM. Confirm the old link returns `SELECTION_NOT_FOUND_OR_REVOKED` and no new selection events are accepted.
+8. Disconnect/disable the integration. Confirm ordinary VIA catalog, leads, Telegram notifications, and Meta Sheets flow remain unchanged.
+
+Do not mark the pilot complete until all eight checks pass and the migration has been applied only to the intended Delmar database.
+
+## 9. Files That Form the VIA Connector
 
 - `sql/008_estate_crm_integration.sql`
 - `services/estateCrmIntegrationService.js`
