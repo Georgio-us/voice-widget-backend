@@ -133,6 +133,7 @@ The SQL includes an outbox table reserved for reliable VIA → CRM delivery, but
 - `ESTATE_CRM_INTEGRATION_ENABLED=false` initially; change to `true` only after migration and a successful pairing test.
 - `ESTATE_CRM_API_BASE_URL` — the fixed Estate CRM server origin (no trailing `/api`).
 - `ESTATE_CRM_INTEGRATION_ENCRYPTION_KEY` — a strong deployment-held secret used only to encrypt the stored pairing credential.
+- `FRONTEND_URL` — the public VIA Mini App origin. It is already a standard VIA variable and must be set: CRM selection creation returns `503` rather than creating a broken selection if it is absent.
 
 `CLIENT_ID=delmar` remains the tenant selector for Delmar. No customer-specific CRM credential belongs in Railway Variables.
 

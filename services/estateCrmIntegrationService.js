@@ -175,7 +175,21 @@ export async function createEstateCrmSelection({ externalSelectionId, crmContext
   const connection = await getActiveEstateCrmConnection();
   if (!connection) throw new Error('ESTATE_CRM_CONNECTION_REQUIRED');
   const existing = await pool.query(`SELECT id, opaque_token, status FROM estate_crm_selections WHERE client_id=$1 AND idempotency_key=$2`, [tenant(), text(idempotencyKey, 250)]);
-  if (existing.rows[0]) return { selectionId: existing.rows[0].id, token: existing.rows[0].opaque_token, status: existing.rows[0].status, duplicate: true };
+  if (existing.rows[0]) {
+    const selection = existing.rows[0];
+    const { rows: items } = await pool.query(
+      `SELECT external_id FROM estate_crm_selection_items WHERE selection_id = $1 ORDER BY created_at`,
+      [selection.id]
+    );
+    return {
+      selectionId: selection.id,
+      token: selection.opaque_token,
+      status: selection.status,
+      acceptedPropertyExternalIds: items.map((item) => item.external_id),
+      unavailablePropertyExternalIds: [],
+      duplicate: true
+    };
+  }
   const found = await pool.query(`SELECT external_id FROM properties WHERE client_id=$1 AND is_active=true AND UPPER(TRIM(external_id)) = ANY($2::text[])`, [tenant(), ids]);
   const active = found.rows.map((row) => String(row.external_id).toUpperCase());
   const unavailable = ids.filter((id) => !active.includes(id));

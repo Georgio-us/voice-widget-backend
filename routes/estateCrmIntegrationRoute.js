@@ -42,13 +42,17 @@ router.get('/v1/properties', requireCrm, async (req, res) => {
 
 router.post('/v1/selections', requireCrm, async (req, res) => {
   try {
+    const base = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+    // A CRM manager must always receive a usable customer-facing link. Check
+    // this before inserting the selection so a misconfigured deployment does
+    // not leave an unusable, orphaned selection in the VIA database.
+    if (!base) return res.status(503).json({ code: 'VIA_FRONTEND_URL_NOT_CONFIGURED' });
     const result = await createEstateCrmSelection({
       externalSelectionId: req.body?.externalSelectionId, crmContextId: req.body?.crmContextId,
       propertyExternalIds: req.body?.propertyExternalIds, idempotencyKey: req.headers['idempotency-key'],
       allowPartial: req.body?.allowPartial === true
     });
-    const base = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
-    return res.status(result.duplicate ? 200 : 201).json({ ...result, shareUrl: base ? `${base}/s/s/${result.token}` : null });
+    return res.status(result.duplicate ? 200 : 201).json({ ...result, shareUrl: `${base}/s/s/${result.token}` });
   } catch (error) {
     if (error?.unavailablePropertyExternalIds) return res.status(409).json({ code: error.message, unavailablePropertyExternalIds: error.unavailablePropertyExternalIds });
     return res.status(400).json({ code: error?.message || 'SELECTION_CREATE_FAILED' });
