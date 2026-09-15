@@ -136,13 +136,13 @@ export async function getEstateCrmSelectionByToken(opaqueToken) {
   if (!selection || selection.status !== 'active') return null;
   const { rows: activeRows } = await pool.query(
     `SELECT external_id FROM properties
-      WHERE client_id = $1 AND is_active = true AND external_id = ANY($2::text[])`,
-    [tenant(), selection.external_ids || []]
+      WHERE client_id = $1 AND is_active = true AND UPPER(TRIM(external_id)) = ANY($2::text[])`,
+    [tenant(), (selection.external_ids || []).map((id) => String(id).trim().toUpperCase())]
   );
-  const activeById = new Set(activeRows.map((row) => row.external_id));
+  const activeById = new Set(activeRows.map((row) => String(row.external_id).trim().toUpperCase()));
   return {
     selectionId: selection.id,
-    propertyExternalIds: (selection.external_ids || []).filter((id) => activeById.has(id))
+    propertyExternalIds: (selection.external_ids || []).filter((id) => activeById.has(String(id).trim().toUpperCase()))
   };
 }
 
@@ -321,8 +321,11 @@ export async function createEstateCrmSelection({ externalSelectionId, crmContext
     };
   }
   const found = await pool.query(`SELECT external_id FROM properties WHERE client_id=$1 AND is_active=true AND UPPER(TRIM(external_id)) = ANY($2::text[])`, [tenant(), ids]);
-  const active = found.rows.map((row) => String(row.external_id).toUpperCase());
-  const unavailable = ids.filter((id) => !active.includes(id));
+  // Compare case-insensitively, but preserve the exact catalog spelling in
+  // the response and selection rows so downstream card lookup remains stable.
+  const active = found.rows.map((row) => String(row.external_id).trim());
+  const activeUpper = new Set(active.map((id) => id.toUpperCase()));
+  const unavailable = ids.filter((id) => !activeUpper.has(id));
   if (unavailable.length && !allowPartial) {
     const error = new Error('SELECTION_CONTAINS_UNAVAILABLE_PROPERTIES'); error.unavailablePropertyExternalIds = unavailable; throw error;
   }
