@@ -86,7 +86,7 @@ This is intentionally public because the random token is the client-facing capab
 
 ### VIA pairing call to CRM
 
-- `POST ${ESTATE_CRM_API_BASE_URL}/api/integrations/via/pairing/claim`
+- `POST ${ESTATE_CRM_API_BASE_URL}/integrations/via/pairing/claim`
 
 Request:
 
@@ -131,7 +131,7 @@ The SQL includes an outbox table reserved for reliable VIA → CRM delivery, but
 ## 7. Required VIA Deployment Variables (Names Only)
 
 - `ESTATE_CRM_INTEGRATION_ENABLED=false` initially; change to `true` only after migration and a successful pairing test.
-- `ESTATE_CRM_API_BASE_URL` — the fixed Estate CRM API base URL.
+- `ESTATE_CRM_API_BASE_URL` — the fixed Estate CRM server origin (no trailing `/api`).
 - `ESTATE_CRM_INTEGRATION_ENCRYPTION_KEY` — a strong deployment-held secret used only to encrypt the stored pairing credential.
 
 `CLIENT_ID=delmar` remains the tenant selector for Delmar. No customer-specific CRM credential belongs in Railway Variables.

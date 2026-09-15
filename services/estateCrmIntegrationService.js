@@ -78,7 +78,9 @@ export async function claimEstateCrmPairing(pairingCode) {
   if (!baseUrl()) throw new Error('ESTATE_CRM_API_BASE_URL_REQUIRED');
   const code = text(pairingCode, 1000);
   if (code.length < 24) throw new Error('PAIRING_CODE_INVALID');
-  const response = await fetch(`${baseUrl()}/api/integrations/via/pairing/claim`, {
+  // ESTATE_CRM_API_BASE_URL is the CRM server origin. Its public Fastify
+  // routes are rooted at /integrations (the browser-only proxy uses /api).
+  const response = await fetch(`${baseUrl()}/integrations/via/pairing/claim`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pairingCode: code, viaTenant: tenant() })
   });
